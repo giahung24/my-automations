@@ -149,8 +149,7 @@ Shift Details:
                 return False
 
             # 2. Get next week's date range
-            # start_date_str, end_date_str = self.get_next_week_dates()
-            start_date_str, end_date_str = "2025-10-20", "2025-10-26"
+            start_date_str, end_date_str = self.get_next_week_dates()
             self.logger.info(f"Syncing shifts for week: {start_date_str} to {end_date_str}")
 
             # 3. Get planning events for next week
