@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  shift-sync:
+    build: .
+    container_name: silae-shift-sync
+    environment:
+      # Load from .env file
+      - SILAE_USERNAME=${SILAE_USERNAME}
+      - SILAE_PASSWORD=${SILAE_PASSWORD}
+      - EMPLOYEE_ID=${EMPLOYEE_ID}
+      - HOTEL_CALENDAR_ID=${HOTEL_CALENDAR_ID}
+      - TIMEZONE=${TIMEZONE:-Europe/Paris}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - GOOGLE_CREDENTIALS_FILE=/app/credentials/google_credentials.json
+      - GOOGLE_TOKEN_FILE=/app/credentials/token.pickle
+    volumes:
+      # Mount credentials directory to persist tokens
+      - ./credentials:/app/credentials
+      # Mount logs directory for log persistence
+      - ./logs:/app/logs
+    restart: unless-stopped
+    # Uncomment the following to run as a cron job (requires cron setup in the image)
+    command: ["sh", "-c", "while true; do python weekly_shift_sync.py; sleep 604800; done"]  # Run weekly (604800 seconds = 1 week)
