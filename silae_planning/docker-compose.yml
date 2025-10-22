@@ -21,4 +21,4 @@ services:
       - ./logs:/app/logs
     restart: unless-stopped
     # Uncomment the following to run as a cron job (requires cron setup in the image)
-    command: ["sh", "-c", "while true; do python weekly_shift_sync.py; sleep 604800; done"]  # Run weekly (604800 seconds = 1 week)
+    # command: ["sh", "-c", "while true; do python weekly_shift_sync.py; sleep 604800; done"]  # Run weekly (604800 seconds = 1 week)
