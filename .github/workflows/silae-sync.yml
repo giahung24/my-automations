@@ -1,0 +1,40 @@
+name: Weekly Silae Shift Sync
+
+on:
+  schedule:
+    - cron: '0 0 * * MON'  # Runs at 00:00 every Monday UTC
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  sync-shifts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: silae_planning
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Create credentials directory
+        run: mkdir -p credentials
+
+      - name: Set up Google credentials
+        run: |
+          echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > credentials/google_credentials.json
+          echo "${{ secrets.GOOGLE_TOKEN_PICKLE_BASE64 }}" | base64 -d > credentials/token.pickle
+
+      - name: Create logs directory
+        run: mkdir -p logs
+
+      - name: Create .env file
+        run: |
+          echo "SILAE_USERNAME=${{ secrets.SILAE_USERNAME }}" >> .env
+          echo "SILAE_PASSWORD=${{ secrets.SILAE_PASSWORD }}" >> .env
+          echo "EMPLOYEE_ID=${{ secrets.EMPLOYEE_ID }}" >> .env
+          echo "HOTEL_CALENDAR_ID=${{ secrets.HOTEL_CALENDAR_ID }}" >> .env
+          echo "TIMEZONE=Europe/Paris" >> .env
+          echo "LOG_LEVEL=INFO" >> .env
+
+      - name: Run Docker Compose
+        run: docker-compose up --build
