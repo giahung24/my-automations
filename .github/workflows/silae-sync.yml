@@ -29,12 +29,15 @@ jobs:
 
       - name: Create .env file
         run: |
+          echo "GOOGLE_CREDENTIALS_FILE=credentials/google_credentials.json" >> .env
+          echo "GOOGLE_TOKEN_FILE=credentials/token.pickle" >> .env
           echo "SILAE_USERNAME=${{ secrets.SILAE_USERNAME }}" >> .env
           echo "SILAE_PASSWORD=${{ secrets.SILAE_PASSWORD }}" >> .env
           echo "EMPLOYEE_ID=${{ secrets.EMPLOYEE_ID }}" >> .env
           echo "HOTEL_CALENDAR_ID=${{ secrets.HOTEL_CALENDAR_ID }}" >> .env
           echo "TIMEZONE=Europe/Paris" >> .env
           echo "LOG_LEVEL=INFO" >> .env
+
 
       - name: Run Docker Compose
         run: docker-compose up --build
