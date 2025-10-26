@@ -22,7 +22,15 @@ jobs:
       - name: Set up Google credentials
         run: |
           echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > credentials/google_credentials.json
-          echo "${{ secrets.GOOGLE_TOKEN_PICKLE_BASE64 }}" | base64 -d > credentials/token.pickle
+          if [ -n "${{ secrets.GOOGLE_TOKEN_PICKLE_BASE64 }}" ]; then
+            echo "${{ secrets.GOOGLE_TOKEN_PICKLE_BASE64 }}" | base64 -d > credentials/token.pickle
+            chmod 666 credentials/token.pickle
+          else
+            echo "Warning: GOOGLE_TOKEN_PICKLE_BASE64 secret is empty"
+            touch credentials/token.pickle
+          fi
+          chmod 755 credentials/
+          chmod 644 credentials/google_credentials.json
 
       - name: Create logs directory
         run: mkdir -p logs
