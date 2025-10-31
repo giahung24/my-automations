@@ -2,8 +2,7 @@ name: Weekly Silae Shift Sync
 
 on:
   schedule:
-    - cron: '0 5 * * SUN'  # Runs at 05:00 UTC every Sunday
-    - cron: '0 5 * * TUE'  # Runs at 05:00 UTC every Tuesday
+    - cron: '0 5 * * SUN,MON,WED,FRI'  # Runs at 05:00 UTC
   workflow_dispatch:  # Allows manual trigger
 
 jobs:
