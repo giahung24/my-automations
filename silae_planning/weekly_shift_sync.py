@@ -49,7 +49,7 @@ class WeeklyShiftSync:
         # Setup logger
         self.logger = logging.getLogger(__name__)
 
-    def get_next_week_dates(self):
+    def get_next_2_week_dates(self):
         """Get the start and end dates for next week (Monday to Sunday)"""
         today = datetime.now()
 
@@ -59,7 +59,7 @@ class WeeklyShiftSync:
             days_ahead += 7
 
         next_monday = today + timedelta(days=days_ahead)
-        next_sunday = next_monday + timedelta(days=6)
+        next_sunday = next_monday + timedelta(days=13)
 
         return next_monday.strftime('%Y-%m-%d'), next_sunday.strftime('%Y-%m-%d')
 
@@ -148,11 +148,11 @@ Shift Details:
                 self.logger.error("Failed to login to Silae portal")
                 return False
 
-            # 2. Get next week's date range
-            start_date_str, end_date_str = self.get_next_week_dates()
+            # 2. Get next 2 week's date range
+            start_date_str, end_date_str = self.get_next_2_week_dates()
             self.logger.info(f"Syncing shifts for week: {start_date_str} to {end_date_str}")
 
-            # 3. Get planning events for next week
+            # 3. Get planning events for next 2 weeks
             self.logger.info("Fetching planning events from Silae...")
             planning_events = get_planning_events(
                 session,
@@ -162,7 +162,7 @@ Shift Details:
             )
 
             if not planning_events:
-                self.logger.info("No planning events found for next week")
+                self.logger.info("No planning events found for next 2 weeks")
                 return True
 
             # 4. Get employee shifts
