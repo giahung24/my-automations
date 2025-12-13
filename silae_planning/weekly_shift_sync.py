@@ -50,7 +50,7 @@ class WeeklyShiftSync:
         self.logger = logging.getLogger(__name__)
 
     def get_next_2_week_dates(self):
-        """Get the start and end dates for next week (Monday to Sunday)"""
+        """Get the start and end dates for (from today to next Sunday)"""
         today = datetime.now()
 
         # Find next Monday
@@ -61,7 +61,7 @@ class WeeklyShiftSync:
         next_monday = today + timedelta(days=days_ahead)
         next_sunday = next_monday + timedelta(days=13)
 
-        return next_monday.strftime('%Y-%m-%d'), next_sunday.strftime('%Y-%m-%d')
+        return today.strftime('%Y-%m-%d'), next_sunday.strftime('%Y-%m-%d')
 
     def get_existing_calendar_events(self, start_date, end_date):
         """Get existing events in the hotel calendar for the date range"""
