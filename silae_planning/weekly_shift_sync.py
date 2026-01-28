@@ -49,7 +49,7 @@ class WeeklyShiftSync:
         # Setup logger
         self.logger = logging.getLogger(__name__)
 
-    def get_next_2_week_dates(self):
+    def get_next_4_week_dates(self):
         """Get the start and end dates for (from today to next Sunday)"""
         today = datetime.now()
 
@@ -59,7 +59,7 @@ class WeeklyShiftSync:
             days_ahead += 7
 
         next_monday = today + timedelta(days=days_ahead)
-        next_sunday = next_monday + timedelta(days=13)
+        next_sunday = next_monday + timedelta(days=27)
 
         return today.strftime('%Y-%m-%d'), next_sunday.strftime('%Y-%m-%d')
 
@@ -149,7 +149,7 @@ Shift Details:
                 return False
 
             # 2. Get next 2 week's date range
-            start_date_str, end_date_str = self.get_next_2_week_dates()
+            start_date_str, end_date_str = self.get_next_4_week_dates()
             self.logger.info(f"Syncing shifts for week: {start_date_str} to {end_date_str}")
 
             # 3. Get planning events for next 2 weeks
