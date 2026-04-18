@@ -10,10 +10,31 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def login_silae_portal(username, password):
+class SilaeSession:
+    def __init__(self, username, password, base_url=None):
+        if base_url is None:
+            base_url = "https://fiteco.rhsuite.silae.fr"
+        login_url = f"{base_url}/login"
+        self.session = login_silae_portal(username, password, login_url)
+        self.base_url = base_url
+
+    def get_planning_events(self, date_from=None, date_to=None, view="timelineWeek"):
+        """
+        Get planning events for a date range, default from today to next 6 days
+        """
+        return get_planning_events(
+            self.session, date_from, date_to, view, self.base_url
+        )
+
+    def get_planning_resources(self):
+        return get_planning_resources(self.session, self.base_url)
+
+
+def login_silae_portal(username, password, login_url=None):
     session = requests.Session()
 
-    login_url = "https://fiteco.rhsuite.silae.fr/login"
+    if login_url is None:
+        login_url = "https://fiteco.rhsuite.silae.fr/login"
 
     # Première requête pour récupérer les cookies et tokens CSRF si nécessaire
     response = session.get(login_url)
@@ -48,10 +69,15 @@ def login_silae_portal(username, password):
         return None
 
 
-def get_planning_events(session, date_from=None, date_to=None, view="timelineWeek"):
+def get_planning_events(
+    session, date_from=None, date_to=None, view="timelineWeek", base_url=None
+):
     """
     Récupère les événements du planning avec les headers complets
     """
+    if base_url is None:
+        base_url = "https://fiteco.rhsuite.silae.fr"
+    url = f"{base_url}/planning/json/employee/events"
     # Dates par défaut : semaine courante
     if not date_from:
         today = datetime.now()
@@ -60,9 +86,6 @@ def get_planning_events(session, date_from=None, date_to=None, view="timelineWee
     if not date_to:
         # Semaine actuelle (7 jours)
         date_to = (datetime.now() + timedelta(days=6)).strftime("%Y-%m-%d")
-
-    # URL avec paramètres
-    url = "https://fiteco.rhsuite.silae.fr/planning/json/employee/events"
 
     params = {
         "from": date_from,
@@ -75,7 +98,7 @@ def get_planning_events(session, date_from=None, date_to=None, view="timelineWee
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "Accept-Language": "en-US,en;q=0.9,fr;q=0.8,vi;q=0.7,fr-FR;q=0.6",
         "X-Requested-With": "XMLHttpRequest",  # Important pour les requêtes AJAX
-        "Referer": "https://fiteco.rhsuite.silae.fr/planning/mon-planning",
+        "Referer": f"{base_url}/planning/mon-planning",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
         "sec-ch-ua": '"Microsoft Edge";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
         "sec-ch-ua-mobile": "?0",
@@ -124,19 +147,21 @@ def parse_silae_time(time_str):
     return parser.parse(cleaned)
 
 
-
 # ============================================================================
 
-def get_planning_resources(session):
+
+def get_planning_resources(session, base_url=None):
     """
     Récupère les ressources de planning
     """
-    url = "https://fiteco.rhsuite.silae.fr/planning/json/resources"
+    if base_url is None:
+        base_url = "https://fiteco.rhsuite.silae.fr"
+    url = f"{base_url}/planning/json/resources"
 
     headers = {
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest",
-        "Referer": "https://fiteco.rhsuite.silae.fr/planning/mon-planning",
+        "Referer": f"{base_url}/planning/mon-planning",
     }
 
     session.headers.update(headers)
