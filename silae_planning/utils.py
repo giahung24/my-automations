@@ -35,7 +35,7 @@ def login_silae_portal(username, password, login_url=None):
 
     if login_url is None:
         login_url = "https://fiteco.rhsuite.silae.fr/login"
-
+    logger.info(f"Login URL: {login_url} with username: {username}")
     # Première requête pour récupérer les cookies et tokens CSRF si nécessaire
     response = session.get(login_url)
 
