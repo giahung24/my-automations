@@ -46,9 +46,12 @@ Edit the `.env` file
 
 ```env
 # Silae Portal Credentials
+SILAE_BASE_URL=https://user.fiteco.rhsuite.silae.fr
 SILAE_USERNAME=your_silae_username
 SILAE_PASSWORD=your_silae_password
 EMPLOYEE_ID=your_employee_id
+SILAE_VERIFY_SSL=true
+SILAE_CA_BUNDLE=
 
 # Google Calendar Configuration
 HOTEL_CALENDAR_ID=your_hotel_calendar_id@group.calendar.google.com
@@ -80,6 +83,9 @@ docker-compose up -d
 | `SILAE_USERNAME` | ✅ | - | Your Silae portal username |
 | `SILAE_PASSWORD` | ✅ | - | Your Silae portal password |
 | `EMPLOYEE_ID` | ✅ | - | Your employee ID in Silae |
+| `SILAE_BASE_URL` | ❌ | - | Full Silae base URL (for example `https://user.fiteco.rhsuite.silae.fr`) |
+| `SILAE_VERIFY_SSL` | ❌ | true | Enable SSL certificate verification |
+| `SILAE_CA_BUNDLE` | ❌ | - | Path to a custom CA bundle PEM file |
 | `HOTEL_CALENDAR_ID` | ✅ | - | Google Calendar ID to sync to |
 | `TIMEZONE` | ❌ | Europe/Paris | Timezone for events |
 | `LOG_LEVEL` | ❌ | INFO | Logging level (DEBUG, INFO, WARNING, ERROR) |
