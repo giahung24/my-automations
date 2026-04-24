@@ -16,12 +16,14 @@ from utils import (
     get_employee_shifts,
     parse_silae_time,
     SilaeSession,
+    SilaeSession,
 )
 from calendar_api import GoogleCalendarAPI
 
 # Setup logging
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
+    format="%(asctime)s - %(levelname)s - %(message)s",
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
@@ -36,6 +38,7 @@ class WeeklyShiftSync:
         self.calendar_api = GoogleCalendarAPI(
             credentials_file=config.get_credentials_path(),
             token_file=config.get_token_path(),
+            token_file=config.get_token_path(),
         )
 
         # Get configuration values
@@ -44,6 +47,7 @@ class WeeklyShiftSync:
         self.silae_password = config.SILAE_PASSWORD
         self.employee_id = config.EMPLOYEE_ID
         self.base_url = config.SILAE_BASE_URL
+        self.base_url = config.SILAE_BASE_URL
 
         # Timezone
         self.timezone = pytz.timezone(config.TIMEZONE)
@@ -51,6 +55,8 @@ class WeeklyShiftSync:
         # Setup logger
         self.logger = logging.getLogger(__name__)
 
+    def get_next_4_week_dates(self):
+        """Get the start and end dates for (from today to next Sunday)"""
     def get_next_4_week_dates(self):
         """Get the start and end dates for (from today to next Sunday)"""
         today = datetime.now()
@@ -62,7 +68,9 @@ class WeeklyShiftSync:
 
         next_monday = today + timedelta(days=days_ahead)
         next_sunday = next_monday + timedelta(days=27)
+        next_sunday = next_monday + timedelta(days=27)
 
+        return today.strftime("%Y-%m-%d"), next_sunday.strftime("%Y-%m-%d")
         return today.strftime("%Y-%m-%d"), next_sunday.strftime("%Y-%m-%d")
 
     def get_existing_calendar_events(self, start_date, end_date):
@@ -76,10 +84,13 @@ class WeeklyShiftSync:
         success = self.calendar_api.delete_event(event_id, self.hotel_calendar_id)
         if success:
             self.logger.info(f"Deleted existing calendar event: {event_id}")
+            self.logger.info(f"Deleted existing calendar event: {event_id}")
         return success
 
     def create_calendar_event(self, shift):
         """Create a calendar event from a Silae shift"""
+        start_time = parse_silae_time(shift["start"])
+        end_time = parse_silae_time(shift["end"])
         start_time = parse_silae_time(shift["start"])
         end_time = parse_silae_time(shift["end"])
 
@@ -102,11 +113,18 @@ Shift Details:
             "useDefault": False,
             "overrides": [
                 {"method": "popup", "minutes": 30},  # 30 minutes before
+            "useDefault": False,
+            "overrides": [
+                {"method": "popup", "minutes": 30},  # 30 minutes before
             ],
         }
 
         # Add metadata to identify this as a Silae shift
         extended_properties = {
+            "private": {
+                "silae_shift_id": str(shift["id"]),
+                "silae_shift_code": shift["code"],
+                "sync_script": "weekly_shift_sync",
             "private": {
                 "silae_shift_id": str(shift["id"]),
                 "silae_shift_code": shift["code"],
@@ -120,14 +138,20 @@ Shift Details:
             end_time=end_time,
             description=description,
             location=shift["siteName"],
+            location=shift["siteName"],
             calendar_id=self.hotel_calendar_id,
             timezone=config.TIMEZONE,
             color_id="1",  # Blue color for work shifts
+            color_id="1",  # Blue color for work shifts
             reminders=reminders,
+            extended_properties=extended_properties,
             extended_properties=extended_properties,
         )
 
         if created_event:
+            self.logger.info(
+                f'Created calendar event: {shift["label"]} on {start_time.strftime("%Y-%m-%d %H:%M")}'
+            )
             self.logger.info(
                 f'Created calendar event: {shift["label"]} on {start_time.strftime("%Y-%m-%d %H:%M")}'
             )
@@ -164,19 +188,28 @@ Shift Details:
             self.logger.info(
                 f"Syncing shifts for week: {start_date_str} to {end_date_str}"
             )
+            # 2. Get next 2 week's date range
+            start_date_str, end_date_str = self.get_next_4_week_dates()
+            self.logger.info(
+                f"Syncing shifts for week: {start_date_str} to {end_date_str}"
+            )
 
+            # 3. Get planning events for next 2 weeks
             # 3. Get planning events for next 2 weeks
             self.logger.info("Fetching planning events from Silae...")
             planning_events = get_planning_events(
+                session, date_from=start_date_str, date_to=end_date_str, view="week"
                 session, date_from=start_date_str, date_to=end_date_str, view="week"
             )
 
             if not planning_events:
                 self.logger.info("No planning events found for next 2 weeks")
+                self.logger.info("No planning events found for next 2 weeks")
                 return True
 
             # 4. Get employee shifts
             shifts = get_employee_shifts(planning_events, self.employee_id)
+            work_shifts = [shift for shift in shifts if shift.get("type") == "WORK"]
             work_shifts = [shift for shift in shifts if shift.get("type") == "WORK"]
 
             self.logger.info(f"Found {len(work_shifts)} work shifts for next week")
@@ -186,10 +219,17 @@ Shift Details:
             end_datetime = datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(
                 days=1
             )
+            start_datetime = datetime.strptime(start_date_str, "%Y-%m-%d")
+            end_datetime = datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(
+                days=1
+            )
 
             start_datetime = self.timezone.localize(start_datetime)
             end_datetime = self.timezone.localize(end_datetime)
 
+            existing_events = self.get_existing_calendar_events(
+                start_datetime, end_datetime
+            )
             existing_events = self.get_existing_calendar_events(
                 start_datetime, end_datetime
             )
@@ -204,6 +244,9 @@ Shift Details:
                 self.logger.info(
                     f"Processing shift: {shift['label']} on {shift_date.strftime('%Y-%m-%d %H:%M')}"
                 )
+                self.logger.info(
+                    f"Processing shift: {shift['label']} on {shift_date.strftime('%Y-%m-%d %H:%M')}"
+                )
 
                 # Check for existing events on the same date
                 events_on_date = self.get_events_for_date(existing_events, shift_date)
@@ -214,10 +257,17 @@ Shift Details:
                         f"Deleting existing event: {existing_event.get('summary', 'Untitled')}"
                     )
                     self.delete_calendar_event(existing_event["id"])
+                    self.logger.info(
+                        f"Deleting existing event: {existing_event.get('summary', 'Untitled')}"
+                    )
+                    self.delete_calendar_event(existing_event["id"])
 
                 # Create new calendar event for the shift
                 self.create_calendar_event(shift)
 
+            self.logger.info(
+                f"Sync completed successfully! Processed {len(work_shifts)} work shifts."
+            )
             self.logger.info(
                 f"Sync completed successfully! Processed {len(work_shifts)} work shifts."
             )
@@ -245,6 +295,9 @@ def main():
         sync_service.run()
     except ValueError as e:
         logging.error(f"Configuration error: {e}")
+        logging.error(
+            "Please check your environment variables. See .env.example for required variables."
+        )
         logging.error(
             "Please check your environment variables. See .env.example for required variables."
         )

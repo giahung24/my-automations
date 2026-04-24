@@ -111,6 +111,9 @@ def login_silae_portal(
 def get_planning_events(
     session, date_from=None, date_to=None, view="timelineWeek", base_url=None
 ):
+def get_planning_events(
+    session, date_from=None, date_to=None, view="timelineWeek", base_url=None
+):
     """
     Récupère les événements du planning avec les headers complets
     """
@@ -137,6 +140,7 @@ def get_planning_events(
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "Accept-Language": "en-US,en;q=0.9,fr;q=0.8,vi;q=0.7,fr-FR;q=0.6",
         "X-Requested-With": "XMLHttpRequest",  # Important pour les requêtes AJAX
+        "Referer": f"{base_url}/planning/mon-planning",
         "Referer": f"{base_url}/planning/mon-planning",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
         "sec-ch-ua": '"Microsoft Edge";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
@@ -190,6 +194,8 @@ def parse_silae_time(time_str):
 
 
 def get_planning_resources(session, base_url=None):
+
+def get_planning_resources(session, base_url=None):
     """
     Récupère les ressources de planning
     """
@@ -200,6 +206,7 @@ def get_planning_resources(session, base_url=None):
     headers = {
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest",
+        "Referer": f"{base_url}/planning/mon-planning",
         "Referer": f"{base_url}/planning/mon-planning",
     }
 

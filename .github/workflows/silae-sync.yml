@@ -44,6 +44,7 @@ jobs:
           echo "SILAE_BASE_URL=${{ secrets.SILAE_BASE_URL }}" >> .env
           echo "SILAE_USERNAME=${{ secrets.SILAE_USERNAME }}" >> .env
           echo "SILAE_PASSWORD=${{ secrets.SILAE_PASSWORD }}" >> .env
+          echo "SILAE_BASE_URL=${{ secrets.SILAE_BASE_URL }}" >> .env
           echo "EMPLOYEE_ID=${{ secrets.EMPLOYEE_ID }}" >> .env
 
           echo "SILAE_VERIFY_SSL=false" >> .env
