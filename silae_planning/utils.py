@@ -12,7 +12,9 @@ logger.setLevel(logging.INFO)
 
 
 class SilaeSession:
-    def __init__(self, username, password, base_url=None, verify_ssl=True, ca_bundle=None):
+    def __init__(
+        self, username, password, base_url=None, verify_ssl=True, ca_bundle=None
+    ):
         if base_url is None:
             base_url = "https://user.fiteco.rhsuite.silae.fr"
         login_url = f"{base_url}/login"
@@ -111,9 +113,6 @@ def login_silae_portal(
 def get_planning_events(
     session, date_from=None, date_to=None, view="timelineWeek", base_url=None
 ):
-def get_planning_events(
-    session, date_from=None, date_to=None, view="timelineWeek", base_url=None
-):
     """
     Récupère les événements du planning avec les headers complets
     """
@@ -192,8 +191,6 @@ def parse_silae_time(time_str):
 
 # ============================================================================
 
-
-def get_planning_resources(session, base_url=None):
 
 def get_planning_resources(session, base_url=None):
     """
