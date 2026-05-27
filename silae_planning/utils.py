@@ -350,7 +350,7 @@ def display_employee_schedule(employee_id, events, resources):
     logger.info(f"Fonction: {employee['function']}")
     logger.info(f"Heures hebdomadaires: {employee['weekHours']}")
     logger.info(f"Date d'embauche: {employee['contractStart']}")
-    logger.info()
+    logger.info("")
 
     # Récupérer les shifts
     shifts = get_employee_shifts(events, employee_id)
@@ -378,7 +378,7 @@ def display_employee_schedule(employee_id, events, resources):
         else:
             logger.info(f"📅 {shift['date']} - {shift['label']} ({shift['code']})")
             logger.info(f"   🏠 Repos/Absence")
-        logger.info()
+        logger.info("")
 
     # Résumé
     work_shifts = [e for e in shifts if e.get("type") == "WORK"]
@@ -390,4 +390,4 @@ def display_employee_schedule(employee_id, events, resources):
     logger.info(f"Jours travaillés: {len(work_shifts)}")
     logger.info(f"Jours d'absence/repos: {len(absence_shifts)}")
     logger.info(f"Total heures: {calculate_total_hours(shifts)}")
-    logger.info()
+    logger.info("")

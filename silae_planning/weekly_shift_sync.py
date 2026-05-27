@@ -169,6 +169,12 @@ Shift Details:
             )
             self.logger.info(f"Found {len(existing_events)} existing calendar events")
 
+            for existing_event in existing_events:
+                self.logger.info(
+                    f"Deleting existing event: {existing_event.get('summary', 'Untitled')}"
+                )
+                self.delete_calendar_event(existing_event["id"])
+
             for shift in work_shifts:
                 shift_date = parse_silae_time(shift["start"])
                 if not shift_date:
@@ -177,13 +183,6 @@ Shift Details:
                 self.logger.info(
                     f"Processing shift: {shift['label']} on {shift_date.strftime('%Y-%m-%d %H:%M')}"
                 )
-
-                events_on_date = self.get_events_for_date(existing_events, shift_date)
-                for existing_event in events_on_date:
-                    self.logger.info(
-                        f"Deleting existing event: {existing_event.get('summary', 'Untitled')}"
-                    )
-                    self.delete_calendar_event(existing_event["id"])
 
                 self.create_calendar_event(shift)
 
