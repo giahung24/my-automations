@@ -13,9 +13,8 @@ services:
       - TIMEZONE=${TIMEZONE:-Europe/Paris}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - GOOGLE_CREDENTIALS_FILE=/app/credentials/google_credentials.json
-      - GOOGLE_TOKEN_FILE=/app/credentials/token.pickle
     volumes:
-      # Mount credentials directory to persist tokens
+      # Mount the service account key file
       - ./credentials:/app/credentials
       # Mount logs directory for log persistence
       - ./logs:/app/logs

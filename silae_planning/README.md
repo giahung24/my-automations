@@ -30,15 +30,31 @@ cp .env.example .env
 mkdir -p credentials logs
 ```
 
-### 2. Add Google Credentials
+### 2. Create a Google service account
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select existing one
-3. Enable the Google Calendar API
-4. Create OAuth 2.0 credentials
-5. Download the JSON file
-6. Place it at `credentials/google_credentials.json`
-7. 
+The sync runs unattended (Docker / GitHub Actions), so it authenticates with a
+**service account** instead of a user OAuth flow: no browser, no token to
+refresh, just a JSON key file.
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) and select (or create) a project
+2. **APIs & Services → Library**: enable the **Google Calendar API**
+3. **IAM & Admin → Service Accounts → Create service account**
+   - Name: e.g. `silae-shift-sync`
+   - No project role is needed (skip the "Grant access" steps)
+4. Open the service account → **Keys → Add key → Create new key → JSON**, download the file
+5. Place it at `credentials/google_credentials.json`
+6. **Share the target calendar with the service account:**
+   - Copy the service account email (`client_email` in the JSON, looks like
+     `silae-shift-sync@<project>.iam.gserviceaccount.com`)
+   - In [Google Calendar](https://calendar.google.com/) → your hotel calendar → *Settings and sharing*
+     → *Share with specific people or groups* → add that email with permission
+     **"Make changes to events"**
+
+Without step 6 the API returns `404 Not Found` on the calendar.
+
+> Reminders: notifications set on an event by a service account only apply to the
+> service account itself, so the sync does not set any. Configure default
+> notifications for the hotel calendar in Google Calendar if you want some.
 
 ### 3. Configure Environment Variables
 
@@ -86,6 +102,8 @@ docker-compose up -d
 | `SILAE_BASE_URL` | ❌ | - | Full Silae base URL (for example `https://user.fiteco.rhsuite.silae.fr`) |
 | `SILAE_VERIFY_SSL` | ❌ | true | Enable SSL certificate verification |
 | `SILAE_CA_BUNDLE` | ❌ | - | Path to a custom CA bundle PEM file |
+| `GOOGLE_CREDENTIALS_FILE` | ❌ | credentials/google_credentials.json | Path to the service account JSON key |
+| `GOOGLE_CREDENTIALS_JSON` | ❌ | - | Service account JSON content (overrides the file) |
 | `HOTEL_CALENDAR_ID` | ✅ | - | Google Calendar ID to sync to |
 | `TIMEZONE` | ❌ | Europe/Paris | Timezone for events |
 | `LOG_LEVEL` | ❌ | INFO | Logging level (DEBUG, INFO, WARNING, ERROR) |
@@ -97,10 +115,11 @@ Run this in your Jupyter notebook to get the calendar ID:
 ```python
 from calendar_api import GoogleCalendarAPI
 
-cal_api = GoogleCalendarAPI('credentials/google_credentials.json', 'credentials/token.pickle')
-calendars = cal_api.list_calendars()
+cal_api = GoogleCalendarAPI('credentials/google_credentials.json')
+calendars = cal_api.list_calendars()  # lists calendars shared with the service account
 
 # Find your hotel calendar and copy its ID
+# (or: Google Calendar → calendar settings → "Integrate calendar" → Calendar ID)
 ```
 
 ### Getting your employee ID
@@ -174,9 +193,10 @@ Uncomment the last line in `docker-compose.yml` to run as a continuous service t
 
 ### Authentication Issues
 
-1. **Google Auth Error**: Ensure your `google_credentials.json` is valid and the Calendar API is enabled
-2. **Silae Login Failed**: Check your username/password in `.env`
-3. **Calendar Not Found**: Verify your `HOTEL_CALENDAR_ID` is correct
+1. **Google Auth Error**: Ensure `google_credentials.json` is a *service account* key (`"type": "service_account"`) and the Calendar API is enabled
+2. **Calendar returns 404**: The calendar is not shared with the service account email (`client_email` in the JSON)
+3. **Silae Login Failed**: Check your username/password in `.env`
+4. **Calendar Not Found**: Verify your `HOTEL_CALENDAR_ID` is correct
 
 ### Docker Issues
 
@@ -209,7 +229,7 @@ docker-compose run --rm --user $(id -u):$(id -g) shift-sync
 
 - Never commit `.env` files or credential files to git
 - The `.gitignore` file prevents accidental commits
-- Google tokens are automatically refreshed
+- The service account key never expires; rotate it from Google Cloud Console if it leaks
 - Use environment variables in production
 - Consider using Docker secrets for enhanced security
 

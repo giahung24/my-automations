@@ -1,48 +1,56 @@
 """
 Google Calendar API wrapper for various calendar operations.
+
+Authentication uses a Google service account (JSON key file). The target
+calendar must be shared with the service account's email address with the
+"Make changes to events" permission.
 """
 
+import json
 import os
-import pickle
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 from datetime import datetime, timedelta
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 
 class GoogleCalendarAPI:
-    def __init__(self, credentials_file='credentials.json', token_file='token.pickle'):
-        """Initialize the Google Calendar API"""
-        # Define the scopes
-        self.SCOPES = ['https://www.googleapis.com/auth/calendar']
+    SCOPES = ['https://www.googleapis.com/auth/calendar']
+
+    def __init__(self, credentials_file='credentials.json', credentials_info=None):
+        """Initialize the Google Calendar API.
+
+        Args:
+            credentials_file: Path to the service account JSON key file.
+            credentials_info: Optional dict (already-parsed service account JSON).
+                When provided, it takes precedence over ``credentials_file``.
+        """
         self.credentials_file = credentials_file
-        self.token_file = token_file
+        self.credentials_info = credentials_info
         self.service = None
         self.authenticate()
 
     def authenticate(self):
-        """Authenticate and create the calendar service"""
-        creds = None
+        """Authenticate with the service account and create the calendar service"""
+        if self.credentials_info:
+            creds = service_account.Credentials.from_service_account_info(
+                self.credentials_info, scopes=self.SCOPES)
+        else:
+            if not os.path.exists(self.credentials_file):
+                raise FileNotFoundError(
+                    f"Service account key file not found: {self.credentials_file}")
+            creds = service_account.Credentials.from_service_account_file(
+                self.credentials_file, scopes=self.SCOPES)
 
-        # Load existing token if it exists
-        if os.path.exists(self.token_file):
-            with open(self.token_file, 'rb') as token:
-                creds = pickle.load(token)
+        self.service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
 
-        # If there are no valid credentials, request authorization
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_file, self.SCOPES)
-                creds = flow.run_local_server(port=0)
-
-            # Save credentials for next run
-            with open(self.token_file, 'wb') as token:
-                pickle.dump(creds, token)
-
-        self.service = build('calendar', 'v3', credentials=creds)
+    @property
+    def service_account_email(self):
+        """Email of the service account (share your calendar with this address)."""
+        if self.credentials_info:
+            return self.credentials_info.get('client_email')
+        with open(self.credentials_file) as f:
+            return json.load(f).get('client_email')
 
     def create_calendar(self, summary, description="", timezone="Europe/Paris", location=""):
         """Create a new calendar"""
@@ -127,9 +135,9 @@ class GoogleCalendarAPI:
             print(f'Error getting events in range: {error}')
             return []
 
-    def create_event(self, summary, start_time, end_time, description='', location='', 
-                    calendar_id='primary', timezone='UTC', color_id=None, 
-                    reminders=None, extended_properties=None):
+    def create_event(self, summary, start_time, end_time, description='', location='',
+                    calendar_id='primary', timezone='UTC', color_id=None,
+                    extended_properties=None):
         """Create a new event"""
         try:
             event = {
@@ -150,18 +158,6 @@ class GoogleCalendarAPI:
             if color_id:
                 event['colorId'] = color_id
             
-            # Add reminders
-            if reminders:
-                event['reminders'] = reminders
-            else:
-                event['reminders'] = {
-                    'useDefault': False,
-                    'overrides': [
-                        {'method': 'email', 'minutes': 24 * 60},
-                        {'method': 'popup', 'minutes': 10},
-                    ],
-                }
-            
             # Add extended properties for metadata
             if extended_properties:
                 event['extendedProperties'] = extended_properties
@@ -171,7 +167,7 @@ class GoogleCalendarAPI:
                 body=event
             ).execute()
 
-            print(f'Event created: {event.get("htmlLink", created_event.get("id"))}')
+            print(f'Event created: {created_event.get("htmlLink", created_event.get("id"))}')
             return created_event
         except Exception as error:
             print(f'An error occurred creating event: {error}')

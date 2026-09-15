@@ -3,6 +3,7 @@ Configuration module for managing secrets and settings.
 Uses environment variables for security.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -31,13 +32,13 @@ class Config:
         )
         self.SILAE_CA_BUNDLE = os.getenv("SILAE_CA_BUNDLE")
 
-        # Google Calendar settings
+        # Google Calendar settings (service account)
+        # Either a path to the service account JSON key file...
         self.GOOGLE_CREDENTIALS_FILE = os.getenv(
             "GOOGLE_CREDENTIALS_FILE", "credentials/google_credentials.json"
         )
-        self.GOOGLE_TOKEN_FILE = os.getenv(
-            "GOOGLE_TOKEN_FILE", "credentials/token.pickle"
-        )
+        # ...or the JSON content itself (takes precedence when set)
+        self.GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
         self.HOTEL_CALENDAR_ID = os.getenv("HOTEL_CALENDAR_ID")
 
         # App settings
@@ -65,20 +66,21 @@ class Config:
             )
 
     def get_credentials_path(self) -> str:
-        """Get the full path to Google credentials file"""
+        """Get the full path to the Google service account key file"""
         return os.path.abspath(self.GOOGLE_CREDENTIALS_FILE)
 
-    def get_token_path(self) -> str:
-        """Get the full path to Google token file"""
-        return os.path.abspath(self.GOOGLE_TOKEN_FILE)
+    def get_credentials_info(self):
+        """Parse GOOGLE_CREDENTIALS_JSON if set, else return None"""
+        if not self.GOOGLE_CREDENTIALS_JSON:
+            return None
+        try:
+            return json.loads(self.GOOGLE_CREDENTIALS_JSON)
+        except json.JSONDecodeError as exc:
+            raise ValueError("GOOGLE_CREDENTIALS_JSON is not valid JSON") from exc
 
     def ensure_credentials_dir(self):
         """Ensure the credentials directory exists"""
-        cred_dir = Path(self.GOOGLE_CREDENTIALS_FILE).parent
-        cred_dir.mkdir(exist_ok=True)
-
-        token_dir = Path(self.GOOGLE_TOKEN_FILE).parent
-        token_dir.mkdir(exist_ok=True)
+        Path(self.GOOGLE_CREDENTIALS_FILE).parent.mkdir(parents=True, exist_ok=True)
 
 
 # Global config instance

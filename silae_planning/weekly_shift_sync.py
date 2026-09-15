@@ -31,7 +31,7 @@ class WeeklyShiftSync:
 
         self.calendar_api = GoogleCalendarAPI(
             credentials_file=config.get_credentials_path(),
-            token_file=config.get_token_path(),
+            credentials_info=config.get_credentials_info(),
         )
 
         self.hotel_calendar_id = config.HOTEL_CALENDAR_ID
@@ -80,13 +80,6 @@ Shift Details:
 - Description: {shift.get('description', '').strip()}
 """.strip()
 
-        reminders = {
-            "useDefault": False,
-            "overrides": [
-                {"method": "popup", "minutes": 30},
-            ],
-        }
-
         extended_properties = {
             "private": {
                 "silae_shift_id": str(shift["id"]),
@@ -104,7 +97,6 @@ Shift Details:
             calendar_id=self.hotel_calendar_id,
             timezone=config.TIMEZONE,
             color_id="1",
-            reminders=reminders,
             extended_properties=extended_properties,
         )
 

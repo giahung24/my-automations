@@ -19,16 +19,17 @@ jobs:
       - name: Create credentials directory
         run: mkdir -p credentials
 
-      - name: Set up Google credentials
+      - name: Set up Google service account key
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
         run: |
-          echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > credentials/google_credentials.json
-          if [ -n "${{ secrets.GOOGLE_TOKEN_PICKLE_BASE64 }}" ]; then
-            echo "${{ secrets.GOOGLE_TOKEN_PICKLE_BASE64 }}" | base64 -d > credentials/token.pickle
-            chmod 666 credentials/token.pickle
-          else
-            echo "Warning: GOOGLE_TOKEN_PICKLE_BASE64 secret is empty"
-            touch credentials/token.pickle
+          if [ -z "$GOOGLE_CREDENTIALS_JSON" ]; then
+            echo "::error::GOOGLE_CREDENTIALS_JSON secret is empty"
+            exit 1
           fi
+          printf '%s' "$GOOGLE_CREDENTIALS_JSON" > credentials/google_credentials.json
+          # Fail fast if the secret is not a service account key
+          python3 -c 'import json,sys; d=json.load(open("credentials/google_credentials.json")); assert d.get("type")=="service_account", "not a service account key (type=%r)" % d.get("type"); print("Service account:", d["client_email"])'
           chmod 755 credentials/
           chmod 644 credentials/google_credentials.json
 
@@ -38,13 +39,11 @@ jobs:
       - name: Create .env file
         run: |
           echo "GOOGLE_CREDENTIALS_FILE=credentials/google_credentials.json" >> .env
-          echo "GOOGLE_TOKEN_FILE=credentials/token.pickle" >> .env
           echo "HOTEL_CALENDAR_ID=${{ secrets.HOTEL_CALENDAR_ID }}" >> .env
 
           echo "SILAE_BASE_URL=${{ secrets.SILAE_BASE_URL }}" >> .env
           echo "SILAE_USERNAME=${{ secrets.SILAE_USERNAME }}" >> .env
           echo "SILAE_PASSWORD=${{ secrets.SILAE_PASSWORD }}" >> .env
-          echo "SILAE_BASE_URL=${{ secrets.SILAE_BASE_URL }}" >> .env
           echo "EMPLOYEE_ID=${{ secrets.EMPLOYEE_ID }}" >> .env
 
           echo "SILAE_VERIFY_SSL=false" >> .env
