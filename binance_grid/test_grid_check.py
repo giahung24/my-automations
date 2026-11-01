@@ -5,7 +5,7 @@ import pytest
 from grid_check import adx, decide, efficiency_ratio, net_profit_per_grid, report
 
 # Worked example of SPEC.md
-EXAMPLE = {"eth_vs_sma200": 0.08, "btc_vs_sma200": 0.12, "sma50_slope_20d": 0.02, "adx14": 18,
+EXAMPLE = {"pair_vs_sma200": 0.08, "btc_vs_sma200": 0.12, "sma50_slope_20d": 0.02, "adx14": 18,
            "efficiency_ratio_30d": 0.25, "vol30_ann": 0.55, "vol_ratio_30_180": 0.9,
            "atr14_daily_pct": 0.032, "atr14_4h_pct": 0.011, "range30": [2750, 3250], "range30_position": 0.5}
 ARGS = {"price": 3000, "fee": 0.001, "days": 21, "capital": 1000, "min_notional": 5}
@@ -68,8 +68,8 @@ def test_caution_halves_capital_and_widens_range():
 @pytest.mark.parametrize("override, verdict, reason", [
     ({}, "GO", "ADX<22"),
     ({"btc_vs_sma200": -0.01, "adx14": 40}, "NO-GO", "downtrend"),  # first matching rule wins
-    ({"eth_vs_sma200": -0.01, "sma50_slope_20d": -0.01}, "NO-GO", "downtrend"),
-    ({"eth_vs_sma200": -0.01}, "GO", "ADX<22"),  # below SMA200 but SMA50 not falling
+    ({"pair_vs_sma200": -0.01, "sma50_slope_20d": -0.01}, "NO-GO", "downtrend"),
+    ({"pair_vs_sma200": -0.01}, "GO", "ADX<22"),  # below SMA200 but SMA50 not falling
     ({"efficiency_ratio_30d": 0.6}, "NO-GO", "strong trend"),
     ({"vol_ratio_30_180": 1.6}, "NO-GO", "volatility"),
     ({"range30_position": 0.9}, "CAUTION", "not met: price mid-range"),

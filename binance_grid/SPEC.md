@@ -1,4 +1,4 @@
-# Spec — `grid_check.py` (Binance Spot Grid, ETH/USDC)
+# Spec — `grid_check.py` (Binance Spot Grid, ETH/USDC và các cặp USDC khác)
 
 Trích từ tài liệu gốc [Hướng dẫn setup Binance Spot Grid Bot (ETH/USDC)](https://claude.ai/artifact/2y2CQUDpSLAXB5b3kW29TZ) (bản 2026-10-23), chỉ giữ phần script cần. Bước 3 (setup trên Binance) và Bước 4 (theo dõi) là việc làm tay, xem tài liệu gốc.
 
@@ -6,8 +6,8 @@ Trích từ tài liệu gốc [Hướng dẫn setup Binance Spot Grid Bot (ETH/U
 
 ## Đầu vào
 
-- CLI: `--pair ETHUSDC --fee 0.001 --days 21 --capital 1000`.
-- Chỉ dùng endpoint public `https://api.binance.com/api/v3/klines`.
+- CLI: `--pairs ETHUSDC BTCUSDC SOLUSDC LINKUSDC --fee 0.001 --days 21 --capital 1000` (mặc định 4 cặp này; `--pair` vẫn dùng được).
+- Chỉ dùng endpoint dữ liệu public `https://data-api.binance.vision/api/v3` (klines, exchangeInfo).
 - `f` = phí mỗi chiều (mặc định khoảng 0.1%; thấp hơn nếu trả phí bằng BNB).
 
 ## Bước 1 — Kiểm tra regime
@@ -90,7 +90,7 @@ Output JSON mẫu:
   "pair": "ETHUSDC",
   "as_of": "YYYY-MM-DDT00:00:00Z",
   "price": 3000.0,
-  "metrics": {"eth_vs_sma200": 0.08, "btc_vs_sma200": 0.12, "sma50_slope_20d": 0.02,
+  "metrics": {"pair_vs_sma200": 0.08, "btc_vs_sma200": 0.12, "sma50_slope_20d": 0.02,
               "adx14": 18, "efficiency_ratio_30d": 0.25, "vol30_ann": 0.55,
               "vol_ratio_30_180": 0.9, "atr14_daily_pct": 0.032, "atr14_4h_pct": 0.011,
               "range30": [2750, 3250], "range30_position": 0.5},
@@ -157,5 +157,15 @@ Quyết định thêm khi code (`grid_check.py`):
 13. **Làm tròn N**: N = round(...) nhưng không vượt mức làm khoảng cách thật xuống dưới sàn. Nếu không, round() lên có thể đẩy lãi ròng xuống 0.39% và ra NO-GO oan.
 14. **Ngưỡng lãi ròng**: so lãi ròng làm tròn 0.01% (như Binance hiển thị) với 4f. Ngay tại sàn s = 6f, lãi ròng chính xác là 4f − 6f² = 0.3994%, so tuyệt đối sẽ luôn trượt.
 15. **JSON thêm 2 trường**: `params.take_profit_optional` (vì agent không được tự tính số) và `warnings` (nến thiếu, N vượt giới hạn, lệnh quá nhỏ, sàn > trần).
-16. **Thiếu dữ liệu**: chỉ số nào ra NaN thì script dừng với lỗi, không để NaN rơi xuống CAUTION.
+16. **Thiếu dữ liệu**: chỉ số nào ra NaN thì cặp đó báo lỗi, không để NaN rơi xuống CAUTION.
 17. **ADX/ATR**: Wilder có seed SMA; đã đối chiếu với thư viện `ta` trên dữ liệu thật ETHUSDC (khớp tới 3 chữ số thập phân).
+
+Mở rộng nhiều cặp (2026-11-01):
+
+18. **Cặp mặc định**: ETHUSDC, BTCUSDC, SOLUSDC (nến từ 2021-09), LINKUSDC (từ 2019-01); cả bốn đủ 300 nến ngày, `minNotional` 5 USDC. Các cặp chạy song song; một cặp lỗi (sai tên, thiếu dữ liệu) không chặn các cặp khác, nhưng exit code = 1.
+19. **Ngưỡng regime** được đặt cho ETH và chưa kiểm định cho BTC/SOL/LINK. Params tự co giãn theo volatility của từng cặp. `--capital` là vốn cho mỗi cặp, không phải tổng.
+20. **Đổi tên chỉ số**: `eth_vs_sma200` → `pair_vs_sma200` (giá của cặp đang xét so với SMA200 của nó). Bộ lọc BTC vẫn là `btc_vs_sma200`.
+21. **Endpoint**: `api.binance.com` trả 451 cho IP ở Mỹ (cloud, GitHub Actions); `data-api.binance.vision` là endpoint dữ liệu public của Binance, cùng định dạng.
+22. **Giá trong params** làm tròn 0.01: hợp với cặp giá > ~1 USDC (LINKUSDC có tick 0.001 nên 0.01 vẫn hợp lệ). Coin rẻ hơn cần làm tròn theo `tickSize`.
+
+**Khi Claude chạy:** `python grid_check.py` (mặc định 4 cặp). Stdout là danh sách JSON, stderr là một dòng tóm tắt mỗi cặp. Báo cáo theo prompt ở trên cho cả lần chạy: một dòng kết luận mỗi cặp, chi tiết params chỉ cho cặp GO hoặc CAUTION.

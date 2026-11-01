@@ -1,8 +1,9 @@
 """Binance Spot Grid regime check and parameter calculator (see SPEC.md).
 
-Uses only public Binance klines, never places orders. Writes runs/<pair>_<date>.json.
+Uses only public Binance klines, never places orders. Writes runs/<pair>_<date>.json per pair,
+prints all results as a JSON list and a one-line summary per pair on stderr.
 
-    python grid_check.py --pair ETHUSDC --fee 0.001 --days 21 --capital 1000
+    python grid_check.py --pairs ETHUSDC BTCUSDC SOLUSDC LINKUSDC --fee 0.001 --days 21 --capital 1000
 """
 import argparse
 import json
@@ -16,7 +17,10 @@ import numpy as np
 import pandas as pd
 import requests
 
-API = "https://api.binance.com/api/v3"
+# Binance's public market-data endpoint; api.binance.com answers 451 to US IPs (cloud runners)
+API = "https://data-api.binance.vision/api/v3"
+PAIRS = ["ETHUSDC", "BTCUSDC", "SOLUSDC", "LINKUSDC"]
+RUNS = Path(__file__).parent / "runs"
 DAILY, H4 = 300, 360  # closed candles: 300 days, 60 days of 4h
 MAX_GRIDS = 170  # Binance Spot Grid FAQ: up to 170 grids per bot; confirm in the UI
 MIN_NOTIONAL_MARGIN = 2  # each order must be >= 2x the exchange minimum
@@ -24,7 +28,8 @@ MIN_NOTIONAL_MARGIN = 2  # each order must be >= 2x the exchange minimum
 
 def get(path, **params):
     r = requests.get(f"{API}/{path}", params=params, timeout=15)
-    r.raise_for_status()
+    if not r.ok:  # Binance puts the reason (invalid symbol, rate limit) in the body
+        raise requests.HTTPError(f"{r.status_code} on {path} {params}: {r.text[:200]}")
     return r.json()
 
 
@@ -81,7 +86,7 @@ def compute_metrics(daily, h4, btc):
     lo, hi = last30["low"].min(), last30["high"].max()
     vol30 = ann_vol(c, 30)
     return {
-        "eth_vs_sma200": price / c.rolling(200).mean().iloc[-1] - 1,
+        "pair_vs_sma200": price / c.rolling(200).mean().iloc[-1] - 1,
         "btc_vs_sma200": btc["close"].iloc[-1] / btc["close"].rolling(200).mean().iloc[-1] - 1,
         "sma50_slope_20d": sma50.iloc[-1] / sma50.iloc[-21] - 1,
         "adx14": adx(daily).iloc[-1],
@@ -97,8 +102,8 @@ def compute_metrics(daily, h4, btc):
 
 def decide(m):
     """Verdict rules of SPEC step 1, first match wins."""
-    if (m["eth_vs_sma200"] < 0 and m["sma50_slope_20d"] < 0) or m["btc_vs_sma200"] < 0:
-        return "NO-GO", "downtrend: ETH < SMA200 with falling SMA50, or BTC < SMA200"
+    if (m["pair_vs_sma200"] < 0 and m["sma50_slope_20d"] < 0) or m["btc_vs_sma200"] < 0:
+        return "NO-GO", "downtrend: price < SMA200 with falling SMA50, or BTC < SMA200"
     if m["adx14"] > 30 or m["efficiency_ratio_30d"] > 0.5:
         return "NO-GO", "strong trend: ADX > 30 or ER > 0.5, use the trend bot"
     if m["vol_ratio_30_180"] > 1.5:
@@ -148,6 +153,7 @@ def grid_params(m, price, verdict, fee, days, capital, min_notional):
     # Worst case: price falls straight to the stop with every buy level filled.
     # Levels above the current price were bought at creation, at the current price.
     held = sum(per_order / min(lower * ratio**i, price) for i in range(grids))
+    # ponytail: prices rounded to 0.01, fine for pairs above ~$1; use the symbol's tickSize for cheaper coins
     params = {
         "mode": "geometric",
         "lower": round(lower, 2),
@@ -182,21 +188,8 @@ def data_warnings(name, df, n, step):
     return [f"{name}: {len(df)}/{n} candles, {gaps} gaps"] if gaps or len(df) < n else []
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--pair", default="ETHUSDC")
-    ap.add_argument("--fee", type=float, default=0.001, help="fee per side, 0.001 = 0.1%%")
-    ap.add_argument("--days", type=int, default=21, help="planned bot duration in days (14-30)")
-    ap.add_argument("--capital", type=float, default=1000, help="grid capital in the quote asset")
-    a = ap.parse_args(argv)
-    if not 14 <= a.days <= 30:
-        ap.error("--days must be between 14 and 30")
-    if not 0 <= a.fee < 0.01:
-        ap.error("--fee is a fraction per side, e.g. 0.001")
-    if a.capital <= 0:
-        ap.error("--capital must be positive")
-    pair = a.pair.upper()
-
+def check_pair(pair, fee, days, capital):
+    """Full check of one pair; saves runs/<pair>_<date>.json and returns the result."""
     with ThreadPoolExecutor() as ex:
         info, daily, h4 = (ex.submit(get, "exchangeInfo", symbol=pair),
                            ex.submit(klines, pair, "1d", DAILY), ex.submit(klines, pair, "4h", H4))
@@ -208,7 +201,7 @@ def main(argv=None):
     m = compute_metrics(daily, h4, btc)
     bad = [k for k, v in m.items() if k != "range30" and not math.isfinite(v)]
     if bad:
-        sys.exit(f"not enough data to compute: {', '.join(bad)}")
+        raise ValueError(f"not enough data to compute: {', '.join(bad)}")
     min_notional = float(next(f["minNotional"] for f in sym["filters"] if f["filterType"] == "NOTIONAL"))
     price = float(daily["close"].iloc[-1])
     day = pd.Timedelta(days=1)
@@ -219,19 +212,45 @@ def main(argv=None):
         "as_of": as_of,
         "price": price,
         "metrics": {k: [round(x, 2) for x in v] if k == "range30" else round(float(v), 4) for k, v in m.items()},
-        **report(m, price, a.fee, a.days, a.capital, min_notional),
+        **report(m, price, fee, days, capital, min_notional),
     }
     out["warnings"] = (data_warnings(pair + " 1d", daily, DAILY, day) + data_warnings(pair + " 4h", h4, H4, day / 6)
                        + data_warnings(btc_pair + " 1d", btc, DAILY, day)
                        + out["warnings"])
 
-    path = Path(__file__).parent / "runs" / f"{pair}_{as_of[:10]}.json"
-    path.parent.mkdir(exist_ok=True)
-    text = json.dumps(out, indent=2)
-    path.write_text(text)
-    print(text)
-    print(f"saved {path}", file=sys.stderr)
+    RUNS.mkdir(exist_ok=True)
+    (RUNS / f"{pair}_{as_of[:10]}.json").write_text(json.dumps(out, indent=2))
+    return out
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--pairs", "--pair", nargs="+", default=PAIRS, help=f"default: {' '.join(PAIRS)}")
+    ap.add_argument("--fee", type=float, default=0.001, help="fee per side, 0.001 = 0.1%%")
+    ap.add_argument("--days", type=int, default=21, help="planned bot duration in days (14-30)")
+    ap.add_argument("--capital", type=float, default=1000, help="grid capital per pair, in the quote asset")
+    a = ap.parse_args(argv)
+    if not 14 <= a.days <= 30:
+        ap.error("--days must be between 14 and 30")
+    if not 0 <= a.fee < 0.01:
+        ap.error("--fee is a fraction per side, e.g. 0.001")
+    if a.capital <= 0:
+        ap.error("--capital must be positive")
+
+    with ThreadPoolExecutor() as ex:
+        futures = {p: ex.submit(check_pair, p, a.fee, a.days, a.capital) for p in dict.fromkeys(map(str.upper, a.pairs))}
+    results = []
+    for pair, f in futures.items():
+        try:
+            results.append(f.result())
+        except Exception as e:  # one bad pair (typo, missing history) must not hide the others
+            results.append({"pair": pair, "error": f"{type(e).__name__}: {e}"})
+
+    print(json.dumps(results, indent=2))
+    for r in results:
+        print(f"{r['pair']:<9} {r.get('verdict', 'ERROR'):<7} {r.get('reason') or r['error']}", file=sys.stderr)
+    return 1 if any("error" in r for r in results) else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
