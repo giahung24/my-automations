@@ -140,7 +140,7 @@ Every run:
 Điểm tài liệu để ngỏ, chọn mặc định sau (sửa ở đây nếu khác ý):
 
 1. **"SMA50 dốc xuống"** trong NO-GO (downtrend): hiểu là `sma50_slope_20d < 0`.
-2. **Giới hạn N của Binance**: tài liệu không ghi số. Để thành hằng số `MAX_GRIDS` trong script, cảnh báo khi vượt; xác nhận trên giao diện.
+2. **Giới hạn N của Binance**: `MAX_GRIDS = 170` theo [FAQ Spot Grid](https://www.binance.com/en/support/faq/what-is-spot-grid-trading-and-how-does-it-work-d5f441e8ab544a5b98241e00efb3a4ab) ("up to 170 individual grids"); vượt thì cảnh báo. Xác nhận trên giao diện.
 3. **"Dư địa" trên mức lệnh tối thiểu**: mặc định vốn/N ≥ 2 × `minNotional`.
 4. **Vốn khi CAUTION**: `investment_usdc = capital × 0.5`.
 5. **Lãi ròng mỗi lưới xuất ra**: tính từ khoảng cách thật sau khi làm tròn N, tức (U/L)^(1/N), cùng công thức Binance hiển thị, để so ở Bước 3 (lệch > 0.05 điểm %). Với ví dụ: 0.904% thay vì 0.899%.
@@ -149,3 +149,13 @@ Every run:
 8. **Volatility**: độ lệch chuẩn mẫu (ddof=1) của 30 (và 180) log-return ngày gần nhất.
 9. **Tải dữ liệu**: 3 request klines (ETH 1d, ETH 4h, BTC 1d) chạy song song; mỗi request ≤ 1000 nến nên không cần phân trang.
 10. `.gitignore` của repo bỏ qua `*.json`, nên `runs/*.json` không bị commit (đúng ý) và fixture test không được để dạng JSON.
+
+Quyết định thêm khi code (`grid_check.py`):
+
+11. **Giá P**: giá đóng cửa của nến ngày đã đóng gần nhất; `as_of` = thời điểm nến đó đóng. Mọi chỉ số ngày cùng một mốc.
+12. **Sàn > trần khoảng cách lưới** (ATR ngày < 1.2%): dùng sàn, thêm cảnh báo. Sàn bảo vệ khỏi phí nên được ưu tiên.
+13. **Làm tròn N**: N = round(...) nhưng không vượt mức làm khoảng cách thật xuống dưới sàn. Nếu không, round() lên có thể đẩy lãi ròng xuống 0.39% và ra NO-GO oan.
+14. **Ngưỡng lãi ròng**: so lãi ròng làm tròn 0.01% (như Binance hiển thị) với 4f. Ngay tại sàn s = 6f, lãi ròng chính xác là 4f − 6f² = 0.3994%, so tuyệt đối sẽ luôn trượt.
+15. **JSON thêm 2 trường**: `params.take_profit_optional` (vì agent không được tự tính số) và `warnings` (nến thiếu, N vượt giới hạn, lệnh quá nhỏ, sàn > trần).
+16. **Thiếu dữ liệu**: chỉ số nào ra NaN thì script dừng với lỗi, không để NaN rơi xuống CAUTION.
+17. **ADX/ATR**: Wilder có seed SMA; đã đối chiếu với thư viện `ta` trên dữ liệu thật ETHUSDC (khớp tới 3 chữ số thập phân).
