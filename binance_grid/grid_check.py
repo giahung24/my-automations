@@ -17,8 +17,9 @@ import numpy as np
 import pandas as pd
 import requests
 
-# Binance's public market-data endpoint; api.binance.com answers 451 to US IPs (cloud runners)
-API = "https://data-api.binance.vision/api/v3"
+# data-api first: api.binance.com answers 451 to US IPs (cloud sessions); api.binance.com is the
+# fallback when data-api is unreachable (a corporate TLS proxy blocks it)
+APIS = ["https://data-api.binance.vision/api/v3", "https://api.binance.com/api/v3"]
 PAIRS = ["ETHUSDC", "BTCUSDC", "SOLUSDC", "LINKUSDC"]
 RUNS = Path(__file__).parent / "runs"
 DAILY, H4 = 300, 360  # closed candles: 300 days, 60 days of 4h
@@ -27,7 +28,14 @@ MIN_NOTIONAL_MARGIN = 2  # each order must be >= 2x the exchange minimum
 
 
 def get(path, **params):
-    r = requests.get(f"{API}/{path}", params=params, timeout=15)
+    for base in APIS:
+        try:
+            r = requests.get(f"{base}/{path}", params=params, timeout=15)
+            break
+        except requests.ConnectionError as e:  # SSLError included
+            err = e
+    else:
+        raise err
     if not r.ok:  # Binance puts the reason (invalid symbol, rate limit) in the body
         raise requests.HTTPError(f"{r.status_code} on {path} {params}: {r.text[:200]}")
     return r.json()

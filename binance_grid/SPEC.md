@@ -165,7 +165,13 @@ Mở rộng nhiều cặp (2026-11-01):
 18. **Cặp mặc định**: ETHUSDC, BTCUSDC, SOLUSDC (nến từ 2021-09), LINKUSDC (từ 2019-01); cả bốn đủ 300 nến ngày, `minNotional` 5 USDC. Các cặp chạy song song; một cặp lỗi (sai tên, thiếu dữ liệu) không chặn các cặp khác, nhưng exit code = 1.
 19. **Ngưỡng regime** được đặt cho ETH và chưa kiểm định cho BTC/SOL/LINK. Params tự co giãn theo volatility của từng cặp. `--capital` là vốn cho mỗi cặp, không phải tổng.
 20. **Đổi tên chỉ số**: `eth_vs_sma200` → `pair_vs_sma200` (giá của cặp đang xét so với SMA200 của nó). Bộ lọc BTC vẫn là `btc_vs_sma200`.
-21. **Endpoint**: `api.binance.com` trả 451 cho IP ở Mỹ (cloud, GitHub Actions); `data-api.binance.vision` là endpoint dữ liệu public của Binance, cùng định dạng.
+21. **Endpoint**: `api.binance.com` trả 451 cho IP ở Mỹ (cloud, GitHub Actions); `data-api.binance.vision` là endpoint dữ liệu public của Binance, cùng định dạng. Proxy Cato của công ty chặn `data-api` (lỗi SSL), nên `get()` gặp lỗi kết nối thì tự chuyển sang `api.binance.com`.
 22. **Giá trong params** làm tròn 0.01: hợp với cặp giá > ~1 USDC (LINKUSDC có tick 0.001 nên 0.01 vẫn hợp lệ). Coin rẻ hơn cần làm tròn theo `tickSize`.
+
+Theo dõi bot đang chạy (`bot_check.py`, 2026-11-02):
+
+23. **Quy tắc** theo bảng Bước 4 của tài liệu gốc, dừng ở quy tắc đầu tiên khớp: chạm stop-loss → `STOPPED`; regime NO-GO → `STOP` (downtrend: bán về USDC; volatility: dừng hoặc cấu hình CAUTION); giá trên giá trên → `STOP`; hết số ngày dự định → `KEEP` nếu GO, còn lại `STOP`; còn lại → `KEEP`, không chỉnh params.
+24. **Chạm stop-loss** xét bằng đáy các nến 1h từ lúc tạo bot, gồm nến đang chạy (tối đa 1000 nến, tức 41 ngày). Giá vượt giá trên xét bằng giá hiện tại, vì bot chỉ đứng yên khi giá còn ở trên.
+25. **Thông số bot** nằm trong `bots.json` (bị gitignore, nên không lên được Claude cloud). Không dùng API key: Binance không có API cho grid bot.
 
 **Khi Claude chạy:** `python grid_check.py` (mặc định 4 cặp). Stdout là danh sách JSON, stderr là một dòng tóm tắt mỗi cặp. Báo cáo theo prompt ở trên cho cả lần chạy: một dòng kết luận mỗi cặp, chi tiết params chỉ cho cặp GO hoặc CAUTION.
