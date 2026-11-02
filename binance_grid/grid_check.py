@@ -25,6 +25,8 @@ RUNS = Path(__file__).parent / "runs"
 DAILY, H4 = 300, 360  # closed candles: 300 days, 60 days of 4h
 MAX_GRIDS = 170  # Binance Spot Grid FAQ: up to 170 grids per bot; confirm in the UI
 MIN_NOTIONAL_MARGIN = 2  # each order must be >= 2x the exchange minimum
+FEE, DAYS, CAPITAL = 0.001, 21, 1000  # CLI defaults: fee per side, planned bot days, capital per pair
+GO_ADX, GO_ER, GO_SLOPE, GO_RANGE = 22, 0.35, 0.05, (0.25, 0.75)  # GO thresholds (SPEC step 1)
 
 
 def get(path, **params):
@@ -117,10 +119,10 @@ def decide(m):
     if m["vol_ratio_30_180"] > 1.5:
         return "NO-GO", "volatility spike: vol30/vol180 > 1.5"
     go = {
-        "ADX<22": m["adx14"] < 22,
-        "ER<0.35": m["efficiency_ratio_30d"] < 0.35,
-        "|slope|<5%": abs(m["sma50_slope_20d"]) < 0.05,
-        "price mid-range": 0.25 <= m["range30_position"] <= 0.75,
+        f"ADX<{GO_ADX}": m["adx14"] < GO_ADX,
+        f"ER<{GO_ER}": m["efficiency_ratio_30d"] < GO_ER,
+        f"|slope|<{GO_SLOPE:.0%}": abs(m["sma50_slope_20d"]) < GO_SLOPE,
+        "price mid-range": GO_RANGE[0] <= m["range30_position"] <= GO_RANGE[1],
     }
     if all(go.values()):
         return "GO", ", ".join(go)
@@ -132,8 +134,11 @@ def net_profit_per_grid(lower, upper, grids, fee):
     return (1 - fee) * (upper / lower) ** (1 / grids) - 1 - fee
 
 
-def grid_params(m, price, verdict, fee, days, capital, min_notional):
-    """Parameter formulas of SPEC step 2. Returns (params, worst_case_loss_pct, warnings)."""
+def grid_params(m, price, verdict, fee, days, capital, min_notional, decimals=2):
+    """Parameter formulas of SPEC step 2, prices rounded to the pair's tick (decimals).
+
+    Returns (params, worst_case_loss_pct, warnings).
+    """
     warnings = []
     atr_d = m["atr14_daily_pct"]
     lo30, hi30 = m["range30"]
@@ -161,28 +166,27 @@ def grid_params(m, price, verdict, fee, days, capital, min_notional):
     # Worst case: price falls straight to the stop with every buy level filled.
     # Levels above the current price were bought at creation, at the current price.
     held = sum(per_order / min(lower * ratio**i, price) for i in range(grids))
-    # ponytail: prices rounded to 0.01, fine for pairs above ~$1; use the symbol's tickSize for cheaper coins
     params = {
         "mode": "geometric",
-        "lower": round(lower, 2),
-        "upper": round(upper, 2),
+        "lower": round(lower, decimals),
+        "upper": round(upper, decimals),
         "grids": grids,
         "net_profit_per_grid": round(net_profit_per_grid(lower, upper, grids, fee), 5),
         "investment_usdc": investment,
-        "stop_loss": round(stop, 2),
+        "stop_loss": round(stop, decimals),
         "take_profit": None,
-        "take_profit_optional": round(upper * (1 + atr_d), 2),
+        "take_profit_optional": round(upper * (1 + atr_d), decimals),
         "trailing_up": False,
     }
     return params, round(held * stop / investment - 1, 4), warnings
 
 
-def report(m, price, fee, days, capital, min_notional):
+def report(m, price, fee, days, capital, min_notional, decimals=2):
     verdict, reason = decide(m)
     out = {"verdict": verdict, "reason": reason, "params": None, "worst_case_loss_pct": None, "warnings": []}
     if verdict == "NO-GO":
         return out
-    params, worst, out["warnings"] = grid_params(m, price, verdict, fee, days, capital, min_notional)
+    params, worst, out["warnings"] = grid_params(m, price, verdict, fee, days, capital, min_notional, decimals)
     net = params["net_profit_per_grid"]
     if round(net, 4) < 4 * fee:  # 2x round-trip fee; Binance shows the % with 2 decimals
         out.update(verdict="NO-GO", reason=f"net profit per grid {net:.2%} < 2x round-trip fee {4 * fee:.2%}")
@@ -196,21 +200,27 @@ def data_warnings(name, df, n, step):
     return [f"{name}: {len(df)}/{n} candles, {gaps} gaps"] if gaps or len(df) < n else []
 
 
-def check_pair(pair, fee, days, capital):
-    """Full check of one pair; saves runs/<pair>_<date>.json and returns the result."""
+def check_pair(pair, fee, days, capital, sym=None, btc=None):
+    """Full check of one pair; saves runs/<pair>_<date>.json and returns the result.
+
+    sym (its exchangeInfo entry) and btc (BTC daily candles) can be passed in to save requests.
+    """
     with ThreadPoolExecutor() as ex:
-        info, daily, h4 = (ex.submit(get, "exchangeInfo", symbol=pair),
-                           ex.submit(klines, pair, "1d", DAILY), ex.submit(klines, pair, "4h", H4))
-        sym = info.result()["symbols"][0]
+        daily, h4 = ex.submit(klines, pair, "1d", DAILY), ex.submit(klines, pair, "4h", H4)
+        sym = sym or get("exchangeInfo", symbol=pair)["symbols"][0]
         btc_pair = "BTC" + sym["quoteAsset"]
-        btc = ex.submit(klines, btc_pair, "1d", DAILY)
-        daily, h4, btc = daily.result(), h4.result(), btc.result()
+        btc = klines(btc_pair, "1d", DAILY) if btc is None else btc
+        daily, h4 = daily.result(), h4.result()
+    if len(daily) < DAILY:
+        raise ValueError(f"history too short: {len(daily)}/{DAILY} daily candles")
 
     m = compute_metrics(daily, h4, btc)
     bad = [k for k, v in m.items() if k != "range30" and not math.isfinite(v)]
     if bad:
         raise ValueError(f"not enough data to compute: {', '.join(bad)}")
-    min_notional = float(next(f["minNotional"] for f in sym["filters"] if f["filterType"] == "NOTIONAL"))
+    filters = {f["filterType"]: f for f in sym["filters"]}
+    min_notional = float(filters["NOTIONAL"]["minNotional"])
+    decimals = len(filters["PRICE_FILTER"]["tickSize"].rstrip("0").split(".")[1])  # "0.00100000" -> 3
     price = float(daily["close"].iloc[-1])
     day = pd.Timedelta(days=1)
     as_of = (daily["open_time"].iloc[-1] + day).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -219,8 +229,8 @@ def check_pair(pair, fee, days, capital):
         "pair": pair,
         "as_of": as_of,
         "price": price,
-        "metrics": {k: [round(x, 2) for x in v] if k == "range30" else round(float(v), 4) for k, v in m.items()},
-        **report(m, price, fee, days, capital, min_notional),
+        "metrics": {k: [round(x, decimals) for x in v] if k == "range30" else round(float(v), 4) for k, v in m.items()},
+        **report(m, price, fee, days, capital, min_notional, decimals),
     }
     out["warnings"] = (data_warnings(pair + " 1d", daily, DAILY, day) + data_warnings(pair + " 4h", h4, H4, day / 6)
                        + data_warnings(btc_pair + " 1d", btc, DAILY, day)
@@ -234,9 +244,9 @@ def check_pair(pair, fee, days, capital):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pairs", "--pair", nargs="+", default=PAIRS, help=f"default: {' '.join(PAIRS)}")
-    ap.add_argument("--fee", type=float, default=0.001, help="fee per side, 0.001 = 0.1%%")
-    ap.add_argument("--days", type=int, default=21, help="planned bot duration in days (14-30)")
-    ap.add_argument("--capital", type=float, default=1000, help="grid capital per pair, in the quote asset")
+    ap.add_argument("--fee", type=float, default=FEE, help="fee per side, 0.001 = 0.1%%")
+    ap.add_argument("--days", type=int, default=DAYS, help="planned bot duration in days (14-30)")
+    ap.add_argument("--capital", type=float, default=CAPITAL, help="grid capital per pair, in the quote asset")
     a = ap.parse_args(argv)
     if not 14 <= a.days <= 30:
         ap.error("--days must be between 14 and 30")
