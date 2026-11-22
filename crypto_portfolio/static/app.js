@@ -1,0 +1,1056 @@
+/* Crypto Portfolio PWA - Vue 3 (global build) + TradingView Lightweight Charts v5.
+ *
+ * Talks only to this server's /api. Data flow:
+ *   GET  /api/portfolio           instant: last live fetch or newest SQLite snapshot
+ *   POST /api/portfolio/refresh   live fetch from Binance + chains, records a snapshot
+ *   GET  /api/portfolio/history   snapshot totals for the chart
+ *   GET/POST /api/settings (+ test-binance, test-wallet) for the settings sheet
+ */
+(function () {
+  'use strict';
+
+  const { createApp, reactive, ref, computed, watch, nextTick, onMounted, onBeforeUnmount } = Vue;
+  const LWC = window.LightweightCharts;
+
+  // -- constants ---------------------------------------------------------------
+  const RANGES = [
+    { id: '24H', days: 1, label: 'Past 24 hours' },
+    { id: '7D', days: 7, label: 'Past 7 days' },
+    { id: '1M', days: 30, label: 'Past month' },
+    { id: '1Y', days: 365, label: 'Past year' },
+    { id: 'ALL', days: 0, label: 'All time' },
+  ];
+  const TABS = [
+    { id: 'all', label: 'All', hint: 'Every source' },
+    { id: 'binance', label: 'Binance', hint: 'Spot + Simple Earn + Funding' },
+    { id: 'onchain', label: 'On-chain', hint: 'Every configured wallet and chain' },
+  ];
+  const SOURCE_ORDER = ['binance_spot', 'binance_earn', 'binance_funding', 'onchain'];
+  const BINANCE_SOURCES = ['binance_spot', 'binance_earn', 'binance_funding'];
+  const CHAIN_COLORS = {
+    ethereum: '#7B93F0', bsc: '#F0B90B', arbitrum: '#28A0F0',
+    base: '#3D7BFF', polygon: '#9B6CF0', solana: '#14F195',
+  };
+  // Logos shipped in /static/coins (CC0, spothq/cryptocurrency-icons). Anything else gets a badge.
+  const COIN_ICONS = new Set((
+    '1inch aave ada algo ape atom avax band bat bch bnb btc chz comp crv dai dash doge dot enj eos ' +
+    'etc eth fil grt icp icx ksm link ltc mana matic mkr neo omg ont pax pol qtum rvn sand snx sol ' +
+    'storj sushi theta trx tusd uni usdc usdt vet waves wbtc xlm xmr xrp xtz yfi zec zil zrx'
+  ).split(' '));
+  const COLORS = { up: '#22E58B', down: '#FF5C73', flat: '#A3ADBA' };
+  const STALE_MINUTES = 10;   // older than this on open or on return -> refresh in the background
+  const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
+  const SOLANA_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+  const BINANCE_KEY_LENGTH = 64;   // HMAC API keys and secrets are both 64 letters and digits
+  const SCRUB_HOLD_MS = 130;       // a finger resting this long on the chart starts scrubbing
+  const SCRUB_SLOP_PX = 8;         // ...or one that moved this far sideways first
+  const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab' };
+
+  // -- formatting --------------------------------------------------------------
+  const usd2 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const usd0 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+  const usdCompact = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 2 });
+  const usdSig = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumSignificantDigits: 4 });
+  const qtyFormats = {
+    big: new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }),
+    mid: new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 }),
+    small: new Intl.NumberFormat('en-US', { maximumSignificantDigits: 4 }),
+  };
+
+  const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+
+  const fmt = {
+    money: (value) => usd2.format(num(value)),
+    compactMoney(value) {
+      const v = num(value);
+      return Math.abs(v) < 100000 ? usd0.format(v) : usdCompact.format(v);
+    },
+    price(value) {
+      const v = num(value);
+      if (!v) return 'No price';
+      return v >= 1 ? usd2.format(v) : usdSig.format(v);
+    },
+    qty(value) {
+      const v = num(value);
+      if (v === 0) return '0';
+      const a = Math.abs(v);
+      return (a >= 1000 ? qtyFormats.big : a >= 1 ? qtyFormats.mid : qtyFormats.small).format(v);
+    },
+    pct(value) {
+      const v = num(value);
+      if (v > 0 && v < 0.01) return '<0.01%';
+      return v.toFixed(v >= 10 ? 1 : 2) + '%';
+    },
+    signedMoney: (value) => (num(value) < 0 ? '−' : '+') + usd2.format(Math.abs(num(value))),
+    signedPct: (value) => (num(value) < 0 ? '−' : '+') + Math.abs(num(value)).toFixed(2) + '%',
+    hue(symbol) {
+      let h = 0;
+      for (const ch of String(symbol)) h = (h * 31 + ch.charCodeAt(0)) % 360;
+      return h;
+    },
+    badge(symbol) {
+      const clean = String(symbol).replace(/[^A-Z0-9]/gi, '');
+      return (clean || String(symbol)).slice(0, 3).toUpperCase();
+    },
+    shortAddress(address, head = 6) {
+      if (!address) return '';
+      return address.length <= head + 6 ? address : address.slice(0, head) + '…' + address.slice(-4);
+    },
+    fullDate(iso) {
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? '' : d.toLocaleString();
+    },
+    when(seconds) {
+      const d = new Date(seconds * 1000);
+      const opts = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+      if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+      return d.toLocaleString(undefined, opts);
+    },
+    day(seconds) {
+      const d = new Date(seconds * 1000);
+      const opts = { month: 'short', day: 'numeric' };
+      if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+      return d.toLocaleDateString(undefined, opts);
+    },
+    ago(iso, nowMs) {
+      const t = Date.parse(iso);
+      if (Number.isNaN(t)) return 'never';
+      const s = Math.max(0, (nowMs - t) / 1000);
+      if (s < 60) return 'just now';
+      if (s < 3600) return Math.floor(s / 60) + ' min ago';
+      if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+      return Math.floor(s / 86400) + ' d ago';
+    },
+    hours(h) {
+      if (h >= 23) return '24h';
+      if (h >= 1) return 'past ' + Math.round(h) + 'h';
+      return 'past ' + Math.max(1, Math.round(h * 60)) + ' min';
+    },
+  };
+
+  const trendOf = (value) => (value > 0.004 ? 'up' : value < -0.004 ? 'down' : 'flat');
+
+  const hexToRgba = (hex, alpha) => {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  };
+
+  const storage = {
+    get(key, fallback) {
+      try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (_) { return fallback; }
+    },
+    set(key, value) {
+      try { localStorage.setItem(key, value); } catch (_) { /* private mode: preference just won't stick */ }
+    },
+  };
+
+  // -- API ---------------------------------------------------------------------
+  class ApiError extends Error {
+    constructor(status, message, detail) {
+      super(message);
+      this.status = status;
+      this.detail = detail;
+    }
+  }
+
+  function errorMessage(data, status) {
+    const detail = data && data.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail.map((e) => {
+        const where = (e.loc || []).filter((p) => p !== 'body').join(' › ');
+        return where ? `${where}: ${e.msg}` : e.msg;
+      }).join('; ');
+    }
+    if (detail && typeof detail === 'object' && detail.message) return detail.message;
+    if (status === 0) return 'The server is unreachable. Is `main.py serve` still running?';
+    return `Request failed (HTTP ${status}).`;
+  }
+
+  async function api(path, { method = 'GET', body } = {}) {
+    let response;
+    try {
+      response = await fetch(path, {
+        method,
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (_) {
+      throw new ApiError(0, errorMessage(null, 0), null);
+    }
+    let data = null;
+    try { data = await response.json(); } catch (_) { data = null; }
+    if (!response.ok) throw new ApiError(response.status, errorMessage(data, response.status), data && data.detail);
+    return data;
+  }
+
+  const emptyPortfolio = () => ({
+    timestamp: '', total_usd: 0, origin: 'empty', configured: true, assets: [], errors: [],
+    groups: { all: 0, binance: 0, onchain: 0 }, source_labels: {}, change_24h: null,
+    dust: { assets: 0, value_usd: 0 }, min_value: 1,
+  });
+
+  // -- app ---------------------------------------------------------------------
+  const app = createApp({
+    setup() {
+      // portfolio state
+      const loading = ref(true);
+      const refreshing = ref(false);
+      const portfolio = ref(emptyPortfolio());
+      const points = ref([]);
+      const historyLoaded = ref(false);
+      const rangeId = ref(RANGES.some((r) => r.id === storage.get(STORE.range)) ? storage.get(STORE.range) : '1M');
+      const tabId = ref(TABS.some((t) => t.id === storage.get(STORE.tab)) ? storage.get(STORE.tab) : 'all');
+      const privacy = ref(storage.get(STORE.privacy, '0') === '1');
+      const scrub = ref(null);
+      const expanded = ref(null);
+      const showErrors = ref(false);
+      const iconFailed = reactive({});
+      const toast = ref(null);
+      const scrolled = ref(false);
+      const nowMs = ref(Date.now());
+
+      // access token
+      const locked = ref(false);
+      const unlockToken = ref('');
+      const unlockError = ref('');
+      const unlocking = ref(false);
+
+      // settings state
+      const settingsOpen = ref(false);
+      const settings = ref(null);
+      const form = reactive({ binance: { enabled: true, api_key: '', api_secret: '', clear: false }, wallets: [] });
+      const baseline = ref('');
+      const showKey = ref(false);
+      const showSecret = ref(false);
+      const saving = ref(false);
+      const saveError = ref('');
+      const binanceTest = reactive({ state: 'idle', result: null });
+      const draft = ref(null);
+      const draftError = ref('');
+      const armedDelete = ref(-1);
+
+      // template refs
+      const chartWrap = ref(null);
+      const chartEl = ref(null);
+      const sheet = ref(null);
+      const sheetClose = ref(null);
+      const draftEl = ref(null);
+
+      let chart = null;
+      let series = null;
+      let touchSurface = null;
+      const historyCache = new Map();
+      let toastTimer = null;
+      let armTimer = null;
+      let tickTimer = null;
+      let toastSeq = 0;
+      let lastFocus = null;
+
+      // -- helpers -------------------------------------------------------------
+      function showToast(text, kind = 'ok', ms = 3200) {
+        clearTimeout(toastTimer);
+        toast.value = { id: ++toastSeq, text, kind };
+        toastTimer = setTimeout(() => { toast.value = null; }, ms);
+      }
+
+      function handleError(error, { silent = false } = {}) {
+        if (error && error.status === 401) {
+          locked.value = true;
+          return;
+        }
+        if (!silent) showToast(error.message || String(error), 'error', 5000);
+      }
+
+      const ageMinutes = () => {
+        const t = Date.parse(portfolio.value.timestamp);
+        return Number.isNaN(t) ? Infinity : (Date.now() - t) / 60000;
+      };
+
+      function normalise(data) {
+        const base = emptyPortfolio();
+        return {
+          ...base,
+          ...data,
+          assets: Array.isArray(data.assets) ? data.assets : [],
+          errors: Array.isArray(data.errors) ? data.errors : [],
+          groups: { ...base.groups, ...(data.groups || {}) },
+          dust: data.dust || base.dust,
+        };
+      }
+
+      // -- computed: hero ------------------------------------------------------
+      const range = computed(() => RANGES.find((r) => r.id === rangeId.value) || RANGES[2]);
+      const rangeLabel = computed(() => range.value.label);
+
+      const heroParts = computed(() => {
+        const value = scrub.value ? scrub.value.value : portfolio.value.total_usd;
+        const text = fmt.money(value);
+        const dot = text.lastIndexOf('.');
+        return dot === -1 ? { whole: text, cents: '', chars: text.length }
+          : { whole: text.slice(0, dot), cents: text.slice(dot), chars: text.length };
+      });
+
+      const rangeChange = computed(() => {
+        const pts = points.value;
+        if (pts.length < 2) return null;
+        const first = pts[0].total_usd;
+        const usd = pts[pts.length - 1].total_usd - first;
+        return { usd, pct: first > 0 ? (usd / first) * 100 : null, trend: trendOf(usd) };
+      });
+
+      const heroChange = computed(() => {
+        if (scrub.value) {
+          const usd = scrub.value.value - scrub.value.first;
+          return {
+            usd, pct: scrub.value.first > 0 ? (usd / scrub.value.first) * 100 : null,
+            trend: trendOf(usd), label: 'since ' + scrub.value.firstDay,
+          };
+        }
+        const change = portfolio.value.change_24h;
+        if (!change) return null;
+        return { usd: change.usd, pct: change.pct, trend: trendOf(change.usd), label: fmt.hours(change.hours) };
+      });
+
+      const heroTrend = computed(() => (heroChange.value ? heroChange.value.trend : 'flat'));
+
+      const scrubLabel = computed(() => (scrub.value ? scrub.value.when : ''));
+
+      const chartMessage = computed(() => {
+        if (loading.value || !historyLoaded.value) return '';
+        const n = points.value.length;
+        if (n >= 2) return '';
+        if (!portfolio.value.configured) return 'Your history chart starts with the first refresh.';
+        if (n === 1) return 'One snapshot so far. The line appears from the second one.';
+        if (range.value.days) return `No snapshots in the ${range.value.label.toLowerCase()}. Each refresh, and each cron \`record\`, adds one.`;
+        return 'No snapshots yet. Each refresh, and each cron `record`, adds one.';
+      });
+
+      const updatedAgo = computed(() => fmt.ago(portfolio.value.timestamp, nowMs.value));
+
+      // -- computed: assets ----------------------------------------------------
+      const visibleAssets = computed(() => {
+        const p = portfolio.value;
+        const tab = tabId.value;
+        const groupTotal = num(p.groups[tab]);
+        const labels = p.source_labels || {};
+        const minValue = num(p.min_value);
+        const sources = tab === 'binance' ? BINANCE_SOURCES : tab === 'onchain' ? ['onchain'] : SOURCE_ORDER;
+
+        return p.assets
+          .map((asset) => {
+            let quantity = num(asset.quantity);
+            let value = num(asset.value_usd);
+            let pct = num(asset.pct);
+            if (tab === 'binance') {
+              quantity = num(asset.binance_quantity);
+              value = num(asset.binance_value_usd);
+              pct = groupTotal > 0 ? (value / groupTotal) * 100 : 0;
+            } else if (tab === 'onchain') {
+              quantity = num(asset.onchain_quantity);
+              value = num(asset.onchain_value_usd);
+              pct = groupTotal > 0 ? (value / groupTotal) * 100 : 0;
+            }
+            const breakdown = sources
+              .filter((s) => num((asset.by_source || {})[s]) > 0)
+              .map((s) => ({
+                source: s,
+                label: labels[s] || s,
+                quantity: num(asset.by_source[s]),
+                value: num((asset.value_by_source || {})[s]),
+              }));
+            return {
+              symbol: asset.symbol, quantity, value, pct, price: num(asset.price_usd), breakdown,
+              locations: tab === 'binance' ? (asset.locations || []).filter((l) => !l.includes('/'))
+                : tab === 'onchain' ? (asset.locations || []).filter((l) => l.includes('/'))
+                  : (asset.locations || []),
+            };
+          })
+          .filter((a) => a.quantity > 0 && (tab === 'all' || a.value >= minValue))
+          .sort((a, b) => b.value - a.value || a.symbol.localeCompare(b.symbol));
+      });
+
+      // Width of the value column: wide enough for the longest balance or price in the list, so
+      // money is never cut off. Tabular Manrope digits are ~9.3px at 15px/800, ~7.8px at 13px/600.
+      const valueCol = computed(() => {
+        let width = 104;
+        for (const a of visibleAssets.value) {
+          width = Math.max(width, fmt.money(a.value).length * 9.3, fmt.price(a.price).length * 7.8);
+        }
+        return Math.ceil(width) + 'px';
+      });
+
+      const emptyTitle = computed(() => {
+        if (portfolio.value.origin === 'empty') return 'No balances fetched yet';
+        if (tabId.value === 'binance') return 'No Binance balances to show';
+        if (tabId.value === 'onchain') return 'No on-chain balances to show';
+        return 'No balances above the dust filter';
+      });
+      const emptyHint = computed(() => {
+        const min = fmt.money(portfolio.value.min_value);
+        if (portfolio.value.origin === 'empty') return 'Fetch balances to take your first snapshot.';
+        if (tabId.value === 'binance') return `Binance is not connected, or nothing there is worth ${min} or more.`;
+        if (tabId.value === 'onchain') return `No wallet is configured, or nothing on-chain is worth ${min} or more.`;
+        return `Every asset is worth less than ${min}. They still count in the total.`;
+      });
+
+      // -- data loading --------------------------------------------------------
+      async function loadPortfolio() {
+        portfolio.value = normalise(await api('/api/portfolio'));
+      }
+
+      async function loadHistory({ force = false } = {}) {
+        const days = range.value.days;
+        if (force) historyCache.clear();
+        try {
+          if (!historyCache.has(days)) {
+            const data = await api(`/api/portfolio/history?days=${days}`);
+            historyCache.set(days, Array.isArray(data.points) ? data.points : []);
+          }
+          if (range.value.days === days) points.value = historyCache.get(days);
+        } catch (error) {
+          handleError(error, { silent: true });
+          points.value = [];
+        } finally {
+          historyLoaded.value = true;
+        }
+        drawChart();
+      }
+
+      async function refresh({ silent = false } = {}) {
+        if (refreshing.value) return;
+        refreshing.value = true;
+        try {
+          portfolio.value = normalise(await api('/api/portfolio/refresh', { method: 'POST' }));
+          await loadHistory({ force: true });
+          if (!silent) {
+            const failed = portfolio.value.errors.length;
+            showToast(failed ? `Updated, but ${failed} ${failed === 1 ? 'source' : 'sources'} failed` : 'Balances updated',
+              failed ? 'error' : 'ok');
+          }
+        } catch (error) {
+          if (error.detail && Array.isArray(error.detail.errors)) {
+            portfolio.value = { ...portfolio.value, errors: error.detail.errors };
+            showErrors.value = true;
+          }
+          handleError(error, { silent: silent && error.status !== 401 && !error.detail });
+        } finally {
+          refreshing.value = false;
+          nowMs.value = Date.now();
+        }
+      }
+
+      async function init() {
+        loading.value = true;
+        try {
+          await loadPortfolio();
+        } catch (error) {
+          handleError(error);
+        } finally {
+          loading.value = false;
+        }
+        if (locked.value) return;
+        await nextTick();
+        ensureChart();
+        await loadHistory();
+        const p = portfolio.value;
+        if (p.configured && (p.origin === 'empty' || ageMinutes() > STALE_MINUTES)) refresh({ silent: true });
+      }
+
+      // -- chart ---------------------------------------------------------------
+      function ensureChart() {
+        if (chart || !chartEl.value || !LWC) return;
+        chart = LWC.createChart(chartEl.value, {
+          autoSize: true,
+          layout: {
+            background: { type: LWC.ColorType.Solid, color: 'transparent' },
+            textColor: '#8590A0',
+            fontFamily: 'Manrope, system-ui, sans-serif',
+            fontSize: 11,
+            attributionLogo: false,   // credited in the page footer instead
+          },
+          grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+          rightPriceScale: { visible: false, scaleMargins: { top: 0.16, bottom: 0.1 } },
+          leftPriceScale: { visible: false },
+          timeScale: { visible: false, borderVisible: false, fixLeftEdge: true, fixRightEdge: true },
+          crosshair: {
+            mode: LWC.CrosshairMode.Magnet,
+            vertLine: { color: 'rgba(233, 237, 242, 0.32)', width: 1, style: LWC.LineStyle.Solid, labelVisible: false },
+            horzLine: { visible: false, labelVisible: false },
+          },
+          handleScroll: false,
+          handleScale: false,
+        });
+        series = chart.addSeries(LWC.AreaSeries, {
+          lineWidth: 2,
+          lineType: LWC.LineType.Simple,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerRadius: 5,
+          crosshairMarkerBorderWidth: 2,
+          crosshairMarkerBorderColor: '#161B22',
+        });
+        touchSurface = chartWrap.value;
+        if (touchSurface) touchSurface.addEventListener('touchmove', onChartTouchMove, { passive: false });
+        drawChart();
+      }
+
+      function drawChart() {
+        if (!series) return;
+        const trend = rangeChange.value ? rangeChange.value.trend : 'flat';
+        const color = COLORS[trend];
+        series.applyOptions({
+          lineColor: color,
+          topColor: hexToRgba(color, 0.26),
+          bottomColor: hexToRgba(color, 0),
+          crosshairMarkerBackgroundColor: color,
+          lineVisible: points.value.length >= 2,
+        });
+        series.setData(points.value.length >= 2 ? points.value.map((p) => ({ time: p.time, value: p.total_usd })) : []);
+        chart.timeScale().fitContent();
+      }
+
+      function destroyChart() {
+        if (touchSurface) touchSurface.removeEventListener('touchmove', onChartTouchMove);
+        touchSurface = null;
+        endTouch();
+        scrub.value = null;
+        if (chart) chart.remove();
+        chart = null;
+        series = null;
+      }
+
+      // Scrubbing. The wrapper has `touch-action: pan-y`, so a vertical swipe that starts on the
+      // chart scrolls the page (the browser sends pointercancel). A touch only starts scrubbing
+      // once it has clearly moved sideways or rested in place, so scrolling past the chart never
+      // flashes a tooltip or changes the headline number.
+      let touch = null;   // { id, x, y, lastX, active, timer } for the one finger that scrubs
+
+      function scrubAt(clientX) {
+        const pts = points.value;
+        if (!chart || !series || pts.length < 2 || !chartWrap.value) return;
+        const rect = chartWrap.value.getBoundingClientRect();
+        const logical = chart.timeScale().coordinateToLogical(clientX - rect.left);
+        if (logical === null) return;
+        const index = Math.min(pts.length - 1, Math.max(0, Math.round(logical)));
+        const point = pts[index];
+        chart.setCrosshairPosition(point.total_usd, point.time, series);
+        const x = chart.timeScale().timeToCoordinate(point.time);
+        const half = Math.min(70, rect.width / 2);
+        const tipX = Math.min(rect.width - half, Math.max(half, x === null ? clientX - rect.left : x));
+        scrub.value = {
+          value: point.total_usd,
+          when: fmt.when(point.time),
+          tipX,
+          first: pts[0].total_usd,
+          firstDay: fmt.day(pts[0].time),
+        };
+      }
+
+      function endTouch() {
+        if (!touch) return;
+        clearTimeout(touch.timer);
+        const { id } = touch;
+        touch = null;
+        try { chartWrap.value.releasePointerCapture(id); } catch (_) { /* already released */ }
+      }
+
+      function onChartDown(event) {
+        if (event.pointerType === 'mouse') { scrubAt(event.clientX); return; }
+        if (touch || points.value.length < 2) return;   // a second finger never steals the scrub
+        const current = {
+          id: event.pointerId, x: event.clientX, y: event.clientY, lastX: event.clientX, active: false, timer: 0,
+        };
+        current.timer = setTimeout(() => {
+          if (touch !== current) return;
+          current.active = true;
+          scrubAt(current.lastX);
+        }, SCRUB_HOLD_MS);
+        touch = current;
+        // Capture so the release is seen even when the finger ends up outside the chart.
+        try { chartWrap.value.setPointerCapture(event.pointerId); } catch (_) { /* pointer already gone */ }
+      }
+
+      function onChartMove(event) {
+        if (event.pointerType === 'mouse') { scrubAt(event.clientX); return; }
+        if (!touch || event.pointerId !== touch.id) return;
+        touch.lastX = event.clientX;
+        if (!touch.active) {
+          const dx = Math.abs(event.clientX - touch.x);
+          const dy = Math.abs(event.clientY - touch.y);
+          if (dy > SCRUB_SLOP_PX && dy >= dx) { endTouch(); return; }   // vertical: leave it to the page
+          if (dx < SCRUB_SLOP_PX) return;
+          clearTimeout(touch.timer);
+          touch.active = true;
+        }
+        scrubAt(event.clientX);
+      }
+
+      // pointerup, pointercancel (the browser took the gesture to scroll), lost capture, window blur
+      function onChartRelease(event) {
+        if (event && event.pointerType === 'mouse' && event.type === 'pointerup') return;   // still hovering
+        if (event && touch && event.pointerId !== touch.id) return;
+        endTouch();
+        if (!scrub.value) return;
+        scrub.value = null;
+        if (chart) chart.clearCrosshairPosition();
+      }
+
+      function onChartLeave(event) {
+        if (event.pointerType === 'mouse') onChartRelease();
+      }
+
+      // Once scrubbing has started, keep the page still even if the finger drifts vertically.
+      function onChartTouchMove(event) {
+        if (touch && touch.active && event.cancelable) event.preventDefault();
+      }
+
+      // -- UI actions ----------------------------------------------------------
+      function setRange(id) {
+        if (rangeId.value === id) return;
+        rangeId.value = id;
+        storage.set(STORE.range, id);
+        onChartRelease();
+        loadHistory();
+      }
+
+      function togglePrivacy() {
+        privacy.value = !privacy.value;
+        storage.set(STORE.privacy, privacy.value ? '1' : '0');
+      }
+
+      function toggleAsset(symbol) {
+        expanded.value = expanded.value === symbol ? null : symbol;
+      }
+
+      function coinIcon(symbol) {
+        const key = String(symbol).toLowerCase();
+        if (iconFailed[symbol] || !COIN_ICONS.has(key)) return null;
+        return `/static/coins/${key}.svg`;
+      }
+
+      async function unlock() {
+        unlocking.value = true;
+        unlockError.value = '';
+        try {
+          await api('/api/auth', { method: 'POST', body: { token: unlockToken.value } });
+          unlockToken.value = '';
+          locked.value = false;
+          await nextTick();
+          await init();
+        } catch (error) {
+          unlockError.value = error.status === 401 ? 'That token is not right.' : error.message;
+        } finally {
+          unlocking.value = false;
+        }
+      }
+
+      // -- settings ------------------------------------------------------------
+      const formSnapshot = () => JSON.stringify({
+        binance: { ...form.binance },
+        wallets: form.wallets.map((w) => ({ name: w.name, address: w.address, chains: [...w.chains] })),
+      });
+      const dirty = computed(() => settings.value !== null && formSnapshot() !== baseline.value);
+
+      function populateForm(data) {
+        settings.value = data;
+        form.binance.enabled = !!data.binance.enabled;
+        form.binance.api_key = '';
+        form.binance.api_secret = '';
+        form.binance.clear = false;
+        form.wallets = data.wallets.map((w) => ({ name: w.name, address: w.address, type: w.type, chains: [...w.chains] }));
+        baseline.value = formSnapshot();
+        binanceTest.state = 'idle';
+        binanceTest.result = null;
+        draft.value = null;
+        draftError.value = '';
+        saveError.value = '';
+        showKey.value = false;
+        showSecret.value = false;
+      }
+
+      async function openSettings() {
+        lastFocus = document.activeElement;
+        settingsOpen.value = true;
+        document.body.classList.add('sheet-open');
+        await nextTick();
+        if (sheetClose.value) sheetClose.value.focus();
+        try {
+          populateForm(await api('/api/settings'));
+        } catch (error) {
+          handleError(error);
+          if (error.status === 401) closeSettings(true);
+        }
+      }
+
+      function closeSettings(force = false) {
+        if (force !== true && dirty.value && !window.confirm('Discard your unsaved changes?')) return;
+        settingsOpen.value = false;
+        document.body.classList.remove('sheet-open');
+        if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
+      }
+
+      function onSheetKeydown(event) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeSettings();
+          return;
+        }
+        if (event.key !== 'Tab' || !sheet.value) return;
+        const focusable = [...sheet.value.querySelectorAll('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+          .filter((el) => el.offsetParent !== null);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+
+      async function saveSettings() {
+        if (!settings.value || saving.value || draft.value || saveBlocker.value) return;
+        saving.value = true;
+        saveError.value = '';
+        const b = form.binance;
+        const body = {
+          binance: {
+            enabled: b.enabled,
+            api_key: b.clear ? '' : (b.api_key || null),
+            api_secret: b.clear ? '' : (b.api_secret || null),
+          },
+          wallets: form.wallets.map((w) => ({ name: w.name, address: w.address, chains: w.chains })),
+        };
+        try {
+          const data = await api('/api/settings', { method: 'POST', body });
+          populateForm(data);
+          closeSettings(true);
+          showToast('Settings saved');
+          historyCache.clear();
+          await loadPortfolio().catch((error) => handleError(error, { silent: true }));
+          if (data.binance.configured || data.wallets.length) refresh();
+        } catch (error) {
+          if (error.status === 401) { handleError(error); return; }
+          saveError.value = error.message;
+        } finally {
+          saving.value = false;
+        }
+      }
+
+      const binanceStatus = computed(() => {
+        const s = settings.value;
+        if (binanceTest.state === 'testing') return { cls: 'busy', text: 'Testing…' };
+        const r = binanceTest.result;
+        if (r) {
+          if (r.ok) return r.warnings && r.warnings.length ? { cls: 'warn', text: 'Connected · review permissions' } : { cls: 'ok', text: 'Connected' };
+          if (r.status === 'unreachable') return { cls: 'error', text: 'Unreachable' };
+          if (r.status === 'no_read') return { cls: 'error', text: 'No read permission' };
+          return { cls: 'error', text: 'Rejected' };
+        }
+        if (!form.binance.enabled) return { cls: '', text: 'Off' };
+        if (form.binance.clear) return { cls: 'warn', text: 'Key will be removed' };
+        if (s && s.binance.configured) return { cls: '', text: 'Saved · not tested' };
+        return { cls: '', text: 'Not connected' };
+      });
+
+      const canTestBinance = computed(() => {
+        const s = settings.value;
+        if (!s || form.binance.clear) return false;
+        return !!(form.binance.api_key || s.binance.has_api_key) && !!(form.binance.api_secret || s.binance.has_api_secret);
+      });
+
+      // Inline feedback for one credential field: null when there is nothing to say.
+      function credentialCheck(value, otherValue, hasSaved, noun, otherNoun) {
+        if (form.binance.clear) return null;
+        if (!value) {
+          if (!otherValue) return null;
+          return hasSaved
+            ? { tone: 'hint', text: `The saved ${noun} stays in use with the new ${otherNoun}.` }
+            : { tone: 'error', text: `Paste the ${noun} too. Binance needs both.` };
+        }
+        if (/\s/.test(value)) return { tone: 'error', text: `Remove the spaces or line breaks inside the ${noun}.` };
+        if (/[^A-Za-z0-9]/.test(value)) {
+          return { tone: 'warn', text: 'Binance keys contain only letters and digits. Check what was pasted.' };
+        }
+        if (value.length !== BINANCE_KEY_LENGTH) {
+          const problem = value.length < BINANCE_KEY_LENGTH ? 'it may be cut off' : 'it may have extra characters';
+          return { tone: 'warn', text: `${value.length} characters. Binance keys have ${BINANCE_KEY_LENGTH}, so ${problem}.` };
+        }
+        return { tone: 'ok', text: `${BINANCE_KEY_LENGTH} characters, looks complete.` };
+      }
+      const keyCheck = computed(() => (settings.value
+        ? credentialCheck(form.binance.api_key, form.binance.api_secret, settings.value.binance.has_api_key, 'API key', 'secret key')
+        : null));
+      const secretCheck = computed(() => (settings.value
+        ? credentialCheck(form.binance.api_secret, form.binance.api_key, settings.value.binance.has_api_secret, 'secret key', 'API key')
+        : null));
+      const saveBlocker = computed(() => ([keyCheck.value, secretCheck.value].some((c) => c && c.tone === 'error')
+        ? 'Fix the Binance key first' : ''));
+
+      const fieldClass = (check) => ({
+        'is-invalid': !!check && check.tone === 'error',
+        'is-valid': !!check && check.tone === 'ok',
+      });
+      const msgIcon = (check) => (check.tone === 'ok' ? '#i-check' : check.tone === 'hint' ? '#i-info' : '#i-alert');
+
+      // A test result describes the keys as they were; editing either one makes it stale.
+      watch(() => [form.binance.api_key, form.binance.api_secret], () => {
+        if (binanceTest.state === 'testing') return;
+        binanceTest.state = 'idle';
+        binanceTest.result = null;
+      });
+
+      const envBinanceNames = computed(() => (settings.value ? settings.value.env_overrides.filter((n) => n.startsWith('BINANCE_')).join(', ') : ''));
+
+      const permissionList = computed(() => {
+        const p = (binanceTest.result && binanceTest.result.permissions) || {};
+        return [
+          { key: 'reading', label: 'Read', good: true },
+          { key: 'spot_trading', label: 'Trade', good: false },
+          { key: 'withdrawals', label: 'Withdraw', good: false },
+          { key: 'futures', label: 'Futures', good: false },
+          { key: 'ip_restricted', label: 'IP locked', good: true },
+        ].map((item) => {
+          const on = !!p[item.key];
+          return { ...item, on, cls: on ? (item.good ? 'on' : 'bad') : '' };
+        });
+      });
+
+      async function testBinance() {
+        binanceTest.state = 'testing';
+        binanceTest.result = null;
+        try {
+          binanceTest.result = await api('/api/settings/test-binance', {
+            method: 'POST',
+            body: { api_key: form.binance.api_key || null, api_secret: form.binance.api_secret || null },
+          });
+        } catch (error) {
+          if (error.status === 401) { handleError(error); return; }
+          binanceTest.result = { ok: false, status: 'error', message: error.message, permissions: {}, warnings: [] };
+        } finally {
+          binanceTest.state = 'done';
+        }
+      }
+
+      function clearBinance() {
+        form.binance.clear = true;
+        form.binance.api_key = '';
+        form.binance.api_secret = '';
+        binanceTest.result = null;
+        binanceTest.state = 'idle';
+      }
+
+      // wallets
+      const chainColor = (id) => CHAIN_COLORS[id] || '#A3ADBA';
+      const chainShort = (id) => {
+        const chain = settings.value && settings.value.chains.find((c) => c.id === id);
+        return chain ? chain.short : id.toUpperCase();
+      };
+      const evmChainIds = () => (settings.value ? settings.value.chains.filter((c) => c.type === 'evm').map((c) => c.id) : []);
+
+      const draftKind = computed(() => {
+        const address = draft.value ? draft.value.address : '';
+        if (EVM_RE.test(address)) return 'evm';
+        if (SOLANA_RE.test(address)) return 'solana';
+        return null;
+      });
+      const addressKey = (a) => (EVM_RE.test(a) ? a.toLowerCase() : a);
+      const draftDuplicate = computed(() => {
+        const d = draft.value;
+        if (!d || !draftKind.value) return false;
+        return form.wallets.some((w, i) => i !== d.index && addressKey(w.address) === addressKey(d.address));
+      });
+
+      // Feedback under the address field. While an address is still being typed it stays neutral
+      // (a running count); it only turns into an error for something that can never become valid,
+      // or once the field has been left or submitted unfinished.
+      const addressCheck = computed(() => {
+        const d = draft.value;
+        const a = d ? d.address : '';
+        const pending = (text, problem) => (d.touched || d.submitted ? { tone: 'error', text: problem } : { tone: 'hint', text });
+        if (!a) {
+          return d && d.submitted ? { tone: 'error', text: 'Enter an EVM (0x…) or Solana address.' }
+            : { tone: 'hint', text: 'EVM (0x…) or Solana address. Public address only.' };
+        }
+        if (draftDuplicate.value) return { tone: 'error', text: 'This address is already in the list.' };
+        if (draftKind.value === 'evm') return { tone: 'ok', text: 'EVM address. Choose the chains to scan.' };
+        if (draftKind.value === 'solana') return { tone: 'ok', text: 'Solana address. SOL and SPL tokens are read.' };
+        if (/^0x/i.test(a) || a === '0') {
+          if (/^0X/.test(a)) return { tone: 'error', text: 'Start the address with a lowercase 0x.' };
+          if (/[^0-9a-fA-F]/.test(a.slice(2))) {
+            return { tone: 'error', text: 'After 0x only 0-9 and a-f are allowed. Check for a mistyped character.' };
+          }
+          if (a.length > 42) {
+            return { tone: 'error', text: `${a.length} characters, ${a.length - 42} too many. An EVM address has 42.` };
+          }
+          return pending(`${a.length} of 42 characters`, `Only ${a.length} of 42 characters. The address looks cut off.`);
+        }
+        if (/[^1-9A-HJ-NP-Za-km-z]/.test(a)) {
+          return { tone: 'error', text: 'Not an address. EVM starts with 0x; Solana never contains 0, O, I, l or symbols.' };
+        }
+        if (a.length > 44) {
+          return { tone: 'error', text: `${a.length} characters is too long. A Solana address has 32 to 44.` };
+        }
+        return pending(`${a.length} characters so far. A Solana address has 32 to 44.`,
+          `Only ${a.length} characters. A Solana address has 32 to 44, and an EVM one starts with 0x.`);
+      });
+
+      watch(draftKind, (kind) => {
+        const d = draft.value;
+        if (!d) return;
+        d.test = null;
+        if (kind === 'solana') d.chains = ['solana'];
+        else if (kind === 'evm') {
+          d.chains = d.chains.filter((c) => c !== 'solana');
+          if (!d.chains.length) d.chains = evmChainIds();
+        }
+      });
+
+      const chainAllowed = (chain) => !draftKind.value || chain.type === draftKind.value;
+
+      function toggleChain(id) {
+        const d = draft.value;
+        if (!d) return;
+        const order = settings.value.chains.map((c) => c.id);
+        d.chains = d.chains.includes(id) ? d.chains.filter((c) => c !== id) : [...d.chains, id].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+        d.test = null;
+        draftError.value = '';
+      }
+
+      async function focusDraft() {
+        await nextTick();
+        if (!draftEl.value) return;
+        draftEl.value.scrollIntoView({ block: 'nearest' });   // smooth unless reduced motion (style.css)
+        const input = draftEl.value.querySelector('input');
+        if (input) input.focus({ preventScroll: true });
+      }
+
+      function focusAddress() {
+        const input = draftEl.value && draftEl.value.querySelector('#wallet-address');
+        if (input) input.focus();
+      }
+
+      function newWallet() {
+        draftError.value = '';
+        draft.value = { index: -1, name: '', address: '', chains: [], test: null, testing: false, touched: false, submitted: false };
+        focusDraft();
+      }
+
+      function editWallet(index) {
+        const w = form.wallets[index];
+        draftError.value = '';
+        armedDelete.value = -1;
+        draft.value = { index, name: w.name, address: w.address, chains: [...w.chains], test: null, testing: false, touched: false, submitted: false };
+        focusDraft();
+      }
+
+      function cancelDraft() {
+        draft.value = null;
+        draftError.value = '';
+      }
+
+      function applyDraft() {
+        const d = draft.value;
+        const kind = draftKind.value;
+        if (!d) return;
+        d.submitted = true;
+        draftError.value = '';
+        // The reason is already written under the address field: put the cursor back in it.
+        if (!kind || draftDuplicate.value) { focusAddress(); return; }
+        const chains = kind === 'solana' ? ['solana'] : d.chains.filter((c) => c !== 'solana');
+        if (!chains.length) { draftError.value = 'Pick at least one chain to scan.'; return; }
+        const entry = { name: d.name.trim(), address: d.address, type: kind, chains };
+        if (d.index === -1) form.wallets.push(entry);
+        else form.wallets.splice(d.index, 1, entry);
+        draft.value = null;
+        draftError.value = '';
+      }
+
+      function deleteWallet(index) {
+        clearTimeout(armTimer);
+        if (armedDelete.value === index) {
+          form.wallets.splice(index, 1);
+          armedDelete.value = -1;
+          if (draft.value && draft.value.index === index) draft.value = null;
+          return;
+        }
+        armedDelete.value = index;
+        armTimer = setTimeout(() => { armedDelete.value = -1; }, 3500);
+      }
+
+      async function testWallet() {
+        const d = draft.value;
+        if (!d || !draftKind.value) return;
+        d.testing = true;
+        d.test = null;
+        try {
+          d.test = await api('/api/settings/test-wallet', { method: 'POST', body: { address: d.address, chains: d.chains } });
+        } catch (error) {
+          if (error.status === 401) { handleError(error); return; }
+          d.test = { ok: false, reachable: 0, message: error.message, results: [] };
+        } finally {
+          d.testing = false;
+        }
+      }
+
+      // -- lifecycle -----------------------------------------------------------
+      const onScroll = () => { scrolled.value = window.scrollY > 4; };
+      const onVisible = () => {
+        if (document.visibilityState !== 'visible' || locked.value || loading.value) return;
+        nowMs.value = Date.now();
+        if (portfolio.value.configured && ageMinutes() > STALE_MINUTES) refresh({ silent: true });
+      };
+
+      // Bindings on the mount element are ignored by Vue, so privacy lives on <body>.
+      watch(privacy, (on) => document.body.classList.toggle('privacy', on), { immediate: true });
+      watch(tabId, (id) => { storage.set(STORE.tab, id); expanded.value = null; });
+      watch(locked, (isLocked) => { if (isLocked) destroyChart(); });
+
+      const onBlur = () => onChartRelease();
+      const noop = () => {};
+
+      onMounted(() => {
+        window.addEventListener('scroll', onScroll, { passive: true });
+        window.addEventListener('blur', onBlur);
+        // iOS Safari only applies :active styles on touch when a touchstart listener exists.
+        document.addEventListener('touchstart', noop, { passive: true });
+        document.addEventListener('visibilitychange', onVisible);
+        tickTimer = setInterval(() => { nowMs.value = Date.now(); }, 30000);
+        init();
+      });
+
+      onBeforeUnmount(() => {
+        window.removeEventListener('scroll', onScroll);
+        window.removeEventListener('blur', onBlur);
+        document.removeEventListener('touchstart', noop);
+        document.removeEventListener('visibilitychange', onVisible);
+        clearInterval(tickTimer);
+        destroyChart();
+      });
+
+      return {
+        fmt, ranges: RANGES, tabs: TABS,
+        loading, refreshing, portfolio, points, rangeId, tabId, privacy, scrub, expanded, showErrors,
+        iconFailed, toast, scrolled, locked, unlockToken, unlockError, unlocking,
+        heroParts, heroChange, heroTrend, scrubLabel, rangeChange, rangeLabel, chartMessage, updatedAgo,
+        visibleAssets, valueCol, emptyTitle, emptyHint,
+        chartWrap, chartEl, sheet, sheetClose, draftEl,
+        refresh, setRange, togglePrivacy, toggleAsset, coinIcon, onChartDown, onChartMove, onChartRelease, onChartLeave, unlock,
+        settingsOpen, settings, form, showKey, showSecret, saving, saveError, binanceTest, dirty,
+        binanceStatus, canTestBinance, envBinanceNames, permissionList,
+        keyCheck, secretCheck, saveBlocker, fieldClass, msgIcon, addressCheck, focusAddress,
+        openSettings, closeSettings, onSheetKeydown, saveSettings, testBinance, clearBinance,
+        draft, draftError, draftKind, armedDelete, chainColor, chainShort, chainAllowed,
+        toggleChain, newWallet, editWallet, cancelDraft, applyDraft, deleteWallet, testWallet,
+      };
+    },
+  });
+
+  app.mount('#app');
+
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => { /* offline shell is optional */ });
+    });
+  }
+})();
