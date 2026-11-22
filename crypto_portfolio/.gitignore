@@ -1,0 +1,9 @@
+config.yaml
+portfolio_history.db
+portfolio_history.db-*
+charts/
+.venv/
+.pytest_cache/
+__pycache__/
+config.yaml.bak
+.config-*.yaml

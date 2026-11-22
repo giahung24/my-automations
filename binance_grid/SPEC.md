@@ -1,8 +1,36 @@
 # Spec — `grid_check.py` (Binance Spot Grid, ETH/USDC và các cặp USDC khác)
 
-Trích từ tài liệu gốc [Hướng dẫn setup Binance Spot Grid Bot (ETH/USDC)](https://claude.ai/artifact/2y2CQUDpSLAXB5b3kW29TZ) (bản 2026-10-23), chỉ giữ phần script cần. Bước 3 (setup trên Binance) và Bước 4 (theo dõi) là việc làm tay, xem tài liệu gốc.
+Nội dung tài liệu gốc *Hướng dẫn setup Binance Spot Grid Bot (ETH/USDC)* (bản 2026-10-23). Artifact gốc đã bị xóa ngày 2026-11-02. Các phần dưới đây được khôi phục nguyên văn từ bản đọc rev 12 ngày 2026-11-01; chỉ có "Đầu vào" và "Ghi chú triển khai" là phần thêm khi code.
 
-**Nguyên tắc:** mọi con số và quyết định go/no-go do script tính theo quy tắc cố định. LLM chỉ chạy script, đọc output và giải thích. Script không đặt lệnh, không cần API key.
+## Có nên dùng LLM kiểm tra trend trước khi setup?
+
+**Có, nhưng LLM chỉ điều phối và giải thích; mọi con số và quyết định go/no-go phải do script tính theo quy tắc cố định.** LLM không đoán được trend tốt hơn một chỉ số đơn giản, và có thể bịa số nếu tự "ước lượng" giá.
+
+| Việc | Ai làm | Lý do |
+| --- | --- | --- |
+| Tải nến ngày và 4h từ Binance | Script | Dữ liệu thật, lặp lại được |
+| Tính SMA, ADX, volatility, biên độ | Script | Quy tắc cố định, không phụ thuộc cảm nhận |
+| Kết luận go/no-go và bộ params | Script | Cùng dữ liệu ra cùng kết quả |
+| Chạy script, đọc output, giải thích bằng lời | LLM | Tiện, nhanh, dễ hiểu |
+| Bắt lỗi bất thường (dữ liệu thiếu, params vô lý) | LLM | Kiểm tra chéo trước khi bạn bấm tạo bot |
+| Bấm tạo bot trên Binance | Bạn | Tiền thật; spot grid của Binance setup qua giao diện |
+
+Nếu LLM đưa ra con số không có trong output của script, bỏ qua con số đó.
+
+## Điều kiện tiên quyết
+
+Kiểm tra đủ các mục dưới đây trước khi chạy script.
+
+- [ ] Tài khoản Binance đã KYC và thấy mục Trading Bots → Spot Grid. Tính năng, cặp và hạn mức thay đổi theo khu vực, nên xác nhận ngay trên tài khoản ở Pháp.
+- [ ] Cặp ETH/USDC có trong danh sách Spot Grid của bạn (USDT không còn giao dịch spot cho người dùng EEA).
+- [ ] Biết mức phí thật của bạn trên cặp này (mặc định khoảng 0.1% mỗi chiều; có thể thấp hơn nếu trả phí bằng BNB). Script cần con số này.
+- [ ] Vốn cho grid là khoản bạn chấp nhận mất một phần lớn, tách riêng khỏi vốn cho bot trend.
+- [ ] Script chạy được trên máy có internet tới `api.binance.com` (chỉ cần endpoint public, không cần API key).
+
+**Hai điều cần hiểu về cách Binance tính lãi** ([FAQ Spot Grid](https://www.binance.com/en/support/faq/what-is-spot-grid-trading-and-how-does-it-work-d5f441e8ab544a5b98241e00efb3a4ab), [FAQ tham số](https://www.binance.com/en/support/faq/binance-spot-grid-trading-parameters-688ff6ff08734848915de76a07b953dd)):
+
+- Grid Profit đã trừ phí, nhưng chỉ là lãi từ các cặp mua–bán đã khớp. Kết quả thật = Grid Profit + lãi/lỗ chưa chốt của lượng ETH bot đang giữ.
+- Với lưới geometric, lãi mỗi lưới ≈ (1 − phí) × (giá trên / giá dưới)^(1/số lưới) − 1 − phí. Ví dụ của Binance: vùng 400–450, 5 lưới, phí 0.1% → khoảng 2.18% mỗi lưới.
 
 ## Đầu vào
 
@@ -43,7 +71,7 @@ Các ngưỡng này là điểm khởi đầu hợp lý, chưa được kiểm �
 
 ## Bước 2 — Công thức tính params
 
-Ký hiệu: P = giá hiện tại, σ = volatility ngày (vol 30 ngày / √365), f = phí mỗi chiều, H = số ngày dự định chạy bot (14–30).
+Mọi params suy ra từ volatility và phí, không chọn theo cảm tính và không dùng nút "AI parameters" của sàn mà không kiểm tra lại. Ký hiệu: P = giá hiện tại, σ = volatility ngày (vol 30 ngày / √365), f = phí mỗi chiều, H = số ngày dự định chạy bot (14–30).
 
 | Param | Công thức | Ghi chú |
 | --- | --- | --- |
@@ -54,20 +82,18 @@ Ký hiệu: P = giá hiện tại, σ = volatility ngày (vol 30 ngày / √365)
 | Số lưới (N) | round(ln(U/L) / ln(1 + s)) | Kiểm tra N nằm trong giới hạn giao diện Binance |
 | Lãi ròng mỗi lưới | (1 − f)(1 + s) − 1 − f ≈ s − 2f | Phải ≥ 2 × phí khứ hồi, nếu không thì NO-GO |
 | Vốn đầu tư | Tối đa 10–20% số vốn crypto của bạn; một nửa nếu CAUTION | Mỗi lệnh (vốn / N) phải lớn hơn mức tối thiểu của sàn với dư địa |
-| Stop-loss | L × (1 − ATR ngày%) | Bắt buộc |
-| Take-profit | Tùy chọn: U × (1 + ATR ngày%) | Giá phá lên = thị trường chuyển sang trend |
+| Stop-loss | L × (1 − ATR ngày%) | Bắt buộc; bật tùy chọn bán hết ETH khi dừng nếu giao diện có |
+| Take-profit | Tùy chọn: U × (1 + ATR ngày%) | Giá phá lên = thị trường chuyển sang trend, để bot trend xử lý |
 | Trigger price | Không dùng, trừ khi giá đang sát biên vùng | Chờ giá về giữa vùng thì tốt hơn |
 | Trailing up | Tắt | Tránh đuổi giá lên rồi kẹt ở vùng cao |
 
-**Kiểm tra cuối trước khi xuất params:** lãi ròng mỗi lưới ≥ 0.4% (với f = 0.1%), N không vượt giới hạn, khoảng cách từ P tới stop-loss là mức lỗ chấp nhận được nếu toàn bộ vốn đã chuyển thành ETH.
+**Kiểm tra cuối trước khi xuất params:** lãi ròng mỗi lưới ≥ 0.4% (với f = 0.1%), N không vượt giới hạn, khoảng cách từ P tới stop-loss là mức lỗ bạn chấp nhận được nếu toàn bộ vốn đã chuyển thành ETH.
 
-Công thức lãi mỗi lưới geometric của Binance: (1 − phí) × (giá trên / giá dưới)^(1/số lưới) − 1 − phí. Ví dụ của Binance: vùng 400–450, 5 lưới, phí 0.1% → khoảng 2.18% mỗi lưới ([FAQ tham số](https://www.binance.com/en/support/faq/binance-spot-grid-trading-parameters-688ff6ff08734848915de76a07b953dd)).
+## Ví dụ minh họa ETH/USDC (dùng làm test)
 
-## Ví dụ minh họa (dùng làm test)
+Số liệu dưới đây là giả định để minh họa cách tính, không phải giá hay đề xuất hiện tại. Khi chạy thật, script thay bằng dữ liệu mới nhất.
 
-Số liệu giả định, không phải giá hiện tại.
-
-**Đầu vào:** P = 3,000 USDC; vol 30 ngày 55%/năm (σ ≈ 2.88%/ngày); ATR ngày 3.2%; ATR 4h 1.1%; vùng 30 ngày 2,750–3,250; ADX 18; Efficiency Ratio 0.25; ETH và BTC trên SMA200; phí 0.1%; chạy 21 ngày; vốn 1,000 USDC. Kết luận: **GO** (k = 1.5).
+**Đầu vào giả định:** P = 3,000 USDC; vol 30 ngày 55%/năm (σ ≈ 2.88%/ngày); ATR ngày 3.2%; ATR 4h 1.1%; vùng 30 ngày 2,750–3,250; ADX 18; Efficiency Ratio 0.25; ETH và BTC trên SMA200; phí 0.1% mỗi chiều; chạy 21 ngày; vốn 1,000 USDC. Kết luận regime: **GO** (k = 1.5).
 
 | Param | Kết quả | Cách ra số |
 | --- | --- | --- |
@@ -81,9 +107,9 @@ Số liệu giả định, không phải giá hiện tại.
 | Take-profit | Bỏ trống hoặc ≈ 3,773 USDC | 3,656.5 × (1 + 3.2%) |
 | Trailing up | Tắt | |
 
-**Rủi ro tệ nhất:** nếu giá rơi thẳng xuống stop-loss, bot đã mua đủ mọi lưới và giữ khoảng 0.353 ETH, trị giá khoảng 841 USDC tại 2,383, tức lỗ khoảng 16% vốn.
+**Rủi ro tệ nhất:** nếu giá rơi thẳng xuống stop-loss, bot đã mua đủ mọi lưới và giữ khoảng 0.353 ETH, trị giá khoảng 841 USDC tại 2,383. Tức lỗ khoảng 16% vốn, chưa tính grid profit đã kiếm được. Nếu con số này quá lớn với bạn, giảm vốn chứ đừng bỏ stop-loss.
 
-Output JSON mẫu:
+Output JSON mẫu mà script nên trả về:
 
 ```json
 {
@@ -103,7 +129,37 @@ Output JSON mẫu:
 }
 ```
 
-## Prompt cho agent (nguyên văn từ tài liệu gốc)
+## Bước 3 — Setup trên Binance
+
+Chỉ làm bước này khi script trả về GO hoặc CAUTION. Tên nút và vị trí menu có thể khác nhau giữa web, app và theo khu vực.
+
+1. Mở **Trading Bots → Spot Grid**, chọn cặp **ETH/USDC**.
+2. Chọn chế độ **Manual** (thủ công), không dùng tham số AI của sàn.
+3. Nhập giá dưới, giá trên, số lưới từ output của script; chọn **Geometric**.
+4. So con số lãi mỗi lưới Binance hiển thị với `net_profit_per_grid` của script. Lệch quá 0.05 điểm % thì dừng lại kiểm tra phí hoặc số nhập.
+5. Nhập số vốn. Xem Binance sẽ mua sẵn bao nhiêu ETH lúc tạo bot (để có hàng bán ở các lưới phía trên giá hiện tại).
+6. Mở **Advanced**: để trống trigger price; nhập stop-loss; take-profit tùy chọn; bật tùy chọn bán hết ETH khi dừng nếu có; tắt trailing up.
+7. Xác nhận tạo bot. Ghi lại ngày, giá lúc tạo, toàn bộ params và file JSON của script vào nhật ký (xem Bước 4).
+
+## Bước 4 — Theo dõi và đánh giá
+
+Chạy lại script mỗi tuần và mỗi khi giá biến động mạnh; dừng bot theo quy tắc, không theo cảm xúc. `bot_check.py` áp dụng bảng này tự động (xem ghi chú 23–25).
+
+| Tình huống | Hành động |
+| --- | --- |
+| Stop-loss kích hoạt | Để bot dừng. Không tạo lại ngay; chờ script trả về GO trở lại |
+| Script tuần trả về NO-GO | Dừng bot thủ công. Downtrend → bán ETH về USDC; trend tăng mạnh → để bot trend xử lý |
+| Giá vượt giá trên | Bot đã bán hết ETH và đứng yên. Dừng bot, chạy lại script trước khi tạo vùng mới |
+| Tỉ lệ volatility > 1.5 hoặc có tin lớn | Dừng hoặc chuyển sang cấu hình CAUTION |
+| Hết H ngày dự định | Chạy lại script; giữ params nếu vẫn GO, nếu không thì dừng |
+
+**Nhật ký mỗi lần chạy** (một dòng mỗi bot, trong một file bảng tính): ngày bắt đầu/kết thúc, params, giá lúc tạo và lúc dừng, grid profit, tổng lãi/lỗ (gồm phần chưa chốt), lợi nhuận nếu chỉ cầm ETH cùng số vốn, lý do dừng.
+
+**Tiêu chí đánh giá sau 5–10 lần chạy:** grid chỉ đáng giữ nếu tổng lãi/lỗ (không chỉ grid profit) tốt hơn cả việc cầm ETH lẫn cầm USDC trên cùng giai đoạn, sau khi đã tính các lần dính stop-loss. Nếu không, bỏ grid và dồn vốn cho bot trend.
+
+## Prompt mẫu cho LLM agent (nguyên văn từ tài liệu gốc)
+
+Dán prompt này vào Claude Code (hoặc agent khác) kèm tài liệu này. Lần đầu, agent viết script; các lần sau chỉ chạy và báo cáo.
 
 ```text
 You are helping me decide whether to run a Binance Spot Grid bot and with which parameters.
@@ -127,6 +183,15 @@ Every run:
 4. Never place orders or ask for API secrets. I create the bot manually in the Binance UI.
 5. Keep the report under 15 lines and in Vietnamese.
 ```
+
+## Nguồn
+
+- [Binance — What Is Spot Grid Trading and How Does It Work?](https://www.binance.com/en/support/faq/what-is-spot-grid-trading-and-how-does-it-work-d5f441e8ab544a5b98241e00efb3a4ab): Grid Profit đã trừ phí.
+- [Binance — Spot Grid Trading Parameters](https://www.binance.com/en/support/faq/binance-spot-grid-trading-parameters-688ff6ff08734848915de76a07b953dd): công thức lãi mỗi lưới geometric và ví dụ 400–450.
+- [Binance dừng giao dịch spot USDT cho người dùng EEA (MiCA)](https://cryptodnes.bg/en/binance-ends-usdt-spot-trading-in-europe-to-comply-with-mica/): lý do dùng cặp USDC.
+- [Thực nghiệm grid bot BTC 6 tháng (DEV)](https://dev.to/joe_hans_6c082d6c1caf189f/i-ran-a-gateio-btc-grid-bot-for-6-months-real-returns-and-3-fatal-mistakes-2i1p): grid thất bại chủ yếu khi thị trường có trend.
+
+Ngưỡng regime và công thức params trong tài liệu này là quy tắc kinh nghiệm, chưa được backtest. Đây không phải lời khuyên tài chính.
 
 ## Ghi chú triển khai (kiểm tra ngày 2026-11-01)
 
@@ -166,12 +231,28 @@ Mở rộng nhiều cặp (2026-11-01):
 19. **Ngưỡng regime** được đặt cho ETH và chưa kiểm định cho BTC/SOL/LINK. Params tự co giãn theo volatility của từng cặp. `--capital` là vốn cho mỗi cặp, không phải tổng.
 20. **Đổi tên chỉ số**: `eth_vs_sma200` → `pair_vs_sma200` (giá của cặp đang xét so với SMA200 của nó). Bộ lọc BTC vẫn là `btc_vs_sma200`.
 21. **Endpoint**: `api.binance.com` trả 451 cho IP ở Mỹ (cloud, GitHub Actions); `data-api.binance.vision` là endpoint dữ liệu public của Binance, cùng định dạng. Proxy Cato của công ty chặn `data-api` (lỗi SSL), nên `get()` gặp lỗi kết nối thì tự chuyển sang `api.binance.com`.
-22. **Giá trong params** làm tròn 0.01: hợp với cặp giá > ~1 USDC (LINKUSDC có tick 0.001 nên 0.01 vẫn hợp lệ). Coin rẻ hơn cần làm tròn theo `tickSize`.
+22. **Giá trong params** làm tròn theo `tickSize` của cặp (LINKUSDC 0.001, SUIUSDC 0.0001), để coin dưới 1 USDC vẫn ra giá dùng được.
 
 Theo dõi bot đang chạy (`bot_check.py`, 2026-11-02):
 
 23. **Quy tắc** theo bảng Bước 4 của tài liệu gốc, dừng ở quy tắc đầu tiên khớp: chạm stop-loss → `STOPPED`; regime NO-GO → `STOP` (downtrend: bán về USDC; volatility: dừng hoặc cấu hình CAUTION); giá trên giá trên → `STOP`; hết số ngày dự định → `KEEP` nếu GO, còn lại `STOP`; còn lại → `KEEP`, không chỉnh params.
 24. **Chạm stop-loss** xét bằng đáy các nến 1h từ lúc tạo bot, gồm nến đang chạy (tối đa 1000 nến, tức 41 ngày). Giá vượt giá trên xét bằng giá hiện tại, vì bot chỉ đứng yên khi giá còn ở trên.
 25. **Thông số bot** nằm trong `bots.json` (bị gitignore, nên không lên được Claude cloud). Không dùng API key: Binance không có API cho grid bot.
+
+Quét tìm cặp (`grid_scan.py`, 2026-11-02):
+
+26. **Tập cặp**: cặp spot USDC đang TRADING, khối lượng 24h ≥ `--min-volume` (mặc định 2M USDC). Bỏ stablecoin theo danh sách `STABLES`, và bỏ cặp có volatility 30 ngày < 5%/năm (stablecoin chưa có trong danh sách). Bỏ token đòn bẩy: base kết thúc bằng UP/DOWN/BULL/BEAR và phần đầu là một coin đang niêm yết (nên JUP, SYRUP vẫn được giữ).
+27. **Lịch sử < 300 nến ngày**: `check_pair` từ chối cặp đó, áp dụng cho cả `grid_check` và `bot_check`. Trước đây chỉ cảnh báo.
+28. **Ngưỡng 2M**, dựa trên số liệu 2026-11-02: có 255 cặp USDC đang TRADING, trong đó 20 cặp ≥ 1M và 14 cặp ≥ 2M. Spread trung vị theo nhóm khối lượng:
+
+    | Khối lượng 24h | Spread trung vị | Spread lớn nhất |
+    | --- | --- | --- |
+    | ≥ 10M | 0.008% | 0.011% |
+    | 2–10M | 0.025% | 0.211% |
+    | 1–2M | 0.057% | 0.178% |
+    | 0.3–1M | 0.063% | 0.667% |
+
+    Không nên hạ dưới 1M: spread ở đó có thể ăn hết lãi của một lưới.
+29. **Xếp hạng**: GO trước CAUTION. Trong cùng nhóm, xếp theo `fit` = trung bình biên an toàn của 4 điều kiện GO (ADX, ER, |slope|, vị trí giữa vùng); 1 là lý tưởng, 0 là đúng ngưỡng, âm là trượt. Hòa điểm thì cặp khối lượng lớn hơn đứng trước. Thanh khoản là bộ lọc đầu vào, không cộng vào điểm.
 
 **Khi Claude chạy:** `python grid_check.py` (mặc định 4 cặp). Stdout là danh sách JSON, stderr là một dòng tóm tắt mỗi cặp. Báo cáo theo prompt ở trên cho cả lần chạy: một dòng kết luận mỗi cặp, chi tiết params chỉ cho cặp GO hoặc CAUTION.

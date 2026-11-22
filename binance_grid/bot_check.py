@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from grid_check import check_pair, get
+from grid_check import CAPITAL, FEE, check_pair, get
 
 BOTS = Path(__file__).parent / "bots.json"
 NO_GO_ADVICE = {
@@ -50,7 +50,7 @@ def check_bot(bot):
     created = pd.Timestamp(bot["created"])
     created = created.tz_localize("UTC") if created.tzinfo is None else created
     with ThreadPoolExecutor() as ex:
-        regime = ex.submit(check_pair, pair, 0.001, bot["days"], 1000)
+        regime = ex.submit(check_pair, pair, FEE, bot["days"], CAPITAL)
         # 1h candles since creation, the forming one included: a touch of the stop-loss counts
         candles = ex.submit(get, "klines", symbol=pair, interval="1h", startTime=int(created.timestamp() * 1000), limit=1000)
         ticker = ex.submit(get, "ticker/price", symbol=pair)
