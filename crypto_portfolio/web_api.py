@@ -23,7 +23,7 @@ import secrets
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -54,7 +54,12 @@ from models import (
     Holding,
     Portfolio,
 )
-from services.analytics.attribution import MAX_WINDOW_HOURS, attribution_report
+from services.analytics.attribution import (
+    MAX_WINDOW_HOURS,
+    attribution_report,
+    coverage_of,
+    reference_snapshot,
+)
 from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
@@ -175,11 +180,6 @@ def resolve_chains(kind: str, requested: list[str]) -> list[str]:
     return ordered or list(EVM_CHAINS)
 
 
-def _utc_iso(moment: datetime) -> str:
-    """Same shape as utc_now_iso(), so string comparison in SQLite orders correctly."""
-    return moment.astimezone(timezone.utc).replace(microsecond=0).isoformat()
-
-
 def _binance_message(exc: Exception) -> str:
     text = str(exc)
     match = re.search(r'"code"\s*:\s*(-?\d+)', text)
@@ -196,13 +196,13 @@ def change_since(database: Database, current_total: float, current_ts: str,
                  hours: int = 24) -> dict | None:
     """Value change against the snapshot nearest `hours` ago.
 
-    Prefers the newest snapshot at or before the cutoff. With a shorter history it falls
-    back to the oldest snapshot inside the window and reports the real `hours` covered,
-    so the UI can say "6h" instead of pretending it is a 24h figure.
+    The reference is the snapshot closest to the cutoff, before or after it (the same pick as
+    the attribution window, so the chip and the Analytics tab agree). The real `hours` covered
+    and a `coverage` verdict are reported, so the UI can say "6h" instead of pretending it is
+    a 24h figure.
     """
     now = parse_timestamp(current_ts)
-    cutoff = _utc_iso(now - timedelta(hours=hours))
-    reference = database.snapshot_before(cutoff) or database.snapshot_after(cutoff)
+    reference = reference_snapshot(database, now - timedelta(hours=hours), now)
     if reference is None or reference.dt >= now:
         return None
     delta = current_total - reference.total_portfolio_usd
@@ -213,6 +213,8 @@ def change_since(database: Database, current_total: float, current_ts: str,
         if reference.total_portfolio_usd > 0 else None,
         "since": reference.timestamp,
         "hours": round(span, 2),
+        "requested_hours": hours,
+        "coverage": coverage_of(span, hours),
         "reference_usd": round(reference.total_portfolio_usd, 2),
         "has_attribution": True,  # GET /api/portfolio/attribution can explain this move
     }

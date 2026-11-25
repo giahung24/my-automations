@@ -750,6 +750,7 @@
                   <span class="priv">{{ fmt.signedMoney(peek.data.delta_usd) }}</span>
                   <span v-if="peek.data.delta_pct !== null" class="delta-pct">{{ fmt.signedPct(peek.data.delta_pct) }}</span>
                 </p>
+                <p v-if="peekSpanNote" class="mt-0.5 px-1 text-[12px] font-semibold text-ink-3 num">over {{ peekSpan }} ({{ peekSpanNote }})</p>
                 <ul class="bucket-tiles mt-3" aria-label="Where the change came from">
                   <li v-for="bucket in peekBuckets" :key="bucket.id" class="bucket-tile" :class="'bucket-' + bucket.id" :title="bucket.hint">
                     <span class="block text-[12px] font-semibold text-ink-3">{{ bucket.label }}</span>

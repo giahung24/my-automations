@@ -411,6 +411,49 @@ def test_window_snapshot_ids(tmp_path):
     assert window_snapshot_ids(database, 1) == [mid, last]
 
 
+def test_window_snapshot_ids_picks_the_snapshot_closest_to_the_cutoff(tmp_path):
+    """A hole in the history: the snapshot before the cutoff is days away, the one after is close."""
+    database = Database(tmp_path / "h.db")
+    now = datetime.now(timezone.utc)
+    btc = [Holding("BTC", BINANCE_SPOT, 1, 100)]
+    record(database, now - timedelta(days=10), btc)
+    near = record(database, now - timedelta(hours=23), btc)     # 1h from the cutoff, 9 days closer
+    mid = record(database, now - timedelta(hours=5), btc)
+    last = record(database, now, btc)
+    assert window_snapshot_ids(database, 24) == [near, mid, last]
+    assert window_snapshot_ids(database, 24, "endpoint") == [near, last]
+
+
+def test_window_snapshot_ids_keeps_the_earlier_snapshot_when_it_is_closer_or_tied(tmp_path):
+    database = Database(tmp_path / "h.db")
+    now = datetime.now(timezone.utc)
+    btc = [Holding("BTC", BINANCE_SPOT, 1, 100)]
+    before = record(database, now - timedelta(hours=26), btc)   # 2h before the cutoff
+    after = record(database, now - timedelta(hours=22), btc)    # 2h after: a tie goes to the full window
+    last = record(database, now, btc)
+    assert window_snapshot_ids(database, 24) == [before, after, last]
+    assert window_snapshot_ids(database, 23) == [after, last]
+
+
+def test_window_snapshot_ids_never_anchors_on_the_latest_snapshot(tmp_path):
+    """Only the newest snapshot sits after the cutoff: fall back to the one before, however far."""
+    database = Database(tmp_path / "h.db")
+    now = datetime.now(timezone.utc)
+    btc = [Holding("BTC", BINANCE_SPOT, 1, 100)]
+    old = record(database, now - timedelta(days=10), btc)
+    last = record(database, now, btc)
+    assert window_snapshot_ids(database, 24) == [old, last]
+
+
+@pytest.mark.parametrize("actual, requested, expected", [
+    (24, 24, "full"), (21, 24, "full"), (27, 24, "full"),
+    (20, 24, "partial"), (6, 24, "partial"), (84, 168, "partial"),
+    (28, 24, "stretched"), (240, 24, "stretched"),
+])
+def test_coverage_of(actual, requested, expected):
+    assert attr.coverage_of(actual, requested) == expected
+
+
 # -- report and endpoint (F1.5) ------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def isolated_env(monkeypatch):
@@ -563,3 +606,58 @@ def test_attribution_report_validates_arguments(tmp_path):
     for kwargs in ({"window": "0h"}, {"method": "twr"}, {"group_by": "chain"}):
         with pytest.raises(ValueError):
             attribution_report(database, **kwargs)
+
+
+def gap_report(tmp_path, offsets_hours, window="24h") -> dict:
+    database = Database(tmp_path / "history.db")
+    now = datetime.now(timezone.utc)
+    for index, offset in enumerate(offsets_hours):
+        record(database, now - timedelta(hours=offset), [Holding("BTC", BINANCE_SPOT, 1, 100 + index)])
+    return make_client(tmp_path).get(f"/api/portfolio/attribution?window={window}").json()
+
+
+def test_attribution_endpoint_reports_full_coverage(tmp_path):
+    seed_day(tmp_path / "history.db")
+    data = make_client(tmp_path).get("/api/portfolio/attribution").json()
+    assert data["requested_hours"] == 24 and data["coverage"] == "full"
+    assert data["history_start"] == data["from"]
+
+
+def test_attribution_endpoint_short_history_is_partial(tmp_path):
+    data = gap_report(tmp_path, [84, 40, 0], window="7d")       # tracking started 3.5 days ago
+    assert data["requested_hours"] == 168 and data["coverage"] == "partial"
+    assert data["hours"] == pytest.approx(84, abs=0.05)
+    assert data["history_start"] == data["from"]
+
+
+def test_attribution_endpoint_gap_picks_the_closest_snapshot(tmp_path):
+    data = gap_report(tmp_path, [240, 23, 5, 0])                # nothing between 10 days and 23h ago
+    assert data["hours"] == pytest.approx(23, abs=0.05) and data["coverage"] == "full"
+    assert data["snapshots"] == 3 and data["history_start"] != data["from"]
+
+
+def test_attribution_endpoint_gap_inside_the_window_is_partial(tmp_path):
+    data = gap_report(tmp_path, [240, 12, 0])                   # 12h is closer to 24h ago than 10 days
+    assert data["hours"] == pytest.approx(12, abs=0.05) and data["coverage"] == "partial"
+    assert data["history_start"] != data["from"]
+
+
+def test_attribution_endpoint_stretched_when_only_older_data_exists(tmp_path):
+    data = gap_report(tmp_path, [36, 0])                        # the only reference is 36h old
+    assert data["hours"] == pytest.approx(36, abs=0.05) and data["coverage"] == "stretched"
+    assert data["requested_hours"] == 24
+
+
+def test_change_24h_and_attribution_agree_across_a_gap(tmp_path):
+    """The Portfolio chip and the Analytics 24H figure must describe the same window."""
+    database = Database(tmp_path / "history.db")
+    now = datetime.now(timezone.utc)
+    for index, offset in enumerate([240, 23, 5, 0]):
+        record(database, now - timedelta(hours=offset), [Holding("BTC", BINANCE_SPOT, 1, 100 + index)])
+    client = make_client(tmp_path)
+    change = client.get("/api/portfolio").json()["change_24h"]
+    data = client.get("/api/portfolio/attribution").json()
+    assert change["since"] == data["from"]
+    assert change["usd"] == data["delta_usd"] == 2
+    assert change["hours"] == pytest.approx(data["hours"], abs=0.01)
+    assert change["requested_hours"] == 24 and change["coverage"] == data["coverage"] == "full"

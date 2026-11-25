@@ -143,8 +143,11 @@
       if (s < 86400) return Math.floor(s / 3600) + ' h ago';
       return Math.floor(s / 86400) + ' d ago';
     },
-    hours(h) {
-      if (h >= 23) return '24h';
+    // Label of the hero chip. "24h" only when the reference really is about a day old; a hole in
+    // the history or a young one shows the span actually covered.
+    hours(h, requested = 24) {
+      if (Math.abs(h - requested) < requested * 0.15) return requested + 'h';
+      if (h >= 48) return 'past ' + (h / 24).toFixed(h < 240 ? 1 : 0) + ' days';
       if (h >= 1) return 'past ' + Math.round(h) + 'h';
       return 'past ' + Math.max(1, Math.round(h * 60)) + ' min';
     },
@@ -357,7 +360,7 @@
         const change = portfolio.value.change_24h;
         if (!change) return null;
         return {
-          usd: change.usd, pct: change.pct, trend: trendOf(change.usd), label: fmt.hours(change.hours),
+          usd: change.usd, pct: change.pct, trend: trendOf(change.usd), label: fmt.hours(change.hours, change.requested_hours || 24),
           explainable: !!change.has_attribution,  // tapping the chip opens the "Why it moved" peek
         };
       });
@@ -427,6 +430,25 @@
         return h < 48 ? Math.round(h) + 'h' : (h / 24).toFixed(h < 240 ? 1 : 0) + ' days';
       }
 
+      // Why the span differs from the period asked for; '' when it matches (coverage "full").
+      // "partial" starting at the very first snapshot means tracking began inside the window;
+      // anything else is a hole in the history, so the closest snapshots were used instead.
+      function attributionSpanNote(data) {
+        if (!data.coverage || data.coverage === 'full') return '';
+        if (data.coverage === 'partial' && data.history_start && data.history_start === data.from) {
+          const started = Date.parse(data.from);
+          if (!Number.isNaN(started)) return 'tracking started ' + fmt.day(started / 1000);
+        }
+        const asked = num(data.requested_hours);
+        if (!asked) return '';
+        const period = asked < 48 ? asked + 'h' : Math.round(asked / 24) + ' days';
+        return 'closest data to ' + period;
+      }
+      function attributionSpanFull(data) {
+        const note = attributionSpanNote(data);
+        return attributionSpan(data) + (note ? ` (${note})` : '');
+      }
+
       const INSUFFICIENT_WHY = 'Needs at least two snapshots in this window. Each refresh, and each cron `record`, adds one.';
 
       const whyReady = computed(() => attributionReady(why.data));
@@ -434,7 +456,7 @@
       const whyRows = computed(() => (whyReady.value
         ? attributionRows([...(why.data.gainers || []), ...(why.data.losers || [])]) : []));
       const whyTrend = computed(() => (whyReady.value ? trendOf(num(why.data.delta_usd)) : 'flat'));
-      const whySpan = computed(() => (whyReady.value ? attributionSpan(why.data) : ''));
+      const whySpan = computed(() => (whyReady.value ? attributionSpanFull(why.data) : ''));
       const whyOthers = computed(() => (whyReady.value && why.data.others && why.data.others.count ? why.data.others : null));
       const whyMessage = computed(() => {
         if (why.error) return why.error;
@@ -447,6 +469,7 @@
       const peekReady = computed(() => attributionReady(peek.data));
       const peekTrend = computed(() => (peekReady.value ? trendOf(num(peek.data.delta_usd)) : 'flat'));
       const peekSpan = computed(() => (peekReady.value ? attributionSpan(peek.data) : ''));
+      const peekSpanNote = computed(() => (peekReady.value ? attributionSpanNote(peek.data) : ''));
       const peekBuckets = computed(() => (peekReady.value
         ? attributionBuckets(peek.data).filter((b) => b.id === 'price' || b.id === 'quantity') : []));
       const peekRows = computed(() => {
@@ -1445,7 +1468,7 @@
         periods: ANALYTICS_PERIODS, periodId, analyticsPeriod, setPeriod,
         why, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
         insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
-        peek, peekSheet, peekClose, peekReady, peekTrend, peekSpan, peekBuckets, peekRows, peekMessage,
+        peek, peekSheet, peekClose, peekReady, peekTrend, peekSpan, peekSpanNote, peekBuckets, peekRows, peekMessage,
         openPeek, closePeek, peekToAnalytics, onPeekKeydown,
         chartWrap, chartEl, sheet, sheetClose, draftEl,
         refresh, setRange, togglePrivacy, toggleAsset, coinIcon, onChartDown, onChartMove, onChartRelease, onChartLeave, unlock,

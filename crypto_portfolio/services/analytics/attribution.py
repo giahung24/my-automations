@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from models import ONCHAIN, STATUS_ERROR, STATUS_INFERRED_ERROR, is_onchain_source, onchain_source
-from services.db import Database, parse_timestamp
+from services.db import Database, Snapshot, parse_timestamp
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +65,11 @@ IDENTITY_TOLERANCE = 1e-6
 
 # A contributor must move at least this much (half a displayed cent) to be listed as a gainer/loser.
 MIN_CONTRIBUTION_USD = 0.005
+
+# How well the snapshots really cover the window that was asked for.
+COVERAGE_FULL, COVERAGE_PARTIAL, COVERAGE_STRETCHED = "full", "partial", "stretched"
+# The real span may differ from the requested one by less than this fraction and still be "full".
+COVERAGE_TOLERANCE = 0.15
 
 WINDOW_RE = re.compile(r"^(\d{1,3})([hd])$")
 MAX_WINDOW_HOURS = 365 * 24
@@ -347,19 +352,47 @@ def load_states(database: Database, ids: Iterable[int]) -> list[SnapshotState]:
     ]
 
 
+def reference_snapshot(database: Database, cutoff: datetime, end: datetime) -> Snapshot | None:
+    """The fetched snapshot a window ending at `end` starts from: the one closest to `cutoff`.
+
+    Two candidates: the newest snapshot at or before the cutoff and the oldest one after it
+    (strictly older than `end`, a window cannot start where it ends). With both, the nearer to
+    the cutoff wins and a tie goes to the earlier one, which covers the whole window. Taking the
+    earlier one unconditionally would let a hole in the history turn "24h" into a 10-day figure
+    while a snapshot 23h old sits right there. `change_since` (the Portfolio chip) uses this too,
+    so both tabs describe the same window.
+    """
+    stamp = _utc_iso(cutoff)
+    before = database.snapshot_before(stamp)
+    after = database.snapshot_after(stamp)
+    if after is not None and after.dt >= end:
+        after = None
+    if before is None or after is None:
+        return before or after
+    return after if after.dt - cutoff < cutoff - before.dt else before
+
+
+def coverage_of(actual_hours: float, requested_hours: float) -> str:
+    """``full`` when the real span is within 15% of the requested one, ``partial`` when it is
+    shorter (young history, or a hole at the cutoff), ``stretched`` when it is longer (the only
+    reference is older than the window)."""
+    if abs(actual_hours - requested_hours) < COVERAGE_TOLERANCE * requested_hours:
+        return COVERAGE_FULL
+    return COVERAGE_PARTIAL if actual_hours < requested_hours else COVERAGE_STRETCHED
+
+
 def window_snapshot_ids(database: Database, hours: float, method: str = METHOD_CHAINED) -> list[int]:
     """Ids of the fetched snapshots covering the last `hours`, oldest first.
 
-    The window ends at the newest snapshot and starts at the reference `change_since` uses: the
-    newest snapshot at or before the cutoff, else the oldest one after it. ``endpoint`` returns
-    those two ids only. Fewer than two ids means there is nothing to compare. Backfilled monthly
-    checkpoints are never used: they were not fetched and only hold BTC/ETH/stablecoins.
+    The window ends at the newest snapshot and starts at `reference_snapshot()`: the snapshot
+    closest to the cutoff, on either side of it. ``endpoint`` returns those two ids only. Fewer
+    than two ids means there is nothing to compare. Backfilled monthly checkpoints are never
+    used: they were not fetched and only hold BTC/ETH/stablecoins.
     """
     latest = database.latest()
     if latest is None:
         return []
-    cutoff = _utc_iso(latest.dt - timedelta(hours=hours))
-    reference = database.snapshot_before(cutoff) or database.snapshot_after(cutoff)
+    reference = reference_snapshot(database, latest.dt - timedelta(hours=hours), latest.dt)
     if reference is None or reference.id == latest.id or reference.dt > latest.dt:
         return [latest.id]
     if method == METHOD_ENDPOINT:
@@ -419,6 +452,7 @@ def attribution_report(database: Database, window: str = "24h", method: str = ME
     listed = {row["key"] for row in gainers} | {row["key"] for row in losers}
     rest = [row for row in result.contributors if row["key"] not in listed]
     span = (parse_timestamp(result.end.timestamp) - parse_timestamp(result.start.timestamp)).total_seconds()
+    oldest = database.snapshot_after("")  # oldest fetched snapshot: when live tracking started
 
     return {
         "window": window,
@@ -426,6 +460,10 @@ def attribution_report(database: Database, window: str = "24h", method: str = ME
         "from": result.start.timestamp,
         "to": result.end.timestamp,
         "hours": round(span / 3600, 2),
+        "requested_hours": _whole(hours),
+        "coverage": coverage_of(span / 3600, hours),
+        # equal to "from" when the window is short because tracking started inside it
+        "history_start": oldest.timestamp if oldest else None,
         "snapshots": result.snapshots,
         "method": method,
         "group_by": group_by,
@@ -452,6 +490,11 @@ def attribution_report(database: Database, window: str = "24h", method: str = ME
 def _round(value: float, digits: int) -> float:
     """`round()` without the `-0.0` a tiny negative remainder would otherwise print."""
     return round(value, digits) + 0.0
+
+
+def _whole(hours: float) -> float | int:
+    """24.0 -> 24, so the JSON reads like the window that was asked for."""
+    return int(hours) if float(hours).is_integer() else hours
 
 
 def _rounded(row: dict) -> dict:
