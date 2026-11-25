@@ -38,13 +38,17 @@
     { id: 'all', label: 'All', hint: 'Every source' },
     { id: 'binance', label: 'Binance', hint: 'Spot + Simple Earn + Funding' },
     { id: 'onchain', label: 'On-chain', hint: 'Every configured wallet and chain' },
-    { id: 'wallets', label: 'Wallets', hint: 'Self-custody by physical wallet: on-chain + manual coins together' },
+    { id: 'others', label: 'Others', hint: 'Self-custody by physical wallet: on-chain + manual coins together' },
   ];
   const SOURCE_ORDER = ['binance_spot', 'binance_earn', 'binance_funding', 'onchain', 'manual'];
   const BINANCE_SOURCES = ['binance_spot', 'binance_earn', 'binance_funding'];
   // Sources each asset-list tab shows. A location is filtered by the source it was read from
   // (`locations_by_source`), never guessed from its spelling: a manual label has no `chain/`.
   const TAB_SOURCES = { binance: BINANCE_SOURCES, onchain: ['onchain'], all: SOURCE_ORDER };
+  // Tabs whose list can be read by coin or by wallet (Binance account / on-chain wallet label).
+  const VIEW_SWITCH_TABS = ['binance', 'onchain'];
+  const ASSET_VIEWS = [{ id: 'coins', label: 'Coins' }, { id: 'wallets', label: 'Wallets' }];
+  const EARN_PRODUCTS = { flexible: 'Flexible', locked: 'Locked' };
   const CHAIN_LABELS = {
     ethereum: 'Ethereum', bsc: 'BNB Chain', arbitrum: 'Arbitrum', base: 'Base', polygon: 'Polygon', solana: 'Solana',
   };
@@ -67,7 +71,7 @@
   const SCRUB_SLOP_PX = 8;         // ...or one that moved this far sideways first
   const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab',
     period: 'portfolio.analytics.period', actPeriod: 'portfolio.activity.period',
-    actSource: 'portfolio.activity.source', actKind: 'portfolio.activity.kind' };
+    actSource: 'portfolio.activity.source', actKind: 'portfolio.activity.kind', assetView: 'portfolio.assetView' };
   const SECTIONS = ['portfolio', 'analytics', 'activity'];
   const SECTION_TITLES = { portfolio: 'Portfolio', analytics: 'Analytics', activity: 'Activity' };
   // Activity tab (M4): look-back, then two independent filters (source x kind) with counts.
@@ -264,7 +268,8 @@
 
   const emptyPortfolio = () => ({
     timestamp: '', total_usd: 0, origin: 'empty', configured: true, assets: [], errors: [],
-    groups: { all: 0, binance: 0, onchain: 0, wallets: 0 }, wallet_groups: [], source_labels: {}, change_24h: null,
+    groups: { all: 0, binance: 0, onchain: 0, others: 0 }, wallet_groups: [], wallets: { binance: [], onchain: [] },
+    source_labels: {}, change_24h: null,
     dust: { assets: 0, value_usd: 0 }, min_value: 1,
   });
 
@@ -278,7 +283,10 @@
       const points = ref([]);
       const historyLoaded = ref(false);
       const rangeId = ref(RANGES.some((r) => r.id === storage.get(STORE.range)) ? storage.get(STORE.range) : '1M');
-      const tabId = ref(TABS.some((t) => t.id === storage.get(STORE.tab)) ? storage.get(STORE.tab) : 'all');
+      // 'wallets' was the Others tab's id before it was renamed: keep that choice
+      const storedTab = storage.get(STORE.tab) === 'wallets' ? 'others' : storage.get(STORE.tab);
+      const tabId = ref(TABS.some((t) => t.id === storedTab) ? storedTab : 'all');
+      const assetView = ref(storage.get(STORE.assetView) === 'wallets' ? 'wallets' : 'coins');
       const privacy = ref(storage.get(STORE.privacy, '0') === '1');
       const scrub = ref(null);
       const expanded = ref(null);
@@ -400,6 +408,7 @@
           assets: Array.isArray(data.assets) ? data.assets : [],
           errors: Array.isArray(data.errors) ? data.errors : [],
           wallet_groups: Array.isArray(data.wallet_groups) ? data.wallet_groups : [],
+          wallets: { ...base.wallets, ...(data.wallets || {}) },
           groups: { ...base.groups, ...(data.groups || {}) },
           dust: data.dust || base.dust,
         };
@@ -586,7 +595,7 @@
         const labels = p.source_labels || {};
         const minValue = num(p.min_value);
         const sources = TAB_SOURCES[tab] || SOURCE_ORDER;
-        if (tab === 'wallets') return [];   // that tab renders walletGroups instead
+        if (tab === 'others' || walletView.value) return [];   // those render walletGroups / visibleWallets
 
         return p.assets
           .map((asset) => {
@@ -624,6 +633,48 @@
       // its source, so declared balances never pass for RPC reads.
       const walletGroups = computed(() => (portfolio.value.wallet_groups || [])
         .filter((g) => (g.holdings || []).length || num(g.dust && g.dust.assets)));
+      // Binance / On-chain tabs, "Wallets" view: one row per Binance account or per on-chain wallet
+      // label (chains summed), `pct` of the tab's own total. An on-chain wallet also lists the
+      // manual assets linked to it (same match as the Others tab, done server-side), apart from
+      // its on-chain coins and outside its value: the Coins view stays pure on-chain.
+      const hasViewSwitch = computed(() => VIEW_SWITCH_TABS.includes(tabId.value));
+      const walletView = computed(() => hasViewSwitch.value && assetView.value === 'wallets');
+      const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+      const visibleWallets = computed(() => {
+        if (!walletView.value) return [];
+        const tab = tabId.value;
+        return ((portfolio.value.wallets || {})[tab] || [])
+          .map((w) => {
+            const linked = (w.linked_manual || []).map((m) => ({
+              key: `manual:${m.label}:${m.symbol}`, symbol: m.symbol, quantity: num(m.quantity),
+              value: num(m.value_usd), price: num(m.price_usd), where: `Manual · ${m.label}`, manual: true,
+            }));
+            const rows = (w.assets || []).map((a) => ({
+              key: `${a.product || a.chain || ''}:${a.symbol}`, symbol: a.symbol, quantity: num(a.quantity),
+              value: num(a.value_usd), price: num(a.price_usd), manual: false,
+              where: tab === 'onchain' ? (CHAIN_LABELS[a.chain] || a.chain || 'On-chain') : (EARN_PRODUCTS[a.product] || a.product || ''),
+            }));
+            const chains = Object.keys(w.chains || {});
+            const sub = tab === 'onchain'
+              ? (chains.length ? plural(chains.length, 'chain') : 'No on-chain balance')
+              : plural(num(w.asset_count), 'asset');
+            const split = Object.entries(w.split || {})
+              .map(([product, value]) => ({ label: EARN_PRODUCTS[product] || product, value: num(value) }));
+            return {
+              key: `w:${w.id}`, id: w.id, label: w.label, value: num(w.value_usd), pct: num(w.pct), sub,
+              chains: chains.map((c) => ({ label: CHAIN_LABELS[c] || c || 'On-chain', value: num(w.chains[c]) })),
+              split, rows, linked,
+              manualValue: num(w.manual_value_usd),
+            };
+          })
+          .filter((w) => w.value > 0 || w.linked.length);
+      });
+      function setAssetView(id) {
+        assetView.value = id;
+        storage.set(STORE.assetView, id);
+        expanded.value = null;
+      }
+
       const walletRowWhere = (row) => (row.source === 'onchain'
         ? (CHAIN_LABELS[row.chain] || row.chain || 'On-chain')
         : `Manual · ${manualKindLabel(row.manual_kind)}`);
@@ -635,22 +686,23 @@
         for (const a of visibleAssets.value) {
           width = Math.max(width, fmt.money(a.value).length * 9.3, fmt.price(a.price).length * 7.8);
         }
+        for (const w of visibleWallets.value) width = Math.max(width, fmt.money(w.value).length * 9.3);
         return Math.ceil(width) + 'px';
       });
 
       const emptyTitle = computed(() => {
         if (portfolio.value.origin === 'empty') return 'No balances fetched yet';
-        if (tabId.value === 'binance') return 'No Binance balances to show';
-        if (tabId.value === 'onchain') return 'No on-chain balances to show';
-        if (tabId.value === 'wallets') return 'No self-custody balances to show';
+        if (tabId.value === 'binance') return walletView.value ? 'No Binance account to show' : 'No Binance balances to show';
+        if (tabId.value === 'onchain') return walletView.value ? 'No on-chain wallet to show' : 'No on-chain balances to show';
+        if (tabId.value === 'others') return 'No self-custody balances to show';
         return 'No balances above the dust filter';
       });
       const emptyHint = computed(() => {
         const min = fmt.money(portfolio.value.min_value);
         if (portfolio.value.origin === 'empty') return 'Fetch balances to take your first snapshot.';
-        if (tabId.value === 'binance') return `Binance is not connected, or nothing there is worth ${min} or more.`;
-        if (tabId.value === 'onchain') return `No wallet is configured, or nothing on-chain is worth ${min} or more.`;
-        if (tabId.value === 'wallets') return 'Add a wallet address or a manual asset (cold wallet, staking) in Settings.';
+        if (tabId.value === 'binance') return walletView.value ? 'Binance is not connected, or every account is empty.' : `Binance is not connected, or nothing there is worth ${min} or more.`;
+        if (tabId.value === 'onchain') return walletView.value ? 'No wallet is configured, or every wallet is empty.' : `No wallet is configured, or nothing on-chain is worth ${min} or more.`;
+        if (tabId.value === 'others') return 'Add a wallet address or a manual asset (cold wallet, staking) in Settings.';
         return `Every asset is worth less than ${min}. They still count in the total.`;
       });
 
@@ -1524,6 +1576,7 @@
         storage.set(STORE.privacy, privacy.value ? '1' : '0');
       }
 
+      // `symbol` is a coin, or `w:<id>` for a row of the Wallets view: the prefix keeps them apart
       function toggleAsset(symbol) {
         expanded.value = expanded.value === symbol ? null : symbol;
       }
@@ -2095,6 +2148,7 @@
       return {
         fmt, ranges: RANGES, tabs: TABS,
         loading, refreshing, portfolio, points, rangeId, tabId, privacy, scrub, expanded, showErrors,
+        assetViews: ASSET_VIEWS, assetView, hasViewSwitch, walletView, visibleWallets, setAssetView,
         iconFailed, toast, scrolled, locked, unlockToken, unlockError, unlocking,
         heroParts, heroChange, heroTrend, scrubLabel, rangeChange, rangeLabel, chartMessage, updatedAgo,
         visibleAssets, valueCol, emptyTitle, emptyHint,

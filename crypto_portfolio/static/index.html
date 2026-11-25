@@ -248,8 +248,16 @@
             </button>
           </div>
 
-          <div v-if="tabId !== 'wallets'" class="asset-cols asset-head mt-4 text-[12px] font-bold text-ink-3" :style="{ '--value-col': valueCol }">
-            <span class="min-w-0 flex-1">{{ visibleAssets.length }} {{ visibleAssets.length === 1 ? 'asset' : 'assets' }}</span>
+          <div v-if="tabId !== 'others'" class="asset-cols asset-head mt-4 text-[12px] font-bold text-ink-3"
+               :class="{ 'asset-head-switch': hasViewSwitch }" :style="{ '--value-col': valueCol }">
+            <span class="flex min-w-0 flex-1 items-center gap-2.5">
+              <!-- Binance / On-chain only: read the tab by coin, or by account / wallet -->
+              <span v-if="hasViewSwitch" class="view-switch" role="tablist" aria-label="Group the list by">
+                <button v-for="view in assetViews" :key="view.id" type="button" role="tab"
+                        :aria-selected="assetView === view.id" @click="setAssetView(view.id)">{{ view.label }}</button>
+              </span>
+              <span v-if="!hasViewSwitch" class="truncate">{{ visibleAssets.length }} {{ visibleAssets.length === 1 ? 'asset' : 'assets' }}</span>
+            </span>
             <span class="share">Share</span><span class="value-col">Value</span>
           </div>
 
@@ -261,9 +269,9 @@
             </div>
           </div>
 
-          <!-- Wallets: one card per physical wallet; a manual asset linked to a configured wallet
+          <!-- Others: one card per physical wallet; a manual asset linked to a configured wallet
                (linked_wallet) is listed with that wallet's on-chain coins, each row tagged by source -->
-          <div v-else-if="tabId === 'wallets' && walletGroups.length" class="mt-4 space-y-3">
+          <div v-else-if="tabId === 'others' && walletGroups.length" class="mt-4 space-y-3">
             <section v-for="group in walletGroups" :key="group.id" class="card wallet-group" :aria-label="group.label">
               <header class="wallet-group-head">
                 <span class="min-w-0 flex-1">
@@ -311,7 +319,69 @@
             </section>
           </div>
 
-          <ul v-else-if="tabId !== 'wallets' && visibleAssets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
+          <!-- Binance / On-chain, Wallets view: one row per Binance account or on-chain wallet label.
+               An on-chain wallet's linked manual assets are listed apart, tagged Manual, and stay
+               out of its value and share (the tab total is on-chain only). -->
+          <ul v-else-if="walletView && visibleWallets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
+            <li v-for="w in visibleWallets" :key="w.key">
+              <button type="button" class="asset-row" @click="toggleAsset(w.key)" :aria-expanded="expanded === w.key">
+                <span class="coin coin-wallet" :style="{ '--hue': fmt.hue(w.label) }" aria-hidden="true">
+                  <svg class="icon"><use href="#i-wallet"/></svg>
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[15px] font-extrabold tracking-tight">{{ w.label }}</span>
+                  <span class="block truncate text-[13px] font-semibold text-ink-3">{{ w.sub }}</span>
+                </span>
+                <span class="share num">
+                  <span class="block text-[13px] font-bold text-ink-2">{{ fmt.pct(w.pct) }}</span>
+                  <span class="share-bar"><i :style="{ width: Math.min(100, Math.max(w.pct, 1.5)) + '%' }"></i></span>
+                </span>
+                <span class="value-col num">
+                  <span class="block whitespace-nowrap text-[15px] font-extrabold priv">{{ fmt.money(w.value) }}</span>
+                  <span v-if="w.linked.length" class="src-badge src-manual mt-1"
+                        :title="'Plus ' + fmt.money(w.manualValue) + ' declared by hand, not in the On-chain total'">+ manual</span>
+                </span>
+              </button>
+              <transition name="expand">
+                <div v-if="expanded === w.key" class="asset-detail">
+                  <p v-if="w.chains.length > 1 || w.split.length > 1" class="mb-2 break-words text-[12px] text-ink-3">
+                    <template v-for="(part, i) in (w.chains.length ? w.chains : w.split)" :key="part.label">
+                      <template v-if="i"> · </template>{{ part.label }} <span class="priv priv-soft num">{{ fmt.money(part.value) }}</span>
+                    </template>
+                  </p>
+                  <dl v-if="w.rows.length" class="num">
+                    <template v-for="row in w.rows" :key="row.key">
+                      <dt class="flex min-w-0 items-center gap-2">
+                        <span class="font-bold text-ink">{{ row.symbol }}</span>
+                        <span v-if="row.where" class="truncate text-[12px] text-ink-3">{{ row.where }}</span>
+                      </dt>
+                      <dd class="priv priv-soft text-ink-2">{{ fmt.qty(row.quantity) }}</dd>
+                      <dd class="priv priv-soft font-bold">{{ fmt.money(row.value) }}</dd>
+                    </template>
+                  </dl>
+                  <template v-if="w.linked.length">
+                    <p class="mb-2 text-[12px] font-semibold text-ink-3" :class="w.rows.length ? 'mt-3' : 'mt-0'">
+                      Declared by hand on this device
+                      (<span class="priv priv-soft num">{{ fmt.money(w.manualValue) }}</span>), not read on-chain
+                      and not counted in the On-chain total.
+                    </p>
+                    <dl class="num">
+                      <template v-for="row in w.linked" :key="row.key">
+                        <dt class="flex min-w-0 items-center gap-2">
+                          <span class="font-bold text-ink">{{ row.symbol }}</span>
+                          <span class="src-badge src-manual">Manual</span>
+                        </dt>
+                        <dd class="priv priv-soft text-ink-2">{{ fmt.qty(row.quantity) }}</dd>
+                        <dd class="priv priv-soft font-bold">{{ fmt.money(row.value) }}</dd>
+                      </template>
+                    </dl>
+                  </template>
+                </div>
+              </transition>
+            </li>
+          </ul>
+
+          <ul v-else-if="tabId !== 'others' && !walletView && visibleAssets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
             <li v-for="asset in visibleAssets" :key="asset.symbol">
               <button type="button" class="asset-row" @click="toggleAsset(asset.symbol)"
                       :aria-expanded="expanded === asset.symbol">
@@ -358,7 +428,7 @@
             </button>
           </div>
 
-          <p v-if="!loading && tabId !== 'wallets' && portfolio.dust && portfolio.dust.assets" class="mt-3 px-1 text-[12px] text-ink-3">
+          <p v-if="!loading && tabId !== 'others' && !walletView && portfolio.dust && portfolio.dust.assets" class="mt-3 px-1 text-[12px] text-ink-3">
             {{ portfolio.dust.assets }} {{ portfolio.dust.assets === 1 ? 'balance' : 'balances' }} under
             {{ fmt.money(portfolio.min_value) }} hidden
             (<span class="priv priv-soft num">{{ fmt.money(portfolio.dust.value_usd) }}</span>, counted in the total).

@@ -763,3 +763,17 @@ button.flow-row:active { background: var(--surface-2); }
   font-size: 11px; font-weight: 800; letter-spacing: 0.03em; background: var(--surface-3); color: var(--ink-2);
 }
 .src-badge.src-manual { background: rgba(138, 180, 255, 0.13); color: #C5D7FA; }
+
+/* -- Binance / On-chain tabs: Coins | Wallets switch ----------------------------------- */
+.asset-head.asset-head-switch { align-items: center; }
+.view-switch {
+  flex: none; display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--line);
+}
+.view-switch > button {
+  min-height: 30px; padding: 0 11px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--ink-3); font-size: 12px; font-weight: 700; transition: background-color 0.2s ease, color 0.2s ease;
+}
+.view-switch > button[aria-selected="true"] { background: var(--surface-3); color: var(--ink); }
+@media (hover: hover) { .view-switch > button:hover { color: var(--ink); } }
+.coin.coin-wallet .icon { width: 18px; height: 18px; }

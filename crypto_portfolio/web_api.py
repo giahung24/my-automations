@@ -74,7 +74,7 @@ from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.manual import after_snapshot, last_changes
-from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict, wallet_groups
+from services.portfolio import fetch_portfolio, portfolio_from_db, source_wallets, to_dict, wallet_groups
 from services.resample import TooManyBuckets, resample
 
 STATIC_DIR = ROOT / "static"
@@ -303,12 +303,16 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
             "binance": round(cex, 2),
             "onchain": round(totals.get(ONCHAIN, 0.0), 2),
             "manual": round(totals.get(MANUAL, 0.0), 2),
-            # the Wallets view: self-custody (on-chain + manual) grouped by physical wallet
-            "wallets": round(self_custody, 2),
+            # the Others tab: self-custody (on-chain + manual) grouped by physical wallet
+            "others": round(self_custody, 2),
         },
         # display-only grouping; PnL, TWR and snapshot_sources keep on-chain and manual apart
         wallet_groups=wallet_groups(portfolio.holdings, config.wallet_labels, config.manual,
                                     config.min_value),
+        # the Binance / On-chain tabs' "Wallets" switch: per account / per wallet label, with
+        # `pct` of that tab's total; an on-chain wallet carries its linked manual assets apart
+        wallets=source_wallets(portfolio.holdings, config.wallet_labels, config.manual,
+                               binance_total=cex, onchain_total=totals.get(ONCHAIN, 0.0)),
         # Exchange vs your own keys; a manual asset (cold wallet, validator) is self-custody.
         custody={
             "cex_usd": round(cex, 2),

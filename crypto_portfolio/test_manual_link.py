@@ -307,13 +307,13 @@ def test_wallet_groups_ignore_old_rows_without_wallet_detail():
 
 
 # == Part B: API =================================================================================
-def test_api_portfolio_sends_wallet_groups_and_a_wallets_total(tmp_path):
+def test_api_portfolio_sends_wallet_groups_and_an_others_total(tmp_path):
     client = make_client(tmp_path, sections={"wallets": WALLETS, "manual_assets": [LEDGER_BTC]},
                          fetcher=fake_fetcher(jean_holdings()))
     data = client.post("/api/portfolio/refresh").json()
     ledger = next(g for g in data["wallet_groups"] if g["label"] == "My Ledgy")
     assert {r["source"] for r in ledger["holdings"]} == {ONCHAIN, MANUAL}
-    assert data["groups"]["wallets"] == pytest.approx(data["groups"]["onchain"] + data["groups"]["manual"], abs=0.02)
+    assert data["groups"]["others"] == pytest.approx(data["groups"]["onchain"] + data["groups"]["manual"], abs=0.02)
     # data layer untouched: per-source totals still split
     assert data["sources"]["manual"] == pytest.approx(0.0254 * 60000, abs=0.01)
 

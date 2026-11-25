@@ -5,6 +5,7 @@ from models import (
     BINANCE_SOURCES,
     MANUAL,
     ONCHAIN,
+    SOURCE_LABELS,
     SOURCES,
     STATUS_ERROR,
     STATUS_INFERRED_ERROR,
@@ -278,3 +279,80 @@ def wallet_groups(holdings: list[Holding], wallet_labels=(), manual_assets=(),
         card["dust"]["value_usd"] = round(card["dust"]["value_usd"], 2)
         out.append(card)
     return sorted(out, key=lambda c: (-c["value_usd"], c["label"].casefold()))
+
+
+def _pct(value: float, total: float) -> float:
+    return round(value / total * 100, 4) if total > 0 else 0.0
+
+
+def source_wallets(holdings: list[Holding], wallet_labels=(), manual_assets=(),
+                   binance_total: float = 0.0, onchain_total: float = 0.0) -> dict:
+    """The Binance and On-chain tabs seen by wallet instead of by coin, for display only.
+
+    `binance`: one row per account (Spot, Earn, Funding); Earn stays one row whatever the
+    product, with its Flexible/Locked split kept for the detail. `onchain`: one row per wallet
+    label, every chain summed. Built on `wallet_groups` (min_value 0, so dust is counted), so a
+    manual asset whose `linked_wallet` names the wallet rides along in `linked_manual` - a
+    separate list: its value is not in `value_usd`, and `pct` is the share of the tab's own total
+    (`binance_total` / `onchain_total`), never of the whole portfolio.
+    """
+    accounts: dict[str, dict] = {}
+    for holding in holdings:
+        if holding.quantity <= 0 or holding.source not in BINANCE_SOURCES:
+            continue
+        account = accounts.setdefault(holding.source, {
+            "id": holding.source, "label": SOURCE_LABELS[holding.source], "value_usd": 0.0, "rows": {},
+        })
+        product = (holding.detail or None) if holding.source == "binance_earn" else None
+        row = account["rows"].setdefault((holding.symbol, product), {
+            "symbol": holding.symbol, "product": product, "quantity": 0.0, "value_usd": 0.0,
+        })
+        row["quantity"] += holding.quantity
+        row["value_usd"] += holding.value_usd
+        account["value_usd"] += holding.value_usd
+
+    binance = []
+    for account in accounts.values():
+        rows = list(account.pop("rows").values())
+        for row in rows:
+            row["price_usd"] = row["value_usd"] / row["quantity"] if row["quantity"] > 0 else 0.0
+            row["value_usd"] = round(row["value_usd"], 2)
+        if account["id"] == "binance_earn":
+            split: dict[str, float] = {}
+            for row in rows:
+                key = row["product"] or "other"
+                split[key] = split.get(key, 0.0) + row["value_usd"]
+            account["split"] = {key: round(value, 2) for key, value in split.items()}
+        account["assets"] = sorted(rows, key=lambda r: (-r["value_usd"], r["symbol"], r["product"] or ""))
+        account["asset_count"] = len({row["symbol"] for row in rows})
+        account["pct"] = _pct(account["value_usd"], binance_total)
+        account["value_usd"] = round(account["value_usd"], 2)
+        binance.append(account)
+
+    onchain = []
+    for card in wallet_groups(holdings, wallet_labels, manual_assets, min_value=0.0):
+        if card["type"] != "wallet":  # an unlinked manual asset has no on-chain wallet to sit in
+            continue
+        chains: dict[str, float] = {}
+        assets, linked = [], []
+        for row in card["holdings"]:
+            if row["source"] == ONCHAIN:
+                chain = row["chain"] or ""
+                chains[chain] = chains.get(chain, 0.0) + row["value_usd"]
+                assets.append({"symbol": row["symbol"], "chain": row["chain"], "quantity": row["quantity"],
+                               "value_usd": row["value_usd"], "price_usd": row["price_usd"]})
+            else:
+                linked.append({"symbol": row["symbol"], "label": row["manual_label"], "kind": row["manual_kind"],
+                               "quantity": row["quantity"], "value_usd": row["value_usd"],
+                               "price_usd": row["price_usd"]})
+        onchain.append({
+            "id": card["label"], "label": card["label"],
+            "value_usd": card["onchain_value_usd"], "pct": _pct(card["onchain_value_usd"], onchain_total),
+            "manual_value_usd": card["manual_value_usd"],
+            "chains": {chain: round(value, 2) for chain, value in chains.items()},
+            "asset_count": len({a["symbol"] for a in assets}),
+            "assets": assets, "linked_manual": linked,
+        })
+
+    by_value = lambda w: (-w["value_usd"], w["label"].casefold())
+    return {"binance": sorted(binance, key=by_value), "onchain": sorted(onchain, key=by_value)}
