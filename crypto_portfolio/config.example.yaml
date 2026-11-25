@@ -72,7 +72,8 @@ settings:
 # transfer: it leaves Binance but stays in the portfolio, so it is not counted as a flow.
 cash_flows:
   enabled: true
-  backfill_days: 365        # first sync looks this far back
+  backfill_days: 1827       # deposits/withdrawals/fiat/P2P: synced this far back (5 years max)
+  earn_backfill_days: 365   # Earn rewards: synced AND kept only this far back (older rows pruned)
   overlap_days: 2           # later syncs re-read this much (pending -> completed)
   sync_fiat: true           # bank deposits/withdrawals and card purchases
   sync_p2p: true            # P2P buy/sell orders

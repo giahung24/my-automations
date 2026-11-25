@@ -508,6 +508,160 @@ def test_first_sync_backfills_configured_days(tmp_path):
     assert not session.paths("fiat") and not session.paths("c2c")  # streams switched off
 
 
+# -- Earn retention: rewards 1 year, deposits / withdrawals 5 years ------------------------------
+EARN_DAYS = 365
+FIVE_YEARS = 1827
+
+
+def earn_flex_row(when, asset="USDT", rewards="0.01", kind="REALTIME"):
+    return {"asset": asset, "rewards": rewards, "projectId": f"{asset}001", "type": kind, "time": ms(when)}
+
+
+def earn_locked_row(when, asset="ETH", amount="0.0001", position="77"):
+    return {"asset": asset, "amount": amount, "positionId": position, "lockPeriod": 30, "time": ms(when)}
+
+
+def earliest_start(session: FakeBinance, fragment: str, **match) -> int:
+    starts = [p["startTime"] for _, u, p in session.calls
+              if fragment in u and all(p.get(k) == v for k, v in match.items())]
+    assert starts, f"no call to {fragment} {match}"
+    return min(starts)
+
+
+def earn_only_config(tmp_path, **extra):
+    return make_config(tmp_path, cash_flows={"sync_fiat": False, "sync_p2p": False, **extra})
+
+
+def test_default_settings_keep_5_years_but_only_1_year_of_earn():
+    settings = CashFlowSettings()
+    assert settings.backfill_days == FIVE_YEARS and settings.earn_backfill_days == EARN_DAYS
+    for stream in cf.EARN_STREAMS:
+        assert cf.stream_backfill_days(settings, stream) == EARN_DAYS
+    for stream in (*cf.CRYPTO_STREAMS, *cf.FIAT_STREAMS, *cf.P2P_STREAMS):
+        assert cf.stream_backfill_days(settings, stream) == FIVE_YEARS
+    # Earn never reaches further back than the general history
+    short = CashFlowSettings(backfill_days=90, earn_backfill_days=EARN_DAYS)
+    assert cf.stream_backfill_days(short, "earn_locked") == 90
+
+
+@pytest.mark.parametrize("stream, fragment, match", [
+    ("earn_flexible", "flexible/history/rewardsRecord", {"type": "REALTIME"}),
+    ("earn_flexible_bonus", "flexible/history/rewardsRecord", {"type": "BONUS"}),
+    ("earn_locked", "locked/history/rewardsRecord", {}),
+])
+def test_first_sync_backfills_earn_only_365_days(tmp_path, stream, fragment, match):
+    config = earn_only_config(tmp_path)
+    database = Database(config.db_path)
+    session = FakeBinance()
+    sync(config, database, client=client_for(session), now_ms=NOW_MS)
+    assert earliest_start(session, fragment, **match) == NOW_MS - EARN_DAYS * DAY_MS
+    assert cf.get_floor(database, stream) == NOW_MS - EARN_DAYS * DAY_MS
+
+
+@pytest.mark.parametrize("stream, fragment", [
+    ("deposit", "capital/deposit/hisrec"),
+    ("withdraw", "capital/withdraw/history"),
+])
+def test_first_sync_still_backfills_deposits_and_withdrawals_5_years(tmp_path, stream, fragment):
+    config = earn_only_config(tmp_path)
+    database = Database(config.db_path)
+    session = FakeBinance()
+    sync(config, database, client=client_for(session), now_ms=NOW_MS)
+    assert earliest_start(session, fragment) == NOW_MS - FIVE_YEARS * DAY_MS
+    assert cf.get_floor(database, stream) == NOW_MS - FIVE_YEARS * DAY_MS
+
+
+def test_first_sync_stores_old_deposits_but_no_earn_older_than_1_year(tmp_path):
+    config = earn_only_config(tmp_path)
+    database = Database(config.db_path)
+    old, recent = NOW - timedelta(days=4 * 365), NOW - timedelta(days=10)
+    session = FakeBinance(
+        deposits=[deposit_row(1, "USDT", 100, old), deposit_row(2, "USDT", 50, recent)],
+        withdrawals=[withdraw_row("w1", "USDT", 20, old, STRANGER)],
+        earn_flexible=[earn_flex_row(old), earn_flex_row(NOW - timedelta(days=400)), earn_flex_row(recent)],
+        earn_locked=[earn_locked_row(old), earn_locked_row(recent)],
+    )
+    sync(config, database, client=client_for(session), now_ms=NOW_MS)
+    rows = flow_rows(database)
+    rewards = [r for r in rows if r["flow_type"] == "reward"]
+    assert len(rewards) == 2 and all(r["timestamp"] == iso(recent) for r in rewards)
+    flows = sorted((r["external_id"], r["timestamp"][:10]) for r in rows if r["flow_type"] in ("deposit", "withdrawal"))
+    assert flows == [("1", iso(old)[:10]), ("2", iso(recent)[:10]), ("w1", iso(old)[:10])]  # 4 years back kept
+
+
+def seed_5_years_of_earn(database: Database) -> None:
+    """A database synced before the Earn cap: rewards + flows 5 years back, floors 5 years back."""
+    store(database,
+          flow(NOW - timedelta(days=4 * 365), flow_type="reward", channel="earn", amount=0.5, external_id="r-old"),
+          flow(NOW - timedelta(days=EARN_DAYS + 1), flow_type="reward", channel="earn", amount=0.5,
+               external_id="r-just-too-old"),
+          flow(NOW - timedelta(days=EARN_DAYS - 1), flow_type="reward", channel="earn", amount=0.5,
+               external_id="r-kept"),
+          flow(NOW - timedelta(days=4 * 365), external_id="d-old"),
+          flow(NOW - timedelta(days=3 * 365), direction="out", amount=200, external_id="w-old"),
+          flow(NOW - timedelta(days=4 * 365), flow_type="reward", channel="onchain", source="evm:ethereum",
+               amount=1, external_id="airdrop-like"))  # not a Binance Earn row: never pruned
+    for stream in (*cf.EARN_STREAMS, *cf.CRYPTO_STREAMS):
+        set_cursor(database, cf.stream_key(stream), NOW_MS - DAY_MS)
+        cf.set_floor(database, stream, NOW_MS - FIVE_YEARS * DAY_MS)
+
+
+def test_prune_drops_earn_rewards_older_than_1_year_and_nothing_else(tmp_path):
+    database = Database(str(tmp_path / "history.db"))
+    seed_5_years_of_earn(database)
+    cutoff = NOW_MS - EARN_DAYS * DAY_MS
+    assert cf.prune_earn_rewards(database, cutoff) == 2
+    left = {r["external_id"] for r in flow_rows(database)}
+    assert left == {"r-kept", "d-old", "w-old", "airdrop-like"}
+    for stream in cf.EARN_STREAMS:
+        assert cf.get_floor(database, stream) == cutoff  # moved forward to the cut-off
+    for stream in cf.CRYPTO_STREAMS:
+        assert cf.get_floor(database, stream) == NOW_MS - FIVE_YEARS * DAY_MS  # untouched
+    assert cf.prune_earn_rewards(database, cutoff) == 0  # idempotent
+
+
+def test_sync_prunes_old_earn_and_never_refetches_the_pruned_range(tmp_path):
+    config = earn_only_config(tmp_path)
+    database = Database(config.db_path)
+    seed_5_years_of_earn(database)
+    session = FakeBinance()
+    report = sync(config, database, client=client_for(session), now_ms=NOW_MS)
+    assert report.pruned == 2 and not report.errors
+    assert {r["external_id"] for r in flow_rows(database)} == {"r-kept", "d-old", "w-old", "airdrop-like"}
+    cutoff = NOW_MS - EARN_DAYS * DAY_MS
+    assert earliest_start(session, "rewardsRecord") >= cutoff  # no call into the dropped range
+    assert earliest_start(session, "deposit/hisrec") == NOW_MS - 3 * DAY_MS  # cursor - overlap, as before
+
+    # a week later the window rolls: the cut-off and the floors follow, still no backward fetch
+    later = NOW_MS + 7 * DAY_MS
+    session = FakeBinance()
+    report = sync(config, database, client=client_for(session), now_ms=later)
+    assert report.pruned == 1  # r-kept is now older than a year
+    assert earliest_start(session, "rewardsRecord") >= later - EARN_DAYS * DAY_MS
+    for stream in cf.EARN_STREAMS:
+        assert cf.get_floor(database, stream) == later - EARN_DAYS * DAY_MS
+    assert cf.get_floor(database, "deposit") == NOW_MS - FIVE_YEARS * DAY_MS
+
+
+def test_pruning_runs_even_with_earn_sync_switched_off(tmp_path):
+    config = earn_only_config(tmp_path, sync_earn=False)
+    database = Database(config.db_path)
+    seed_5_years_of_earn(database)
+    session = FakeBinance()
+    report = sync(config, database, client=client_for(session), now_ms=NOW_MS)
+    assert report.pruned == 2 and not session.paths("rewardsRecord")
+
+
+def test_raising_earn_backfill_days_backfills_only_the_missing_year(tmp_path):
+    database = Database(str(tmp_path / "history.db"))
+    sync(earn_only_config(tmp_path), database, client=client_for(FakeBinance()), now_ms=NOW_MS)
+    session = FakeBinance()
+    sync(earn_only_config(tmp_path, earn_backfill_days=2 * EARN_DAYS), database,
+         client=client_for(session), now_ms=NOW_MS + DAY_MS)
+    assert earliest_start(session, "locked/history/rewardsRecord") == NOW_MS + DAY_MS - 2 * EARN_DAYS * DAY_MS
+    assert earliest_start(session, "deposit/hisrec") == NOW_MS - 2 * DAY_MS  # deposits already complete
+
+
 def test_pending_deposit_becomes_completed(tmp_path):
     config = make_config(tmp_path)
     database = Database(config.db_path)
@@ -764,6 +918,9 @@ def test_cash_flow_settings_defaults_and_validation(tmp_path):
     assert settings.backfill_days == CashFlowSettings().backfill_days and settings.overlap_days == 30
     assert settings.enabled is False and settings.sync_p2p is False and settings.sync_fiat is True
     assert CashFlowSettings.from_raw(None) == CashFlowSettings()
+    assert CashFlowSettings.from_raw({"earn_backfill_days": "x"}).earn_backfill_days == 365
+    assert CashFlowSettings.from_raw({"earn_backfill_days": 0}).earn_backfill_days == 1
+    assert CashFlowSettings.from_raw({"earn_backfill_days": 99999}).earn_backfill_days == 1827
 
 
 # == PnL net of flows =====================================================================================

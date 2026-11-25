@@ -36,6 +36,12 @@ second marker, ``backfill.binance.<stream>``, records how far back a stream is k
 older range, newest chunk first, moving that marker back after each chunk. It runs after the
 snapshot is committed (``main.py record``) and its errors never fail the snapshot.
 
+**Earn retention.** Simple Earn rewards arrive several times a day per asset, so they are synced
+and *kept* only ``earn_backfill_days`` back (1 year by default, never more than
+``backfill_days``), while deposits / withdrawals / fiat / P2P keep the full ``backfill_days``.
+Every sync deletes the ``reward`` rows older than that and moves the Earn streams' backfill
+marker up to the cut-off, so the pruned range is never fetched again (:func:`prune_earn_rewards`).
+
 [to verify against the live API docs] (ROADMAP_LEDGER §3.4): the status codes below, whether a
 withdrawal ``amount`` is net of ``transactionFee``, and the ``sourceAddress`` field of deposits.
 """
@@ -180,6 +186,7 @@ class SyncReport:
     repriced: int = 0
     paired: int = 0  # Binance flows paired with a manual-asset change (services/manual.py)
     matched: int = 0  # out/in pairs made by the transfer matcher (match_transfers)
+    pruned: int = 0  # Earn reward rows older than earn_backfill_days, deleted (prune_earn_rewards)
 
     @property
     def total_inserted(self) -> int:
@@ -866,6 +873,31 @@ def set_floor(database: Database, stream: str, value_ms: int) -> None:
         )
 
 
+def prune_earn_rewards(database: Database, cutoff_ms: int) -> int:
+    """Enforce the Earn retention: delete Binance Earn ``reward`` rows older than ``cutoff_ms``.
+
+    Only ``source = 'binance'``, ``channel = 'earn'``, ``flow_type = 'reward'`` rows are touched;
+    deposits, withdrawals, fiat and P2P rows never are. The backfill marker of every Earn stream
+    that reaches further back is moved *forward* to the cut-off (unlike :func:`set_floor`), so
+    the next sync does not re-fetch the range that was just dropped. Returns the rows deleted.
+    """
+    cutoff_ms = max(int(cutoff_ms), 0)
+    cutoff_iso = to_iso_utc(cutoff_ms)
+    now = utc_now_iso()
+    with database.connect() as connection:
+        deleted = connection.execute(
+            "DELETE FROM cash_flows WHERE source = ? AND channel = ? AND flow_type = ? AND timestamp < ?",
+            (SOURCE_BINANCE, CHANNEL_EARN, REWARD, cutoff_iso),
+        ).rowcount
+        for stream in EARN_STREAMS:
+            connection.execute(
+                "UPDATE sync_state SET value = ?, updated_at = ? "
+                "WHERE key = ? AND CAST(value AS INTEGER) < ?",
+                (str(cutoff_ms), now, floor_key(stream), cutoff_ms),
+            )
+    return max(int(deleted or 0), 0)
+
+
 def sync_states(database: Database) -> dict[str, str]:
     """Every forward cursor as ``{key: ISO UTC time it is synced up to}``."""
     with database.connect() as connection:
@@ -903,6 +935,14 @@ def floor_key(stream: str) -> str:
     return f"{BACKFILL_PREFIX}{stream_key(stream)}"
 
 
+def stream_backfill_days(settings, stream: str) -> int:
+    """How far back ``stream`` is synced (and, for Earn, kept): Earn reward streams use
+    ``earn_backfill_days`` capped at ``backfill_days``; every other stream ``backfill_days``."""
+    if stream in EARN_STREAMS:
+        return min(settings.earn_backfill_days, settings.backfill_days)
+    return settings.backfill_days
+
+
 def enabled_streams(settings) -> list[str]:
     streams = list(CRYPTO_STREAMS)
     if settings.sync_fiat:
@@ -931,8 +971,9 @@ def sync(config, database: Database, client: BinanceClient | None = None,
          now_ms: int | None = None) -> SyncReport:
     """Pull every enabled Binance history stream into ``cash_flows``; never raises on API errors.
 
-    Each stream starts at its cursor minus ``overlap_days`` (or ``backfill_days`` ago on the
-    first run) and ends now. The cursor is committed after each time chunk. A failing stream
+    Each stream starts at its cursor minus ``overlap_days`` (or its backfill target on the first
+    run: ``backfill_days`` ago, ``earn_backfill_days`` for Earn rewards) and ends now; it never
+    starts before that target. Earn rewards older than their target are pruned first. The cursor is committed after each time chunk. A failing stream
     (HTTP 401, missing permission, rate limit) is reported in ``errors`` and keeps its cursor;
     the other streams still run. Afterwards the whole history is re-classified against the
     current wallet list and rows still missing a price are re-priced.
@@ -951,12 +992,18 @@ def sync(config, database: Database, client: BinanceClient | None = None,
     owned = owned_addresses(config)
     prices = PriceBook(database, getattr(config, "stablecoins", ()) or (), fallback=client.price_usd)
 
-    target_ms = max(now_ms - settings.backfill_days * DAY_MS, 0)
+    def target_for(stream: str) -> int:
+        return max(now_ms - stream_backfill_days(settings, stream) * DAY_MS, 0)
+
+    # Earn retention runs even with sync_earn off: the rows already stored still age out.
+    report.pruned = prune_earn_rewards(database, target_for(EARN_STREAMS[0]))
     for stream in enabled_streams(settings):
         key = stream_key(stream)
+        target_ms = target_for(stream)
         cursor = get_cursor(database, key)
         first_run = cursor is None
-        start_ms = target_ms if first_run else max(min(cursor, now_ms) - settings.overlap_days * DAY_MS, 0)
+        start_ms = target_ms if first_run else \
+            max(min(cursor, now_ms) - settings.overlap_days * DAY_MS, target_ms)
         report.fetched[stream] = report.inserted[stream] = report.updated[stream] = 0
 
         def store(rows: list[dict]) -> None:

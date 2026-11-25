@@ -128,6 +128,7 @@ DEFAULTS = {
     "cash_flows": {
         "enabled": True,
         "backfill_days": 1827,     # history kept in sync: 5 years (the maximum); raising it later back-fills the gap
+        "earn_backfill_days": 365,  # Earn rewards only: synced AND kept this far back (older rows are pruned)
         "overlap_days": 2,         # later syncs re-read this much, to catch pending -> completed
         "sync_fiat": True,         # /sapi/v1/fiat/orders + /sapi/v1/fiat/payments
         "sync_p2p": True,          # /sapi/v1/c2c/orderMatch/listUserOrderHistory
@@ -166,6 +167,9 @@ def _split(raw: str) -> list[str]:
 
 # Binance history is synced at most 5 years back (M4.activity_tab): 5 x 365 + 2 leap days.
 MAX_BACKFILL_DAYS = 1827
+# Simple Earn rewards land several times a day per asset: a year is plenty to look back on, and
+# five years of them would bury the deposits / withdrawals in the Activity tab.
+DEFAULT_EARN_BACKFILL_DAYS = 365
 
 
 @dataclass(frozen=True)
@@ -174,6 +178,7 @@ class CashFlowSettings:
 
     enabled: bool = True
     backfill_days: int = MAX_BACKFILL_DAYS
+    earn_backfill_days: int = DEFAULT_EARN_BACKFILL_DAYS  # sync window AND retention of Earn rewards
     overlap_days: int = 2
     sync_fiat: bool = True
     sync_p2p: bool = True
@@ -212,6 +217,7 @@ class CashFlowSettings:
         return cls(
             enabled=flag("enabled"),
             backfill_days=days("backfill_days", 1, MAX_BACKFILL_DAYS),
+            earn_backfill_days=days("earn_backfill_days", 1, MAX_BACKFILL_DAYS),
             overlap_days=days("overlap_days", 0, 30),
             sync_fiat=flag("sync_fiat"),
             sync_p2p=flag("sync_p2p"),

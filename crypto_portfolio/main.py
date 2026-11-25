@@ -248,6 +248,9 @@ def cmd_pnl(args, config) -> int:
         report = sync(config, database)
         if report.skipped:
             print(f"cash-flow sync skipped: {report.skipped}", file=sys.stderr)
+        if report.pruned:
+            print(f"cash-flow sync: pruned {report.pruned} Earn reward rows older than "
+                  f"{config.cash_flow_settings.earn_backfill_days} days", file=sys.stderr)
         for error in report.errors:
             print(f"  warning: {error}", file=sys.stderr)
     try:
