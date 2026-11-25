@@ -6,6 +6,7 @@
     python main.py record                    silent snapshot into SQLite (for cron)
     python main.py chart --type all          write PNG charts into ./charts
     python main.py history                   past snapshots as a table
+    python main.py backfill                  rebuild 60 monthly checkpoints (2021-11..2026-10)
     python main.py serve --port 8080         mobile web dashboard (FastAPI + PWA)
 
 Add `--min-value 0` to any command to disable the $1.00 dust filter.
@@ -95,6 +96,7 @@ def render_history(snapshots) -> str:
             f"{money(snapshot.binance_spot_usd, 0):>14}{money(snapshot.binance_earn_usd, 0):>14}"
             f"{money(snapshot.binance_funding_usd, 0):>12}{money(snapshot.onchain_usd, 0):>14}"
             f"{money(snapshot.total_portfolio_usd):>16}{change:>14}"
+            + ("  (backfilled)" if snapshot.is_backfilled else "")
         )
         previous = snapshot.total_portfolio_usd
     if len(snapshots) > 1:
@@ -188,6 +190,13 @@ def cmd_history(args, config) -> int:
     return 0
 
 
+def cmd_backfill(args, config) -> int:
+    """Rebuild monthly history checkpoints from public Binance klines (P0.8)."""
+    from services.backfill import backfill_command
+
+    return backfill_command(Database(config.db_path), args)
+
+
 def _portfolio_from_db(database, min_value: float):
     """Rebuild the latest portfolio from stored rows, so charts work with no network."""
     from services.portfolio import portfolio_from_db
@@ -263,6 +272,14 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--days", type=int, default=None)
     history.add_argument("--json", action="store_true")
     history.set_defaults(func=cmd_history)
+
+    from services.backfill import add_arguments as add_backfill_arguments
+
+    backfill = subparsers.add_parser(
+        "backfill", parents=[common],
+        help="rebuild monthly history from Binance klines (current holdings, past prices)")
+    add_backfill_arguments(backfill)
+    backfill.set_defaults(func=cmd_backfill)
 
     serve = subparsers.add_parser("serve", parents=[common], help="run the mobile web dashboard")
     serve.add_argument("--host", default="127.0.0.1",

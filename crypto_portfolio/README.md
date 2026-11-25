@@ -30,6 +30,7 @@ environment or in a `.env` (see `.env.example`) override it. Both files are git-
 .venv/bin/python main.py chart --type all        # PNGs into ./charts
 .venv/bin/python main.py chart --from-db --type text    # ASCII report, no network
 .venv/bin/python main.py history --days 30       # recorded snapshots
+.venv/bin/python main.py backfill               # 60 monthly checkpoints 2021-11..2026-10 (see below)
 .venv/bin/python main.py serve --port 8080       # mobile web dashboard (see below)
 ```
 
@@ -72,7 +73,7 @@ A mobile-first PWA (Vue 3, Tailwind, TradingView Lightweight Charts, all vendore
 clients, aggregation and SQLite history:
 
 - net worth with a privacy toggle that blurs every balance, plus the 24h change;
-- a touch-scrubbable history chart (24H / 7D / 1M / 1Y / ALL) built from the snapshots;
+- a touch-scrubbable history chart (24H / 7D / 1M / 1Y / 5Y / ALL) built from the snapshots;
 - All / Binance / On-chain tabs over the per-asset list (quantity, price, value, share), and
   a tap on an asset shows the per-source and per-wallet breakdown;
 - a settings sheet for the Binance key (with a permissions check) and the wallet list (with
@@ -135,7 +136,7 @@ labelled). "Others" takes neutral grey - it is not an entity.
 
 | path | role |
 |------|------|
-| `main.py` | CLI: `show`, `record`, `chart`, `history`, `serve` |
+| `main.py` | CLI: `show`, `record`, `chart`, `history`, `backfill`, `serve` |
 | `web_api.py` | FastAPI app: JSON API + PWA hosting, optional access token |
 | `static/` | PWA: `index.html`, `app.js`, `style.css`, `manifest.json`, `sw.js`, icons, vendored libs |
 | `config.py` | defaults -> `config.yaml` -> environment |
@@ -143,6 +144,7 @@ labelled). "Others" takes neutral grey - it is not an entity.
 | `clients/binance.py` | signed read-only Binance client + USDT pricing |
 | `clients/onchain.py` | EVM JSON-RPC + Solana RPC + DefiLlama pricing |
 | `services/db.py` | SQLite schema, snapshots, history |
+| `services/backfill.py` | monthly history checkpoints from public Binance klines |
 | `services/portfolio.py` | fetch orchestration and per-asset aggregation |
 | `services/visualizer.py` | Matplotlib charts (Agg) and the ASCII report |
 | `test_all.py` | 62 tests, fully mocked - no network, no keys |
@@ -153,6 +155,19 @@ labelled). "Others" takes neutral grey - it is not an entity.
 `portfolio_history.db` is created on first use. `snapshots` holds one row per run
 (timestamp + the per-source totals); `snapshot_assets` holds one row per asset per source
 (quantity, price, value). There is no migration step - delete the file to start over.
+
+### Backfilled history
+
+`main.py backfill` (or `python -m services.backfill --db <file>`) adds 60 monthly checkpoints,
+one on the 1st of each month from 2021-11 to 2026-10, so the 1Y / 5Y / ALL charts are not
+empty. Each one is **today's holdings at that month's prices**: the open of Binance's public
+monthly `<ASSET>USDT` kline (no API key) for BTC, ETH and SOL; USDT and the other USD
+stablecoins at 1.0; wrapped tokens follow their underlying. Assets without a price series move
+like the priced part of the portfolio (`price_id = backfill:proxy`); add them with
+`--symbols BNB LINK ...` to price them for real. The rows carry `snapshots.is_backfilled = 1`
+and `trigger = 'backfill'`: they are drawn on the chart but never used as the latest snapshot,
+as a 24h-change reference, or by the hole heuristic. Re-running replaces them; months that
+already have fetched snapshots are skipped. `--dry-run` prints the series without writing.
 
 ## Failure behaviour
 

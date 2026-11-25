@@ -631,8 +631,8 @@ def backups(path):
     return sorted(path.parent.glob(f"{path.name}.bak_v*"))
 
 
-def test_migrations_list_defines_v2():
-    assert SCHEMA_VERSION == len(MIGRATIONS) == 2
+def test_migrations_list_defines_v3():
+    assert SCHEMA_VERSION == len(MIGRATIONS) == 3  # v3: snapshots.is_backfilled (P0.8)
 
 
 def test_fresh_db_is_created_at_latest_version_without_backup(tmp_path):
@@ -673,7 +673,7 @@ def test_upgrade_v0_to_v1_then_v1_to_v2_keeps_every_row(tmp_path):
     assert "detail" not in columns(path, "snapshot_assets")  # v2 not applied yet
     assert [b.name.split(".bak_")[1][:3] for b in backups(path)] == ["v0_"]
 
-    assert Database(path).schema_version() == 2
+    assert Database(path).schema_version() == SCHEMA_VERSION
     assert dump_v0_rows(path) == before
     assert "snapshot_sources" in tables(path)
     assert sorted(b.name.split(".bak_")[1][:3] for b in backups(path)) == ["v0_", "v1_"]
@@ -714,10 +714,11 @@ def test_failed_migration_rolls_back_everything(tmp_path, monkeypatch):
     ]
     monkeypatch.setattr(db_module, "MIGRATIONS", broken)
 
-    with pytest.raises(MigrationError, match="v3"):
+    with pytest.raises(MigrationError, match=f"v{SCHEMA_VERSION + 1}"):
         Database(path)
 
-    # v1, v2 and the first half of v3 all ran in this attempt; none of it may survive.
+    # every shipped step and the first half of the broken one ran in this attempt; none of it
+    # may survive.
     assert schema_version(path) == 0
     assert dump_v0_rows(path) == before
     assert "half_done" not in columns(path, "snapshots")

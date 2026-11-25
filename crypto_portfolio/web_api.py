@@ -398,6 +398,8 @@ def create_app(
                 "binance_spot_usd": round(snapshot.binance_spot_usd, 2),
                 "binance_earn_usd": round(snapshot.binance_earn_usd, 2),
                 "binance_funding_usd": round(snapshot.binance_funding_usd, 2),
+                # monthly checkpoint rebuilt from past prices (services/backfill.py), not fetched
+                "is_backfilled": snapshot.is_backfilled,
             }
         ordered = [points[key] for key in sorted(points)]
         return {"days": days or None, "count": len(ordered), "points": ordered}

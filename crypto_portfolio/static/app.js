@@ -18,6 +18,7 @@
     { id: '7D', days: 7, label: 'Past 7 days' },
     { id: '1M', days: 30, label: 'Past month' },
     { id: '1Y', days: 365, label: 'Past year' },
+    { id: '5Y', days: 1827, label: 'Past 5 years' },
     { id: 'ALL', days: 0, label: 'All time' },
   ];
   const TABS = [

@@ -109,8 +109,9 @@ MIGRATIONS: list[str] = [
     );
     ALTER TABLE snapshots ADD COLUMN trigger TEXT NOT NULL DEFAULT 'unknown';  -- cron | refresh | unknown
     """,
-    # v3 (F2): cash_flows, sync_state — xem §3.3
-    # v4 (F3): benchmark_prices — xem §4.2.2
+    # v3 (P0.8): snapshots.is_backfilled — checkpoint tháng dựng lại bởi services/backfill.py
+    # v4 (F2): cash_flows, sync_state — xem §3.3
+    # v5 (F3): benchmark_prices — xem §4.2.2
 ]
 ```
 
@@ -149,7 +150,7 @@ dòng = ~440k dòng `snapshot_assets`/năm, vẫn rất nhỏ với SQLite.
 - [x] **P0.1** Migration `PRAGMA user_version` + backup trước khi migrate — AC §1.1 — ✅ 2026-11-25 · commit 7d29fd5]
 - [ ] **P0.2** Bảng `snapshot_sources`, cột `snapshots.trigger`, backfill heuristic — AC §1.2
 - [ ] **P0.3** Cột `detail`, `price_id` trong `snapshot_assets`; `portfolio_from_db` trả lại `locations` — AC: snapshot mới có `detail` khác rỗng cho mọi dòng on-chain
-- [ ] **P0.4** `PRAGMA journal_mode=WAL` một lần lúc init — AC: test đọc `mode=ro` trong lúc một transaction ghi đang mở không bị `database is locked`
+- [x] **P0.4** `PRAGMA journal_mode=WAL` một lần lúc init — AC: test đọc `mode=ro` trong lúc một transaction ghi đang mở không bị `database is locked` — ✅ 2026-11-25 · commit 3d80f35]
 - [x] **P0.5** Cron `0 * * * *` — ✅ 2026-11-25 · `crontab` · Đã cập nhật crontab hệ thống sang nhịp 1h/lần (`0 * * * *`)
 - [ ] **P0.6** `PORTFOLIO_WEB_TOKEN` + `--host 192.168.1.66` + unit `deploy/crypto-web.service` (SEC-1, SEC-2) — AC: `GET /api/settings` không token trả 401
 - [ ] **P0.7** Multicall3 — AC: số RPC call mỗi refresh giảm từ ~70 xuống ≤ 15 (đo bằng counter trong test mock), kết quả số dư không đổi
@@ -440,7 +441,7 @@ Mọi thay đổi số lượng phải được gán vào đúng một loại. �
   để test không cần mạng hay DB.
 - `api_gateway.py` không đọc bảng này. Gateway giữ đúng một route.
 
-### 3.3 Schema database (migration v3)
+### 3.3 Schema database (migration v4)
 
 ```sql
 CREATE TABLE IF NOT EXISTS cash_flows (
@@ -654,7 +655,7 @@ cash_flows:
 
 ### 3.9 Checklist F2
 
-- [ ] **F2.1** Migration v3: `cash_flows`, `sync_state`, các index (cần P0.1) — **P1**
+- [ ] **F2.1** Migration v4: `cash_flows`, `sync_state`, các index (cần P0.1) — **P1**
   - AC: CHECK constraint chặn `amount < 0` và `direction` lạ; insert trùng `(source, flow_type, external_id)` được upsert, không nhân bản.
 - [ ] **F2.2** `BinanceClient.deposit_history()`, `withdraw_history()` + phân khúc 90 ngày + phân trang — **P1**
   - AC: backfill 365 ngày sinh đúng 5 khúc; mock trả 1000 dòng thì gọi trang tiếp; chỉ dùng phương thức GET và path đọc (test liệt kê mọi URL đã gọi).
@@ -820,7 +821,7 @@ Chọn Binance cho BTC/ETH thay vì CoinGecko vì: không cần key (CoinGecko p
 sử), nhất quán với nguồn định giá của chính danh mục, và host `data-api.binance.vision` đã được chứng
 minh hoạt động trên máy này (decision D3).
 
-**Lưu trữ (migration v4):**
+**Lưu trữ (migration v5):**
 
 ```sql
 CREATE TABLE IF NOT EXISTS benchmark_prices (
@@ -1036,7 +1037,7 @@ Trên snapshot mới nhất, tài sản có giá, $w_i = V_i / V$ theo `symbol` 
 
 **Benchmark**
 
-- [ ] **F3.B1** Migration v4 `benchmark_prices` + sync BTC/ETH qua Binance klines trong collector — **P2**
+- [ ] **F3.B1** Migration v5 `benchmark_prices` + sync BTC/ETH qua Binance klines trong collector — **P2**
   - AC: backfill 365 nến ngày; chạy lại là no-op; Binance lỗi không làm hỏng `record`.
 - [ ] **F3.B2** Sync SPX (Yahoo → Stooq fallback) — **P2**
   - AC: cả hai nguồn lỗi thì SPX bị đánh dấu unavailable, BTC/ETH không bị ảnh hưởng.
@@ -1102,7 +1103,7 @@ Trên snapshot mới nhất, tài sản có giá, $w_i = V_i / V$ theo `symbol` 
 | P0.1 | Migration `user_version` + backup | P0 | P0 | `[x] DONE` | `services/db.py` | — | | 2026-11-25 |
 | P0.2 | `snapshot_sources` + `snapshots.trigger` + backfill hố | P0 | P0 | `[x] DONE` | `services/db.py`, `services/portfolio.py` | P0.1 | | 2026-11-25 |
 | P0.3 | Lưu `detail`, `price_id` | P0 | P0 | `[x] DONE` | `services/db.py`, `services/portfolio.py` | P0.1 | | 2026-11-25 |
-| P0.4 | WAL mode | P0 | P0 | `[ ] TODO` | `services/db.py` | — | |
+| P0.4 | WAL mode | P0 | P0 | `[x] DONE` | `services/db.py` | — | | 2026-11-25 |
 | P0.5 | Cron 1h/lần | P0 | P0 | `[x] DONE` | crontab | — | 2026-11-25 |
 | P0.6 | Web token + bind LAN + unit systemd | P0 | P0 | `[ ] TODO` | env, `deploy/crypto-web.service` | — | |
 | P0.7 | Multicall3 ERC-20 | P0 | P0 | `[ ] TODO` | `clients/onchain.py` | — | |
@@ -1116,7 +1117,7 @@ Trên snapshot mới nhất, tài sản có giá, $w_i = V_i / V$ theo `symbol` 
 | F1.7 | UI sheet "Vì sao biến động?" | F1 | P1 | `[ ] TODO` | `static/app.js`, `static/index.html`, `static/style.css` | F1.5 | |
 | F1.8 | v2: flow/transfer/income/trade | F1 | P2 | `[ ] TODO` | `services/analytics/attribution.py` | F2.6, F2.8 | |
 | F1.9 | CLI `main.py why` | F1 | P3 | `[ ] TODO` | `main.py` | F1.5 | |
-| F2.1 | Migration v3 `cash_flows`, `sync_state` | F2 | P1 | `[x] DONE` | `services/db.py` | P0.1 | | 2026-11-25 |
+| F2.1 | Migration v4 `cash_flows`, `sync_state` | F2 | P1 | `[x] DONE` | `services/db.py` | P0.1 | | 2026-11-25 |
 | F2.2 | Binance deposit/withdraw history | F2 | P1 | `[ ] TODO` | `clients/binance.py` | — | |
 | F2.3 | `sync()` + cursor + nối vào `record` | F2 | P1 | `[ ] TODO` | `services/cash_flows.py`, `main.py` | F2.1, F2.2 | |
 | F2.4 | Chuẩn hoá network/địa chỉ/thời gian | F2 | P1 | `[ ] TODO` | `services/cash_flows.py` | — | |

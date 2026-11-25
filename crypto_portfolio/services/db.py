@@ -2,7 +2,10 @@
 
 One row per snapshot in `snapshots` (the totals), one row per asset-and-source in
 `snapshot_assets`, and (from schema v2) one row per data source and snapshot in
-`snapshot_sources`.
+`snapshot_sources`. From schema v3, `snapshots.is_backfilled = 1` marks the monthly checkpoints
+reconstructed by `services/backfill.py` (P0.8): they feed the long-range charts, but they are
+never "the latest snapshot", never the reference of a 24h change, and never part of the
+hole heuristic - they were not fetched, so they say nothing about a source's health.
 
 The schema is versioned with `PRAGMA user_version` and upgraded by `migrate()` every time
 a `Database` is opened: the pending steps of `MIGRATIONS` run in a single transaction (all or
@@ -79,13 +82,21 @@ CREATE TABLE IF NOT EXISTS snapshot_sources (
 ALTER TABLE snapshots ADD COLUMN trigger TEXT NOT NULL DEFAULT 'unknown';  -- cron | refresh | unknown
 """
 
+# v3 (P0.8): monthly checkpoints reconstructed from historical prices, not fetched.
+SCHEMA_V3 = """
+ALTER TABLE snapshots ADD COLUMN is_backfilled INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_snapshots_backfilled ON snapshots(is_backfilled, timestamp);
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
     SCHEMA_V2,  # v2
+    SCHEMA_V3,  # v3
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
+BACKFILL_SCHEMA_VERSION = 3  # first version with snapshots.is_backfilled
 
 # Readers (the `mode=ro` API gateway) never block on, or are blocked by, the collector's writes.
 # Persistent: once set, every later connection to the file - from any process - uses it.
@@ -95,7 +106,8 @@ JOURNAL_MODE = "wal"
 TRIGGER_CRON = "cron"        # `main.py record`
 TRIGGER_REFRESH = "refresh"  # POST /api/portfolio/refresh
 TRIGGER_UNKNOWN = "unknown"  # rows older than v2, or a caller that did not say
-TRIGGERS = (TRIGGER_CRON, TRIGGER_REFRESH, TRIGGER_UNKNOWN)
+TRIGGER_BACKFILL = "backfill"  # services/backfill.py (always with is_backfilled = 1)
+TRIGGERS = (TRIGGER_CRON, TRIGGER_REFRESH, TRIGGER_UNKNOWN, TRIGGER_BACKFILL)
 
 # Backfill heuristic for snapshots that predate snapshot_sources: a source total that drops by
 # more than HOLE_DROP of its previous value and gets back more than HOLE_RECOVERY of that drop
@@ -125,6 +137,7 @@ class Snapshot:
     binance_funding_usd: float
     onchain_usd: float
     trigger: str = TRIGGER_UNKNOWN
+    is_backfilled: bool = False
 
     @property
     def dt(self) -> datetime:
@@ -189,35 +202,11 @@ class Database:
         """
         if trigger not in TRIGGERS:
             raise ValueError(f"unknown snapshot trigger {trigger!r}; expected one of {TRIGGERS}")
-        totals = {source: float(portfolio.totals.get(source, 0.0)) for source in SOURCE_COLUMNS}
+        if trigger == TRIGGER_BACKFILL:
+            raise ValueError("backfilled snapshots are written by services/backfill.py, not record()")
         statuses = portfolio.source_statuses()
         with self.connect() as connection:
-            cursor = connection.execute(
-                """INSERT INTO snapshots
-                       (timestamp, total_portfolio_usd, binance_spot_usd, binance_earn_usd,
-                        binance_funding_usd, onchain_usd, trigger)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    portfolio.timestamp or utc_now_iso(),
-                    float(portfolio.total_usd),
-                    totals[BINANCE_SPOT],
-                    totals[BINANCE_EARN],
-                    totals[BINANCE_FUNDING],
-                    totals[ONCHAIN],
-                    trigger,
-                ),
-            )
-            snapshot_id = int(cursor.lastrowid)
-            connection.executemany(
-                """INSERT INTO snapshot_assets
-                       (snapshot_id, symbol, source, quantity, price_usd, value_usd, detail, price_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                [
-                    (snapshot_id, h.symbol, h.source, float(h.quantity), float(h.price_usd),
-                     float(h.value_usd), h.detail or "", h.price_id or "")
-                    for h in portfolio.holdings
-                ],
-            )
+            snapshot_id = _insert_snapshot(connection, portfolio, trigger)
             connection.executemany(
                 "INSERT INTO snapshot_sources (snapshot_id, source, status, error) VALUES (?, ?, ?, ?)",
                 [
@@ -226,6 +215,21 @@ class Database:
                 ],
             )
         return snapshot_id
+
+    def replace_backfill(self, portfolios: Sequence[Portfolio]) -> list[int]:
+        """Atomically swap every backfilled snapshot for `portfolios`; returns the new ids.
+
+        The old checkpoints (and, by cascade, their asset rows) are deleted and the new ones
+        inserted in one transaction, so re-running the backfill never duplicates a month and a
+        failure leaves the previous set intact. Backfilled snapshots get `is_backfilled = 1`,
+        `trigger = 'backfill'` and no `snapshot_sources` rows: nothing was fetched.
+        """
+        with self.connect() as connection:
+            connection.execute("DELETE FROM snapshots WHERE is_backfilled = 1")
+            return [
+                _insert_snapshot(connection, portfolio, TRIGGER_BACKFILL, is_backfilled=True)
+                for portfolio in portfolios
+            ]
 
     def backfill_inferred_errors(self) -> int:
         """Mark the holes of snapshots that have no `snapshot_sources` row (taken before v2).
@@ -239,7 +243,7 @@ class Database:
             rows = connection.execute(
                 """SELECT s.*, EXISTS (SELECT 1 FROM snapshot_sources x WHERE x.snapshot_id = s.id)
                               AS has_status
-                   FROM snapshots s ORDER BY s.timestamp, s.id"""
+                   FROM snapshots s WHERE s.is_backfilled = 0 ORDER BY s.timestamp, s.id"""
             ).fetchall()
             marks = []
             for previous, current, following in zip(rows, rows[1:], rows[2:]):
@@ -258,13 +262,20 @@ class Database:
             return max(cursor.rowcount, 0)
 
     # -- reads -----------------------------------------------------------------
-    def history(self, limit: int | None = None, days: int | None = None) -> list[Snapshot]:
-        """Snapshots oldest-first, optionally the last `days` and/or the most recent `limit`."""
-        where, params = "", []
+    def history(self, limit: int | None = None, days: int | None = None,
+                include_backfilled: bool = True) -> list[Snapshot]:
+        """Snapshots oldest-first, optionally the last `days` and/or the most recent `limit`.
+
+        Backfilled monthly checkpoints are included unless `include_backfilled` is false.
+        """
+        conditions, params = [], []
         if days:
             cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
-            where = "WHERE timestamp >= ?"
+            conditions.append("timestamp >= ?")
             params.append(datetime.fromtimestamp(cutoff, timezone.utc).isoformat())
+        if not include_backfilled:
+            conditions.append("is_backfilled = 0")
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         query = f"SELECT * FROM snapshots {where} ORDER BY timestamp DESC, id DESC"
         if limit:
             query += " LIMIT ?"
@@ -274,30 +285,37 @@ class Database:
         return list(reversed([_as_snapshot(row) for row in rows]))
 
     def latest(self) -> Snapshot | None:
-        rows = self.history(limit=1)
+        """Newest snapshot that was really fetched (a backfilled checkpoint never is)."""
+        rows = self.history(limit=1, include_backfilled=False)
         return rows[0] if rows else None
 
     def snapshot_before(self, timestamp: str) -> Snapshot | None:
-        """Newest snapshot taken at or before `timestamp` (an ISO8601 UTC string)."""
+        """Newest fetched snapshot taken at or before `timestamp` (an ISO8601 UTC string)."""
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM snapshots WHERE timestamp <= ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+                "SELECT * FROM snapshots WHERE timestamp <= ? AND is_backfilled = 0 "
+                "ORDER BY timestamp DESC, id DESC LIMIT 1",
                 (timestamp,),
             ).fetchone()
         return _as_snapshot(row) if row else None
 
     def snapshot_after(self, timestamp: str) -> Snapshot | None:
-        """Oldest snapshot taken at or after `timestamp` (an ISO8601 UTC string)."""
+        """Oldest fetched snapshot taken at or after `timestamp` (an ISO8601 UTC string)."""
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM snapshots WHERE timestamp >= ? ORDER BY timestamp ASC, id ASC LIMIT 1",
+                "SELECT * FROM snapshots WHERE timestamp >= ? AND is_backfilled = 0 "
+                "ORDER BY timestamp ASC, id ASC LIMIT 1",
                 (timestamp,),
             ).fetchone()
         return _as_snapshot(row) if row else None
 
-    def count(self) -> int:
+    def count(self, backfilled: bool | None = None) -> int:
+        """Number of snapshots; `backfilled=True/False` counts only that kind."""
+        query, params = "SELECT COUNT(*) FROM snapshots", ()
+        if backfilled is not None:
+            query, params = f"{query} WHERE is_backfilled = ?", (int(backfilled),)
         with self.connect() as connection:
-            return int(connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0])
+            return int(connection.execute(query, params).fetchone()[0])
 
     def assets(self, snapshot_id: int) -> list[dict]:
         with self.connect() as connection:
@@ -320,6 +338,40 @@ class Database:
     def latest_assets(self) -> list[dict]:
         snapshot = self.latest()
         return self.assets(snapshot.id) if snapshot else []
+
+
+def _insert_snapshot(connection: sqlite3.Connection, portfolio: Portfolio, trigger: str,
+                     is_backfilled: bool = False) -> int:
+    """Insert one `snapshots` row and its `snapshot_assets` rows; returns the snapshot id."""
+    totals = {source: float(portfolio.totals.get(source, 0.0)) for source in SOURCE_COLUMNS}
+    cursor = connection.execute(
+        """INSERT INTO snapshots
+               (timestamp, total_portfolio_usd, binance_spot_usd, binance_earn_usd,
+                binance_funding_usd, onchain_usd, trigger, is_backfilled)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            portfolio.timestamp or utc_now_iso(),
+            float(portfolio.total_usd),
+            totals[BINANCE_SPOT],
+            totals[BINANCE_EARN],
+            totals[BINANCE_FUNDING],
+            totals[ONCHAIN],
+            trigger,
+            int(is_backfilled),
+        ),
+    )
+    snapshot_id = int(cursor.lastrowid)
+    connection.executemany(
+        """INSERT INTO snapshot_assets
+               (snapshot_id, symbol, source, quantity, price_usd, value_usd, detail, price_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (snapshot_id, h.symbol, h.source, float(h.quantity), float(h.price_usd),
+             float(h.value_usd), h.detail or "", h.price_id or "")
+            for h in portfolio.holdings
+        ],
+    )
+    return snapshot_id
 
 
 def is_hole(before: float, value: float, after: float) -> bool:
@@ -488,4 +540,5 @@ def _as_snapshot(row: sqlite3.Row) -> Snapshot:
         binance_funding_usd=float(row["binance_funding_usd"]),
         onchain_usd=float(row["onchain_usd"]),
         trigger=row["trigger"] if "trigger" in row.keys() else TRIGGER_UNKNOWN,
+        is_backfilled=bool(row["is_backfilled"]) if "is_backfilled" in row.keys() else False,
     )
