@@ -18,7 +18,7 @@ import sys
 
 from config import load_config
 from models import BINANCE_EARN, BINANCE_FUNDING, BINANCE_SPOT, ONCHAIN, SOURCE_LABELS, SOURCES
-from services.db import Database
+from services.db import TRIGGER_CRON, Database
 from services.portfolio import fetch_portfolio, to_dict
 
 COLUMNS = [
@@ -142,7 +142,7 @@ def cmd_record(args, config) -> int:
         warn_errors(portfolio)
         print("refusing to record an empty snapshot: every source failed", file=sys.stderr)
         return 1
-    snapshot_id = Database(config.db_path).record(portfolio)
+    snapshot_id = Database(config.db_path).record(portfolio, trigger=TRIGGER_CRON)
     warn_errors(portfolio)  # partial failures are recorded, but still reported on stderr
     if args.verbose:
         from services.visualizer import money

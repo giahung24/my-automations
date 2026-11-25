@@ -9,3 +9,13 @@
 [2026-11-25 01:45:44 UTC] Invoking Claude (claude-fable-5-2)...
 [2026-11-25 01:46:47 UTC] Fable review exit code: 0
 [2026-11-25 01:46:47 UTC] Task P0.1 APPROVED!
+[2026-11-25 01:46:47 UTC] Updated ROADMAP_LEDGER.md for task P0.1
+[2026-11-25 01:46:50 UTC] 
+--- Task 2/7: [P0.2_P0.3] Bảng snapshot_sources, detail, price_id, trigger ---
+[2026-11-25 01:46:50 UTC] Invoking Claude (claude-opus-5-5)...
+[2026-11-25 01:51:38 UTC] Opus finished with exit code 0
+[2026-11-25 01:51:38 UTC] Running pytest...
+[2026-11-25 01:51:47 UTC] Pytest exit code: 0
+[2026-11-25 01:51:47 UTC] Invoking Claude (claude-fable-5-2)...
+[2026-11-25 01:53:06 UTC] Fable review exit code: 0
+[2026-11-25 01:53:06 UTC] Task P0.2_P0.3 APPROVED!

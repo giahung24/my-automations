@@ -146,7 +146,7 @@ dòng = ~440k dòng `snapshot_assets`/năm, vẫn rất nhỏ với SQLite.
 
 **Checklist P0**
 
-- [ ] **P0.1** Migration `PRAGMA user_version` + backup trước khi migrate — AC §1.1
+- [x] **P0.1** Migration `PRAGMA user_version` + backup trước khi migrate — AC §1.1 — ✅ 2026-11-25 · commit 7d29fd5]
 - [ ] **P0.2** Bảng `snapshot_sources`, cột `snapshots.trigger`, backfill heuristic — AC §1.2
 - [ ] **P0.3** Cột `detail`, `price_id` trong `snapshot_assets`; `portfolio_from_db` trả lại `locations` — AC: snapshot mới có `detail` khác rỗng cho mọi dòng on-chain
 - [ ] **P0.4** `PRAGMA journal_mode=WAL` một lần lúc init — AC: test đọc `mode=ro` trong lúc một transaction ghi đang mở không bị `database is locked`
@@ -1099,9 +1099,9 @@ Trên snapshot mới nhất, tài sản có giá, $w_i = V_i / V$ theo `symbol` 
 
 | ID | Task | Epic | Ưu tiên | Trạng thái | File đích | Phụ thuộc | Hoàn thành (ngày · commit) |
 |---|---|---|---|---|---|---|---|
-| P0.1 | Migration `user_version` + backup | P0 | P0 | `[ ] TODO` | `services/db.py` | — | |
-| P0.2 | `snapshot_sources` + `snapshots.trigger` + backfill hố | P0 | P0 | `[ ] TODO` | `services/db.py`, `services/portfolio.py` | P0.1 | |
-| P0.3 | Lưu `detail`, `price_id` | P0 | P0 | `[ ] TODO` | `services/db.py`, `services/portfolio.py` | P0.1 | |
+| P0.1 | Migration `user_version` + backup | P0 | P0 | `[x] DONE` | `services/db.py` | — | | 2026-11-25 |
+| P0.2 | `snapshot_sources` + `snapshots.trigger` + backfill hố | P0 | P0 | `[x] DONE` | `services/db.py`, `services/portfolio.py` | P0.1 | | 2026-11-25 |
+| P0.3 | Lưu `detail`, `price_id` | P0 | P0 | `[x] DONE` | `services/db.py`, `services/portfolio.py` | P0.1 | | 2026-11-25 |
 | P0.4 | WAL mode | P0 | P0 | `[ ] TODO` | `services/db.py` | — | |
 | P0.5 | Cron 1h/lần | P0 | P0 | `[x] DONE` | crontab | — | 2026-11-25 |
 | P0.6 | Web token + bind LAN + unit systemd | P0 | P0 | `[ ] TODO` | env, `deploy/crypto-web.service` | — | |
@@ -1116,7 +1116,7 @@ Trên snapshot mới nhất, tài sản có giá, $w_i = V_i / V$ theo `symbol` 
 | F1.7 | UI sheet "Vì sao biến động?" | F1 | P1 | `[ ] TODO` | `static/app.js`, `static/index.html`, `static/style.css` | F1.5 | |
 | F1.8 | v2: flow/transfer/income/trade | F1 | P2 | `[ ] TODO` | `services/analytics/attribution.py` | F2.6, F2.8 | |
 | F1.9 | CLI `main.py why` | F1 | P3 | `[ ] TODO` | `main.py` | F1.5 | |
-| F2.1 | Migration v3 `cash_flows`, `sync_state` | F2 | P1 | `[ ] TODO` | `services/db.py` | P0.1 | |
+| F2.1 | Migration v3 `cash_flows`, `sync_state` | F2 | P1 | `[x] DONE` | `services/db.py` | P0.1 | | 2026-11-25 |
 | F2.2 | Binance deposit/withdraw history | F2 | P1 | `[ ] TODO` | `clients/binance.py` | — | |
 | F2.3 | `sync()` + cursor + nối vào `record` | F2 | P1 | `[ ] TODO` | `services/cash_flows.py`, `main.py` | F2.1, F2.2 | |
 | F2.4 | Chuẩn hoá network/địa chỉ/thời gian | F2 | P1 | `[ ] TODO` | `services/cash_flows.py` | — | |
@@ -1135,7 +1135,7 @@ Trên snapshot mới nhất, tài sản có giá, $w_i = V_i / V$ theo `symbol` 
 | F3.T2 | MWR / XIRR | F3 | P2 | `[ ] TODO` | `services/analytics/returns.py` | F3.S1, F2.6 | |
 | F3.P1 | PnL 7d/30d/90d/YTD/ALL + endpoint | F3 | P1 | `[ ] TODO` | `services/analytics/returns.py`, `web_api.py` | F3.T1 | |
 | F3.P2 | UI thẻ PnL | F3 | P2 | `[ ] TODO` | `static/*` | F3.P1 | |
-| F3.B1 | `benchmark_prices` + BTC/ETH klines | F3 | P2 | `[ ] TODO` | `services/analytics/benchmark.py`, `services/db.py` | P0.1 | |
+| F3.B1 | `benchmark_prices` + BTC/ETH klines | F3 | P2 | `[x] DONE` | `services/analytics/benchmark.py`, `services/db.py` | P0.1 | | 2026-11-25 |
 | F3.B2 | SPX Yahoo/Stooq | F3 | P2 | `[ ] TODO` | `services/analytics/benchmark.py` | F3.B1 | |
 | F3.B3 | Base 100 + căn lịch | F3 | P2 | `[ ] TODO` | `services/analytics/benchmark.py` | F3.S1, F3.B1 | |
 | F3.B4 | β, ρ, TE, α, IR + endpoint | F3 | P2 | `[ ] TODO` | `services/analytics/risk.py`, `web_api.py` | F3.B3 | |

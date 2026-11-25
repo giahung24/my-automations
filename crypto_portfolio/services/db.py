@@ -20,7 +20,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from models import BINANCE_EARN, BINANCE_FUNDING, BINANCE_SPOT, ONCHAIN, Portfolio
+from models import (
+    BINANCE_EARN,
+    BINANCE_FUNDING,
+    BINANCE_SPOT,
+    ONCHAIN,
+    STATUS_INFERRED_ERROR,
+    Portfolio,
+    SourceStatus,
+)
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +81,19 @@ MIGRATIONS: list[str] = [
     SCHEMA_V2,  # v2
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
+SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
+
+# How a snapshot was taken (snapshots.trigger).
+TRIGGER_CRON = "cron"        # `main.py record`
+TRIGGER_REFRESH = "refresh"  # POST /api/portfolio/refresh
+TRIGGER_UNKNOWN = "unknown"  # rows older than v2, or a caller that did not say
+TRIGGERS = (TRIGGER_CRON, TRIGGER_REFRESH, TRIGGER_UNKNOWN)
+
+# Backfill heuristic for snapshots that predate snapshot_sources: a source total that drops by
+# more than HOLE_DROP of its previous value and gets back more than HOLE_RECOVERY of that drop
+# in the very next snapshot was almost certainly a failed fetch recorded as 0, not a real move.
+HOLE_DROP = 0.9
+HOLE_RECOVERY = 0.9
 
 
 class MigrationError(RuntimeError):
@@ -95,6 +116,7 @@ class Snapshot:
     binance_earn_usd: float
     binance_funding_usd: float
     onchain_usd: float
+    trigger: str = TRIGGER_UNKNOWN
 
     @property
     def dt(self) -> datetime:
@@ -136,25 +158,36 @@ class Database:
             connection.close()
 
     def _init_schema(self) -> None:
-        migrate(self.path)
+        before = schema_version(self.path)
+        after = migrate(self.path)
+        if before < SOURCES_SCHEMA_VERSION <= after:
+            # the snapshots taken before v2 have no status; mark their obvious holes once
+            inferred = self.backfill_inferred_errors()
+            if inferred:
+                log.info("%s: marked %d inferred source error(s) on old snapshots", self.path, inferred)
 
     def schema_version(self) -> int:
         return schema_version(self.path)
 
     # -- writes ----------------------------------------------------------------
-    def record(self, portfolio: Portfolio) -> int:
-        """Persist one snapshot (totals + per-asset breakdown). Returns the snapshot id.
+    def record(self, portfolio: Portfolio, trigger: str = TRIGGER_UNKNOWN) -> int:
+        """Persist one snapshot (totals, per-asset rows, per-source status). Returns its id.
 
         Every holding is stored, dust included: the dust filter is a display concern, and
-        throwing rows away here would make the history lie about the real total.
+        throwing rows away here would make the history lie about the real total. The status
+        of each source is stored too, so a failed source recorded as 0 is not read later as
+        a real drop. `trigger` says what took the snapshot (`cron`, `refresh`).
         """
+        if trigger not in TRIGGERS:
+            raise ValueError(f"unknown snapshot trigger {trigger!r}; expected one of {TRIGGERS}")
         totals = {source: float(portfolio.totals.get(source, 0.0)) for source in SOURCE_COLUMNS}
+        statuses = portfolio.source_statuses()
         with self.connect() as connection:
             cursor = connection.execute(
                 """INSERT INTO snapshots
                        (timestamp, total_portfolio_usd, binance_spot_usd, binance_earn_usd,
-                        binance_funding_usd, onchain_usd)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                        binance_funding_usd, onchain_usd, trigger)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     portfolio.timestamp or utc_now_iso(),
                     float(portfolio.total_usd),
@@ -162,18 +195,58 @@ class Database:
                     totals[BINANCE_EARN],
                     totals[BINANCE_FUNDING],
                     totals[ONCHAIN],
+                    trigger,
                 ),
             )
             snapshot_id = int(cursor.lastrowid)
             connection.executemany(
-                """INSERT INTO snapshot_assets (snapshot_id, symbol, source, quantity, price_usd, value_usd)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO snapshot_assets
+                       (snapshot_id, symbol, source, quantity, price_usd, value_usd, detail, price_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
-                    (snapshot_id, h.symbol, h.source, float(h.quantity), float(h.price_usd), float(h.value_usd))
+                    (snapshot_id, h.symbol, h.source, float(h.quantity), float(h.price_usd),
+                     float(h.value_usd), h.detail or "", h.price_id or "")
                     for h in portfolio.holdings
                 ],
             )
+            connection.executemany(
+                "INSERT INTO snapshot_sources (snapshot_id, source, status, error) VALUES (?, ?, ?, ?)",
+                [
+                    (snapshot_id, source, status.status, status.error)
+                    for source, status in sorted(statuses.items())
+                ],
+            )
         return snapshot_id
+
+    def backfill_inferred_errors(self) -> int:
+        """Mark the holes of snapshots that have no `snapshot_sources` row (taken before v2).
+
+        For each of the four source totals, a snapshot whose value fell by more than
+        `HOLE_DROP` from the previous snapshot and recovered more than `HOLE_RECOVERY` of the
+        fall in the next one gets `status = 'inferred_error'` for that source. Only single-
+        snapshot holes are detected. Idempotent; returns the number of rows inserted.
+        """
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT s.*, EXISTS (SELECT 1 FROM snapshot_sources x WHERE x.snapshot_id = s.id)
+                              AS has_status
+                   FROM snapshots s ORDER BY s.timestamp, s.id"""
+            ).fetchall()
+            marks = []
+            for previous, current, following in zip(rows, rows[1:], rows[2:]):
+                if current["has_status"]:
+                    continue
+                for source, column in SOURCE_COLUMNS.items():
+                    before, value, after = (float(r[column] or 0) for r in (previous, current, following))
+                    if is_hole(before, value, after):
+                        marks.append((current["id"], source, STATUS_INFERRED_ERROR,
+                                      f"inferred: {column} {before:.2f} -> {value:.2f} -> {after:.2f}"))
+            cursor = connection.executemany(
+                "INSERT OR IGNORE INTO snapshot_sources (snapshot_id, source, status, error) "
+                "VALUES (?, ?, ?, ?)",
+                marks,
+            )
+            return max(cursor.rowcount, 0)
 
     # -- reads -----------------------------------------------------------------
     def history(self, limit: int | None = None, days: int | None = None) -> list[Snapshot]:
@@ -220,15 +293,32 @@ class Database:
     def assets(self, snapshot_id: int) -> list[dict]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT symbol, source, quantity, price_usd, value_usd "
+                "SELECT symbol, source, quantity, price_usd, value_usd, detail, price_id "
                 "FROM snapshot_assets WHERE snapshot_id = ? ORDER BY value_usd DESC",
                 (snapshot_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def sources(self, snapshot_id: int) -> dict[str, SourceStatus]:
+        """`snapshot_sources` of one snapshot: source key -> status (empty for old snapshots)."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT source, status, error FROM snapshot_sources WHERE snapshot_id = ? ORDER BY source",
+                (snapshot_id,),
+            ).fetchall()
+        return {row["source"]: SourceStatus(row["status"], row["error"]) for row in rows}
+
     def latest_assets(self) -> list[dict]:
         snapshot = self.latest()
         return self.assets(snapshot.id) if snapshot else []
+
+
+def is_hole(before: float, value: float, after: float) -> bool:
+    """`value` fell by more than HOLE_DROP of `before` and `after` won back > HOLE_RECOVERY of it."""
+    drop = before - value
+    if before <= 0 or drop <= HOLE_DROP * before:
+        return False
+    return after - value > HOLE_RECOVERY * drop
 
 
 # -- migrations ------------------------------------------------------------------
@@ -360,4 +450,5 @@ def _as_snapshot(row: sqlite3.Row) -> Snapshot:
         binance_earn_usd=float(row["binance_earn_usd"]),
         binance_funding_usd=float(row["binance_funding_usd"]),
         onchain_usd=float(row["onchain_usd"]),
+        trigger=row["trigger"] if "trigger" in row.keys() else TRIGGER_UNKNOWN,
     )

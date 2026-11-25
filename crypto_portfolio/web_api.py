@@ -54,7 +54,7 @@ from models import (
     Holding,
     Portfolio,
 )
-from services.db import Database, parse_timestamp
+from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict
 
 STATIC_DIR = ROOT / "static"
@@ -374,7 +374,7 @@ def create_app(
                     "errors": portfolio.errors,
                 })
             database = Database(cfg.db_path)
-            snapshot_id = database.record(portfolio)
+            snapshot_id = database.record(portfolio, trigger=TRIGGER_REFRESH)
             app.state.live = (portfolio, snapshot_id)
         return portfolio_payload(portfolio, origin="live", database=database, config=cfg,
                                  snapshot_id=snapshot_id)

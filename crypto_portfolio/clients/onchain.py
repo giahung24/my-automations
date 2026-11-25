@@ -231,9 +231,8 @@ class OnChainClient:
                 holding.symbol = str(symbol).upper()
 
     # -- orchestration ---------------------------------------------------------
-    def fetch_all(self, evm_wallets: list[dict], solana_wallets: list[dict]) -> tuple[list[Holding], list[str]]:
-        """Every wallet on every chain, fetched in parallel and priced in one pass."""
-        self.errors = []
+    def _jobs(self, evm_wallets: list[dict], solana_wallets: list[dict]) -> list[tuple]:
+        """`(name, fetch, args)` per wallet and chain; `name` is `<chain>/<label>`."""
         jobs = []
         for wallet in evm_wallets:
             chains = [c for c in (wallet.get("chains") or EVM_CHAINS) if c in self.chains]
@@ -241,6 +240,27 @@ class OnChainClient:
                 jobs.append((f"{chain}/{wallet['label']}", self.fetch_evm, (chain, wallet)))
         for wallet in solana_wallets:
             jobs.append((f"solana/{wallet['label']}", self.fetch_solana, (wallet,)))
+        return jobs
+
+    def sources(self, evm_wallets: list[dict], solana_wallets: list[dict]) -> tuple[list[str], list[str]]:
+        """`(queried, disabled)` `<chain>/<label>` names for `fetch_all` with these wallets.
+
+        `disabled` are EVM chains a wallet lists explicitly but that have no chain configured,
+        so `fetch_all` skips them.
+        """
+        queried = [name for name, _, _ in self._jobs(evm_wallets, solana_wallets)]
+        disabled = [
+            f"{chain}/{wallet['label']}"
+            for wallet in evm_wallets
+            for chain in (wallet.get("chains") or [])
+            if chain not in self.chains
+        ]
+        return queried, disabled
+
+    def fetch_all(self, evm_wallets: list[dict], solana_wallets: list[dict]) -> tuple[list[Holding], list[str]]:
+        """Every wallet on every chain, fetched in parallel and priced in one pass."""
+        self.errors = []
+        jobs = self._jobs(evm_wallets, solana_wallets)
 
         holdings: list[Holding] = []
         if jobs:

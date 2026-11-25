@@ -1,7 +1,17 @@
 """Fetch every source and aggregate the holdings into the per-asset view."""
 from __future__ import annotations
 
-from models import SOURCES, AssetRow, Holding, Portfolio
+from models import (
+    BINANCE_SOURCES,
+    SOURCES,
+    STATUS_ERROR,
+    STATUS_INFERRED_ERROR,
+    AssetRow,
+    Holding,
+    Portfolio,
+    onchain_source,
+    source_statuses,
+)
 from services.db import utc_now_iso
 
 
@@ -59,8 +69,11 @@ def fetch_portfolio(config, min_value: float | None = None) -> Portfolio:
 
     holdings: list[Holding] = []
     errors: list[str] = []
+    expected: list[str] = []  # snapshot_sources keys queried this run
+    disabled: list[str] = []
 
     if config.binance_enabled:
+        expected.extend(BINANCE_SOURCES)
         client = BinanceClient(
             config.binance["api_key"],
             config.binance["api_secret"],
@@ -74,10 +87,16 @@ def fetch_portfolio(config, min_value: float | None = None) -> Portfolio:
         holdings.extend(binance_holdings)
         errors.extend(binance_errors)
     elif config.binance.get("enabled"):
+        expected.extend(BINANCE_SOURCES)
         errors.append("binance: enabled but no API key/secret configured")
+    else:
+        disabled.extend(BINANCE_SOURCES)
 
     if config.has_wallets:
         onchain = OnChainClient(config.chains, timeout=config.timeout, max_workers=config.max_workers)
+        queried, skipped = onchain.sources(config.evm_wallets, config.solana_wallets)
+        expected.extend(onchain_source(name) for name in queried)
+        disabled.extend(onchain_source(name) for name in skipped)
         try:
             onchain_holdings, onchain_errors = onchain.fetch_all(config.evm_wallets, config.solana_wallets)
         except Exception as exc:
@@ -87,25 +106,47 @@ def fetch_portfolio(config, min_value: float | None = None) -> Portfolio:
 
     portfolio = aggregate(holdings, config.min_value if min_value is None else min_value)
     portfolio.errors = errors
+    portfolio.sources = source_statuses(errors, expected=expected, disabled=disabled)
     return portfolio
 
 
 def portfolio_from_db(database, min_value: float = 0.0) -> Portfolio | None:
     """Rebuild the latest stored portfolio, so charts and the web view work with no network.
 
-    Stored rows carry no chain/wallet detail, so `locations` comes back empty.
+    Chain/wallet `detail` and `price_id` come back from schema v2 rows (older rows have them
+    empty, so their `locations` is empty), and so do the per-source statuses and `errors`.
     """
     snapshot = database.latest()
     if snapshot is None:
         return None
     holdings = [
         Holding(symbol=row["symbol"], source=row["source"], quantity=row["quantity"],
-                price_usd=row["price_usd"])
+                price_usd=row["price_usd"], detail=row.get("detail") or "",
+                price_id=row.get("price_id") or "")
         for row in database.assets(snapshot.id)
     ]
     portfolio = aggregate(holdings, min_value)
     portfolio.timestamp = snapshot.timestamp
+    portfolio.sources = database.sources(snapshot.id)
+    portfolio.errors = stored_errors(portfolio.sources)
     return portfolio
+
+
+def stored_errors(sources: dict) -> list[str]:
+    """The fetch errors of a stored snapshot, one per message, in source order, deduplicated.
+
+    One message can be stored on several sources (a pricing failure hits a whole half).
+    """
+    errors: list[str] = []
+    for source, status in sorted(sources.items()):
+        if status.status == STATUS_ERROR:
+            messages = status.error.splitlines() or [f"{source}: error"]
+        elif status.status == STATUS_INFERRED_ERROR:
+            messages = [f"{source}: {status.error or 'probable fetch error (inferred)'}"]
+        else:
+            continue
+        errors.extend(message for message in messages if message not in errors)
+    return errors
 
 
 def to_dict(portfolio: Portfolio) -> dict:

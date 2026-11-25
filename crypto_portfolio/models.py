@@ -5,6 +5,7 @@ dead RPC or an expired API key degrades one source instead of killing the run.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 BINANCE_SPOT = "binance_spot"
@@ -18,6 +19,33 @@ SOURCE_LABELS = {
     BINANCE_FUNDING: "Binance Funding",
     ONCHAIN: "On-chain",
 }
+BINANCE_SOURCES = (BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING)
+
+# Per-snapshot health of each data source (table `snapshot_sources`). The keys are finer than
+# the four `*_usd` totals: on-chain is split per (chain, wallet), because a dead RPC only
+# loses part of the on-chain total.
+STATUS_OK = "ok"
+STATUS_ERROR = "error"
+STATUS_DISABLED = "disabled"
+STATUS_INFERRED_ERROR = "inferred_error"  # backfilled by heuristic on snapshots older than v2
+UNKNOWN_SOURCE = "unknown"  # an error we could not attribute to any source
+
+# Binance error prefixes, as written by `BinanceClient.fetch_all`, -> the source they hit.
+_BINANCE_SECTIONS = {
+    "binance spot:": (BINANCE_SPOT,),
+    "binance simple earn flexible:": (BINANCE_EARN,),
+    "binance simple earn locked:": (BINANCE_EARN,),
+    "binance funding:": (BINANCE_FUNDING,),
+}
+
+
+def onchain_source(name: str) -> str:
+    """`ethereum/main` -> `onchain:ethereum/main`, the `snapshot_sources.source` of a wallet."""
+    return f"{ONCHAIN}:{name}"
+
+
+def is_onchain_source(source: str) -> bool:
+    return source == ONCHAIN or source.startswith(f"{ONCHAIN}:")
 
 
 @dataclass
@@ -64,6 +92,8 @@ class Portfolio:
     errors: list[str] = field(default_factory=list)
     dust_value_usd: float = 0.0
     dust_assets: int = 0
+    # snapshot_sources key -> status; filled by `fetch_portfolio` and `portfolio_from_db`
+    sources: dict[str, SourceStatus] = field(default_factory=dict)
 
     @property
     def total_usd(self) -> float:
@@ -73,3 +103,78 @@ class Portfolio:
     def ok(self) -> bool:
         """True when nothing failed; ``record`` refuses to snapshot an all-failed run."""
         return not self.errors
+
+    def source_statuses(self) -> dict[str, SourceStatus]:
+        """`sources` when the fetch filled it, else a best effort from holdings and errors."""
+        if self.sources:
+            return self.sources
+        return source_statuses(self.errors, expected=holding_sources(self.holdings))
+
+
+@dataclass
+class SourceStatus:
+    """Outcome of one source in one fetch: ``ok``, ``error`` or ``disabled``.
+
+    ``error`` holds every message attributed to the source, one per line.
+    """
+
+    status: str
+    error: str = ""
+
+
+def classify_error(error: str, onchain_sources: Iterable[str] = ()) -> list[str]:
+    """The `snapshot_sources` keys an error message (as produced by the clients) is about.
+
+    A pricing failure zeroes every row of its half, so it hits every source of that half.
+    `onchain_sources` (``onchain:<chain>/<label>`` keys) lets a wallet label that contains
+    spaces be matched exactly; without them the name is cut at the first space or colon.
+    """
+    text = error.strip()
+    lowered = text.lower()
+    onchain_sources = list(onchain_sources)
+    for prefix, sources in _BINANCE_SECTIONS.items():
+        if lowered.startswith(prefix):
+            return list(sources)
+    if lowered.startswith("binance"):  # `binance prices:`, `binance: <client failure>`, no key...
+        return list(BINANCE_SOURCES)
+    if lowered.startswith("defillama") or lowered.startswith(f"{ONCHAIN}:"):
+        return onchain_sources or [ONCHAIN]
+
+    # `<chain>/<label>: ...` or `<chain>/<label> <token>: ...`; longest name wins, so the label
+    # `main` does not swallow an error of the wallet `main 2`
+    for source in sorted(onchain_sources, key=len, reverse=True):
+        name = source.split(":", 1)[1]
+        if text.startswith(name) and text[len(name):len(name) + 1] in (":", " "):
+            return [source]
+    head = text.split(":", 1)[0].split(" ", 1)[0]
+    if "/" in head:
+        return [onchain_source(head)]
+    return [UNKNOWN_SOURCE]
+
+
+def source_statuses(errors: Iterable[str], expected: Iterable[str] = (),
+                    disabled: Iterable[str] = ()) -> dict[str, SourceStatus]:
+    """Status of every source: `disabled`, else `error` if a message names it, else `ok`.
+
+    `expected` are the sources that were queried; a source only named by an error is added.
+    """
+    statuses = {source: SourceStatus(STATUS_DISABLED) for source in disabled}
+    statuses.update({source: SourceStatus(STATUS_OK) for source in expected})
+    onchain = [source for source in statuses if source.startswith(f"{ONCHAIN}:")]
+    for error in errors:
+        for source in classify_error(error, onchain):
+            status = statuses.setdefault(source, SourceStatus(STATUS_OK))
+            status.status = STATUS_ERROR
+            status.error = f"{status.error}\n{error}" if status.error else error
+    return statuses
+
+
+def holding_sources(holdings: Iterable[Holding]) -> set[str]:
+    """The `snapshot_sources` keys that holdings were read from (`onchain:<detail>` on-chain)."""
+    sources = set()
+    for holding in holdings:
+        if holding.source == ONCHAIN:
+            sources.add(onchain_source(holding.detail) if holding.detail else ONCHAIN)
+        else:
+            sources.add(holding.source)
+    return sources
