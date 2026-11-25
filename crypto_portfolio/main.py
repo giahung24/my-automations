@@ -7,6 +7,8 @@
     python main.py chart --type all          write PNG charts into ./charts
     python main.py history                   past snapshots as a table
     python main.py backfill                  rebuild 60 monthly checkpoints (2021-11..2026-10)
+    python main.py pnl                       real PnL 7d/30d, net of deposits/withdrawals
+    python main.py pnl --sync --json         sync Binance deposit/withdraw/fiat/P2P first
     python main.py serve --port 8080         mobile web dashboard (FastAPI + PWA)
 
 Add `--min-value 0` to any command to disable the $1.00 dust filter.
@@ -144,8 +146,12 @@ def cmd_record(args, config) -> int:
         warn_errors(portfolio)
         print("refusing to record an empty snapshot: every source failed", file=sys.stderr)
         return 1
-    snapshot_id = Database(config.db_path).record(portfolio, trigger=TRIGGER_CRON)
+    database = Database(config.db_path)
+    snapshot_id = database.record(portfolio, trigger=TRIGGER_CRON)
     warn_errors(portfolio)  # partial failures are recorded, but still reported on stderr
+    # Deposits/withdrawals (Epic F2): after the commit, and its errors never fail the snapshot.
+    from services.cash_flows import sync_after_record
+    sync_after_record(config, database)
     if args.verbose:
         from services.visualizer import money
         print(f"snapshot #{snapshot_id} recorded: {money(portfolio.total_usd)} at {portfolio.timestamp}")
@@ -195,6 +201,54 @@ def cmd_backfill(args, config) -> int:
     from services.backfill import backfill_command
 
     return backfill_command(Database(config.db_path), args)
+
+
+def render_pnl(report: dict) -> str:
+    from services.visualizer import money
+
+    lines = [""]
+    if not report["flow_adjusted"]:
+        lines.append("  deposits/withdrawals not tracked yet: PnL below is the raw NAV change "
+                     "(run `python main.py pnl --sync`)")
+    elif report["flows_stale"]:
+        lines.append(f"  flows synced up to {report['flows_synced_until']} only")
+    header = f"  {'Window':<8}{'NAV change':>16}{'Net flow':>16}{'PnL':>16}{'Return':>10}"
+    lines += [header, "  " + "─" * (len(header) - 2)]
+    for name, window in report["windows"].items():
+        if not window.get("available"):
+            lines.append(f"  {name:<8}  n/a ({window.get('reason')})")
+            continue
+        ret = "n/a" if window["return_pct"] is None else f"{window['return_pct']:+.2f}%"
+        lines.append(
+            f"  {name:<8}{money(window['nav_change_usd']):>16}{money(window['net_flow_usd']):>16}"
+            f"{money(window['pnl_usd']):>16}{ret:>10}"
+            + ("" if window["complete"] else "  (history shorter than the window)")
+        )
+    return "\n".join(lines) + "\n"
+
+
+def cmd_pnl(args, config) -> int:
+    """Real PnL over 7d / 30d: the NAV change minus net external deposits and withdrawals."""
+    from services.analytics.pnl import pnl_report
+    from services.cash_flows import sync
+
+    database = Database(config.db_path)
+    if args.sync:
+        report = sync(config, database)
+        if report.skipped:
+            print(f"cash-flow sync skipped: {report.skipped}", file=sys.stderr)
+        for error in report.errors:
+            print(f"  warning: {error}", file=sys.stderr)
+    try:
+        payload = pnl_report(database, windows=args.windows)
+    except ValueError as exc:
+        print(f"pnl: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(render_pnl(payload))
+    return 0
 
 
 def _portfolio_from_db(database, min_value: float):
@@ -280,6 +334,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="rebuild monthly history from Binance klines (current holdings, past prices)")
     add_backfill_arguments(backfill)
     backfill.set_defaults(func=cmd_backfill)
+
+    pnl = subparsers.add_parser("pnl", parents=[common],
+                                help="real PnL over 7d/30d, net of deposits and withdrawals")
+    pnl.add_argument("--sync", action="store_true",
+                     help="pull Binance deposit/withdraw/fiat/P2P history first")
+    pnl.add_argument("--windows", type=int, nargs="+", default=[7, 30], metavar="DAYS",
+                     help="window lengths in days (default: 7 30)")
+    pnl.add_argument("--json", action="store_true")
+    pnl.set_defaults(func=cmd_pnl)
 
     serve = subparsers.add_parser("serve", parents=[common], help="run the mobile web dashboard")
     serve.add_argument("--host", default="127.0.0.1",

@@ -632,7 +632,7 @@ def backups(path):
 
 
 def test_migrations_list_defines_v3():
-    assert SCHEMA_VERSION == len(MIGRATIONS) == 3  # v3: snapshots.is_backfilled (P0.8)
+    assert SCHEMA_VERSION == len(MIGRATIONS) == 4  # v4: cash_flows + sync_state (F2)
 
 
 def test_fresh_db_is_created_at_latest_version_without_backup(tmp_path):

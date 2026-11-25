@@ -5,7 +5,9 @@ One row per snapshot in `snapshots` (the totals), one row per asset-and-source i
 `snapshot_sources`. From schema v3, `snapshots.is_backfilled = 1` marks the monthly checkpoints
 reconstructed by `services/backfill.py` (P0.8): they feed the long-range charts, but they are
 never "the latest snapshot", never the reference of a 24h change, and never part of the
-hole heuristic - they were not fetched, so they say nothing about a source's health.
+hole heuristic - they were not fetched, so they say nothing about a source's health. From
+schema v4, `cash_flows` holds deposits/withdrawals (crypto, fiat, P2P) and `sync_state` the
+incremental sync cursors (`services/cash_flows.py`, Epic F2).
 
 The schema is versioned with `PRAGMA user_version` and upgraded by `migrate()` every time
 a `Database` is opened: the pending steps of `MIGRATIONS` run in a single transaction (all or
@@ -88,15 +90,69 @@ ALTER TABLE snapshots ADD COLUMN is_backfilled INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_snapshots_backfilled ON snapshots(is_backfilled, timestamp);
 """
 
+# v4 (F2): deposits, withdrawals, fiat and P2P orders - every quantity change that is money
+# entering or leaving the portfolio rather than profit - plus the incremental sync cursors.
+# ROADMAP_LEDGER §3.3; `channel` and `counterparty_label` are additions of task F2.flow.
+SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS cash_flows (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp             TEXT    NOT NULL,     -- ISO8601 UTC: completion time of the flow
+    window_start          TEXT,                 -- flows inferred from snapshot deltas only
+    source                TEXT    NOT NULL,     -- binance | evm:<chain> | solana
+    account               TEXT    NOT NULL,     -- 'binance' or a wallet address
+    account_label         TEXT    NOT NULL DEFAULT '',
+    asset                 TEXT    NOT NULL,     -- symbol, as in snapshot_assets.symbol
+    network               TEXT    NOT NULL DEFAULT '',  -- Binance network name (ETH, BSC, SOL...)
+    channel               TEXT    NOT NULL DEFAULT 'crypto',  -- crypto | fiat | fiat_payment | p2p | onchain
+    direction             TEXT    NOT NULL CHECK (direction IN ('in', 'out')),
+    amount                REAL    NOT NULL CHECK (amount >= 0),  -- always positive, sign is `direction`
+    fee_amount            REAL    NOT NULL DEFAULT 0 CHECK (fee_amount >= 0),
+    fee_asset             TEXT    NOT NULL DEFAULT '',
+    price_usd             REAL    NOT NULL DEFAULT 0,   -- price of `asset` when the flow happened
+    value_usd             REAL    NOT NULL DEFAULT 0,   -- amount * price_usd, always positive
+    flow_type             TEXT    NOT NULL
+                          CHECK (flow_type IN ('deposit', 'withdrawal', 'reward', 'airdrop', 'fee', 'adjustment')),
+    status                TEXT    NOT NULL DEFAULT 'completed'
+                          CHECK (status IN ('pending', 'completed', 'failed')),
+    tx_hash               TEXT    NOT NULL DEFAULT '',
+    counterparty_address  TEXT    NOT NULL DEFAULT '',  -- withdrawal target / deposit sender, if known
+    counterparty_label    TEXT    NOT NULL DEFAULT '',  -- label of the owned wallet it matched
+    is_internal_transfer  INTEGER NOT NULL DEFAULT 0 CHECK (is_internal_transfer IN (0, 1)),
+    matched_flow_id       INTEGER REFERENCES cash_flows(id) ON DELETE SET NULL,
+    match_method          TEXT    NOT NULL DEFAULT '',  -- address | tx_hash | heuristic | manual
+    match_confidence      REAL    NOT NULL DEFAULT 0 CHECK (match_confidence BETWEEN 0 AND 1),
+    detection_method      TEXT    NOT NULL,     -- binance_api | snapshot_delta | tx_verify | manual
+    classified_by         TEXT    NOT NULL DEFAULT 'auto' CHECK (classified_by IN ('auto', 'user')),
+    snapshot_id_before    INTEGER REFERENCES snapshots(id) ON DELETE SET NULL,
+    snapshot_id_after     INTEGER REFERENCES snapshots(id) ON DELETE SET NULL,
+    external_id           TEXT    NOT NULL,     -- Binance id / order number (prefixed per channel)
+    raw_json              TEXT    NOT NULL DEFAULT '{}',
+    created_at            TEXT    NOT NULL,
+    updated_at            TEXT    NOT NULL,
+    note                  TEXT    NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_cash_flows_ext    ON cash_flows(source, flow_type, external_id);
+CREATE INDEX        IF NOT EXISTS idx_cash_flows_ts    ON cash_flows(timestamp);
+CREATE INDEX        IF NOT EXISTS idx_cash_flows_tx    ON cash_flows(tx_hash) WHERE tx_hash <> '';
+CREATE INDEX        IF NOT EXISTS idx_cash_flows_asset ON cash_flows(asset, timestamp);
+CREATE TABLE IF NOT EXISTS sync_state (
+    key        TEXT PRIMARY KEY,                -- 'binance.deposit', 'binance.withdraw', ...
+    value      TEXT NOT NULL,                   -- epoch ms up to which the stream is synced
+    updated_at TEXT NOT NULL
+);
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
     SCHEMA_V2,  # v2
     SCHEMA_V3,  # v3
+    SCHEMA_V4,  # v4
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
 BACKFILL_SCHEMA_VERSION = 3  # first version with snapshots.is_backfilled
+CASH_FLOWS_SCHEMA_VERSION = 4  # first version with cash_flows / sync_state
 
 # Readers (the `mode=ro` API gateway) never block on, or are blocked by, the collector's writes.
 # Persistent: once set, every later connection to the file - from any process - uses it.

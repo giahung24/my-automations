@@ -1,4 +1,5 @@
-"""Binance read-only balance client (Spot, Simple Earn, Funding) + USDT pricing.
+"""Binance read-only client: balances (Spot, Simple Earn, Funding), USDT pricing, and the
+deposit / withdrawal / fiat / P2P history used by the cash-flow engine (Epic F2).
 
 Signed endpoints use HMAC-SHA256 over the query string with the API secret, exactly as
 documented, and the client only ever issues GET/POST calls that *read* balances - nothing
@@ -12,6 +13,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 import requests
@@ -29,6 +32,67 @@ RETRIES = 3
 # USD proxies tried in order when `<ASSET>USDT` does not exist, then crypto bridges.
 USD_QUOTES = ["USDT", "FDUSD", "USDC", "BUSD", "TUSD"]
 BRIDGE_QUOTES = ["BTC", "ETH", "BNB"]
+
+
+DAY_MS = 86_400_000
+
+
+@dataclass(frozen=True)
+class HistoryStream:
+    """One read-only history endpoint: how to page it and how wide one query may be.
+
+    Binance refuses a time range wider than `window_days`, so a long range is cut into
+    consecutive chunks; each chunk is then paged (`offset` + `limit`, or `page` + `rows`).
+    """
+
+    path: str
+    window_days: int
+    time_keys: tuple[str, str]           # (start, end) parameter names, epoch ms
+    paging: str                          # "offset" (plain list) | "page" ({"data": [...]})
+    page_size: int
+    params: dict = field(default_factory=dict)
+
+
+# ROADMAP_LEDGER §3.4. [to verify against the live API docs] the window caps of the fiat and
+# C2C endpoints are not documented as firmly as the 90 days of the capital ones; 90 / 30 days
+# are the conservative values. Every one of them is a GET and only reads.
+HISTORY_STREAMS: dict[str, HistoryStream] = {
+    "deposit": HistoryStream("/sapi/v1/capital/deposit/hisrec", 90, ("startTime", "endTime"),
+                             "offset", 1000),
+    "withdraw": HistoryStream("/sapi/v1/capital/withdraw/history", 90, ("startTime", "endTime"),
+                              "offset", 1000),
+    "fiat_deposit": HistoryStream("/sapi/v1/fiat/orders", 90, ("beginTime", "endTime"),
+                                  "page", 500, {"transactionType": 0}),
+    "fiat_withdraw": HistoryStream("/sapi/v1/fiat/orders", 90, ("beginTime", "endTime"),
+                                   "page", 500, {"transactionType": 1}),
+    "fiat_buy": HistoryStream("/sapi/v1/fiat/payments", 90, ("beginTime", "endTime"),
+                              "page", 500, {"transactionType": 0}),
+    "fiat_sell": HistoryStream("/sapi/v1/fiat/payments", 90, ("beginTime", "endTime"),
+                               "page", 500, {"transactionType": 1}),
+    "p2p_buy": HistoryStream("/sapi/v1/c2c/orderMatch/listUserOrderHistory", 30,
+                             ("startTimestamp", "endTimestamp"), "page", 100, {"tradeType": "BUY"}),
+    "p2p_sell": HistoryStream("/sapi/v1/c2c/orderMatch/listUserOrderHistory", 30,
+                              ("startTimestamp", "endTimestamp"), "page", 100, {"tradeType": "SELL"}),
+}
+
+
+def time_chunks(start_ms: int, end_ms: int, window_days: int) -> list[tuple[int, int]]:
+    """Cut `[start_ms, end_ms]` into consecutive inclusive ranges no wider than `window_days`.
+
+    365 days with a 90-day cap gives 5 chunks. Each chunk spans at most `window_days` minus one
+    millisecond, so an endpoint that rejects a range of exactly the cap still accepts it.
+    """
+    start_ms, end_ms = int(start_ms), int(end_ms)
+    if end_ms < start_ms:
+        return []
+    span = max(int(window_days), 1) * DAY_MS - 1
+    chunks = []
+    cursor = start_ms
+    while cursor <= end_ms:
+        chunk_end = min(cursor + span, end_ms)
+        chunks.append((cursor, chunk_end))
+        cursor = chunk_end + 1
+    return chunks
 
 
 class BinanceError(RuntimeError):
@@ -226,6 +290,70 @@ class BinanceClient:
                     Holding(symbol=str(row.get("asset", "")).upper(), source=BINANCE_FUNDING, quantity=quantity)
                 )
         return holdings
+
+    # -- cash-flow history (Epic F2) ---------------------------------------------
+    def history_chunks(self, stream: str, start_ms: int, end_ms: int) -> Iterator[tuple[int, list[dict]]]:
+        """Yield `(chunk_end_ms, rows)` for every time chunk of one history stream, oldest first.
+
+        Yielding per chunk lets the caller commit a sync cursor after each one, so a long
+        backfill that hits a rate limit half way resumes where it stopped.
+        """
+        spec = HISTORY_STREAMS[stream]
+        self.sync_time()
+        for chunk_start, chunk_end in time_chunks(start_ms, end_ms, spec.window_days):
+            params = {**spec.params, spec.time_keys[0]: chunk_start, spec.time_keys[1]: chunk_end}
+            yield chunk_end, self._history_pages(spec, params)
+
+    def history(self, stream: str, start_ms: int, end_ms: int) -> list[dict]:
+        """Every row of one history stream between two epoch-ms instants."""
+        rows: list[dict] = []
+        for _, chunk in self.history_chunks(stream, start_ms, end_ms):
+            rows.extend(chunk)
+        return rows
+
+    def deposit_history(self, start_ms: int, end_ms: int) -> list[dict]:
+        """GET /sapi/v1/capital/deposit/hisrec - crypto deposits into Binance."""
+        return self.history("deposit", start_ms, end_ms)
+
+    def withdraw_history(self, start_ms: int, end_ms: int) -> list[dict]:
+        """GET /sapi/v1/capital/withdraw/history - crypto withdrawals out of Binance."""
+        return self.history("withdraw", start_ms, end_ms)
+
+    def fiat_orders(self, transaction_type: int, start_ms: int, end_ms: int) -> list[dict]:
+        """GET /sapi/v1/fiat/orders - bank deposits (0) / withdrawals (1) of fiat."""
+        return self.history("fiat_withdraw" if int(transaction_type) else "fiat_deposit", start_ms, end_ms)
+
+    def fiat_payments(self, transaction_type: int, start_ms: int, end_ms: int) -> list[dict]:
+        """GET /sapi/v1/fiat/payments - crypto bought (0) / sold (1) with a card or bank."""
+        return self.history("fiat_sell" if int(transaction_type) else "fiat_buy", start_ms, end_ms)
+
+    def p2p_orders(self, trade_type: str, start_ms: int, end_ms: int) -> list[dict]:
+        """GET /sapi/v1/c2c/orderMatch/listUserOrderHistory - P2P BUY / SELL orders."""
+        return self.history("p2p_sell" if str(trade_type).upper() == "SELL" else "p2p_buy",
+                            start_ms, end_ms)
+
+    def _history_pages(self, spec: HistoryStream, params: dict) -> list[dict]:
+        """Every page of one time chunk. A full page means there may be another one."""
+        collected: list[dict] = []
+        for page in range(MAX_PAGES):
+            if spec.paging == "offset":
+                payload = self._get(spec.path, {**params, "limit": spec.page_size,
+                                                "offset": page * spec.page_size}, signed=True)
+                if not isinstance(payload, list):
+                    raise BinanceError(f"unexpected payload on {spec.path}: {str(payload)[:200]}")
+                rows = payload
+            else:
+                payload = self._get(spec.path, {**params, "page": page + 1, "rows": spec.page_size},
+                                    signed=True)
+                if not isinstance(payload, dict):
+                    raise BinanceError(f"unexpected payload on {spec.path}: {str(payload)[:200]}")
+                if payload.get("success") is False:
+                    raise BinanceError(f"{spec.path}: {payload.get('message') or payload.get('code')}")
+                rows = payload.get("data") or []
+            collected.extend(row for row in rows if isinstance(row, dict))
+            if len(rows) < spec.page_size:
+                break
+        return collected
 
     def fetch_all(self, stablecoins: set[str] | None = None) -> tuple[list[Holding], list[str]]:
         """Every wallet, priced. A failing section is reported, not raised."""

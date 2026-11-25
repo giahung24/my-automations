@@ -124,6 +124,14 @@ DEFAULTS = {
         "max_workers": 8,          # parallel chain / wallet fetches
         "stablecoins": ["USDT", "USDC", "FDUSD", "DAI", "TUSD", "USDP", "PYUSD", "USDE"],
     },
+    # Epic F2 (ROADMAP_LEDGER §3.8): deposit / withdrawal / fiat / P2P history from Binance.
+    "cash_flows": {
+        "enabled": True,
+        "backfill_days": 365,      # first sync looks this far back
+        "overlap_days": 2,         # later syncs re-read this much, to catch pending -> completed
+        "sync_fiat": True,         # /sapi/v1/fiat/orders + /sapi/v1/fiat/payments
+        "sync_p2p": True,          # /sapi/v1/c2c/orderMatch/listUserOrderHistory
+    },
 }
 
 
@@ -146,6 +154,43 @@ def _split(raw: str) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+@dataclass(frozen=True)
+class CashFlowSettings:
+    """The validated `cash_flows:` block. Anything missing or malformed falls back to the default."""
+
+    enabled: bool = True
+    backfill_days: int = 365
+    overlap_days: int = 2
+    sync_fiat: bool = True
+    sync_p2p: bool = True
+
+    @classmethod
+    def from_raw(cls, raw) -> "CashFlowSettings":
+        raw = raw if isinstance(raw, dict) else {}
+        default = cls()
+
+        def flag(name: str) -> bool:
+            value = raw.get(name, getattr(default, name))
+            if isinstance(value, str):
+                return _as_bool(value)
+            return bool(value)
+
+        def days(name: str, low: int, high: int) -> int:
+            try:
+                value = int(raw.get(name, getattr(default, name)))
+            except (TypeError, ValueError):
+                return getattr(default, name)
+            return min(max(value, low), high)
+
+        return cls(
+            enabled=flag("enabled"),
+            backfill_days=days("backfill_days", 1, 3650),
+            overlap_days=days("overlap_days", 0, 30),
+            sync_fiat=flag("sync_fiat"),
+            sync_p2p=flag("sync_p2p"),
+        )
+
+
 @dataclass
 class Config:
     binance: dict = field(default_factory=dict)
@@ -153,6 +198,7 @@ class Config:
     chains: dict = field(default_factory=dict)
     settings: dict = field(default_factory=dict)
     path: Path | None = None
+    cash_flows: dict = field(default_factory=dict)
 
     # -- convenience accessors -------------------------------------------------
     @property
@@ -204,6 +250,10 @@ class Config:
     @property
     def has_wallets(self) -> bool:
         return bool(self.evm_wallets or self.solana_wallets)
+
+    @property
+    def cash_flow_settings(self) -> CashFlowSettings:
+        return CashFlowSettings.from_raw(self.cash_flows)
 
 
 def _as_address(value) -> str:
@@ -345,4 +395,5 @@ def load_config(path: str | Path | None = None, missing_ok: bool = False) -> Con
         chains=merged["chains"],
         settings=merged["settings"],
         path=config_path if config_path.is_file() else None,
+        cash_flows=merged["cash_flows"] if isinstance(merged.get("cash_flows"), dict) else {},
     )

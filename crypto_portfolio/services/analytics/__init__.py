@@ -17,6 +17,7 @@ from services.analytics.attribution import (
     position_key,
     window_snapshot_ids,
 )
+from services.analytics.pnl import Flow, PnlResult, flow_adjusted_pnl, pnl_report, window_pnl
 
 __all__ = [
     "BUCKETS",
@@ -31,4 +32,9 @@ __all__ = [
     "parse_window",
     "position_key",
     "window_snapshot_ids",
+    "Flow",
+    "PnlResult",
+    "flow_adjusted_pnl",
+    "pnl_report",
+    "window_pnl",
 ]

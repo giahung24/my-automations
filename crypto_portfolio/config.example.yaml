@@ -65,3 +65,14 @@ settings:
   max_workers: 8                        # parallel chain/wallet fetches
   stablecoins: [USDT, USDC, FDUSD, DAI, TUSD, USDP, PYUSD, USDE]   # pinned at $1.00
   # web_token: "long-random-string"     # guards the web API; PORTFOLIO_WEB_TOKEN wins over it
+
+# Deposits, withdrawals, fiat and P2P orders read from Binance (read-only key is enough).
+# They let `python main.py pnl` tell real profit apart from money you moved in or out.
+# A withdrawal to one of the wallets above (on a chain that wallet tracks) is an internal
+# transfer: it leaves Binance but stays in the portfolio, so it is not counted as a flow.
+cash_flows:
+  enabled: true
+  backfill_days: 365        # first sync looks this far back
+  overlap_days: 2           # later syncs re-read this much (pending -> completed)
+  sync_fiat: true           # bank deposits/withdrawals and card purchases
+  sync_p2p: true            # P2P buy/sell orders

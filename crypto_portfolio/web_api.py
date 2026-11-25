@@ -55,6 +55,7 @@ from models import (
     Portfolio,
 )
 from services.analytics.attribution import MAX_WINDOW_HOURS, attribution_report
+from services.analytics.pnl import pnl_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict
 
@@ -425,6 +426,15 @@ def create_app(
                                       group_by=group_by, top=top)
         except ValueError as exc:  # 0h or over 365d: the regex cannot say it
             raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/portfolio/pnl")
+    def portfolio_pnl():
+        """Real PnL over 7d and 30d: NAV change minus net external deposits/withdrawals.
+
+        Reads SQLite only (`cash_flows` is filled by `main.py record`), never the network.
+        `flow_adjusted: false` means no deposit/withdrawal history was synced yet.
+        """
+        return pnl_report(Database(config().db_path))
 
     # -- settings ------------------------------------------------------------------
     def settings_payload(cfg: Config) -> dict:
