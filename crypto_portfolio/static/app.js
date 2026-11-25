@@ -20,12 +20,14 @@
 
   // -- constants ---------------------------------------------------------------
   const RANGES = [
-    { id: '24H', days: 1, label: 'Past 24 hours' },
-    { id: '7D', days: 7, label: 'Past 7 days' },
-    { id: '1M', days: 30, label: 'Past month' },
-    { id: '1Y', days: 365, label: 'Past year' },
-    { id: '5Y', days: 1827, label: 'Past 5 years' },
-    { id: 'ALL', days: 0, label: 'All time' },
+    // `interval`: one point per bucket of that length (services/resample.py). Lightweight Charts
+    // spaces points by index, so a regular cadence is what keeps the X axis proportional to time.
+    { id: '24H', days: 1, interval: '1h', label: 'Past 24 hours' },
+    { id: '7D', days: 7, interval: '4h', label: 'Past 7 days' },
+    { id: '1M', days: 30, interval: '1d', label: 'Past month' },
+    { id: '1Y', days: 365, interval: '1w', label: 'Past year' },
+    { id: '5Y', days: 1827, interval: '1mo', label: 'Past 5 years' },
+    { id: 'ALL', days: 0, interval: '1mo', label: 'All time' },
   ];
   const TABS = [
     { id: 'all', label: 'All', hint: 'Every source' },
@@ -558,11 +560,12 @@
       }
 
       async function loadHistory({ force = false } = {}) {
-        const days = range.value.days;
+        const { days, interval } = range.value;
         if (force) historyCache.clear();
         try {
           if (!historyCache.has(days)) {
-            const data = await api(`/api/portfolio/history?days=${days}`);
+            const tz = -new Date().getTimezoneOffset();   // day/week/month edges follow the viewer's clock
+            const data = await api(`/api/portfolio/history?days=${days}&interval=${interval}&tz_offset=${tz}`);
             historyCache.set(days, Array.isArray(data.points) ? data.points : []);
           }
           if (range.value.days === days) points.value = historyCache.get(days);
@@ -957,8 +960,7 @@
         const rect = chartWrap.value.getBoundingClientRect();
         const logical = chart.timeScale().coordinateToLogical(clientX - rect.left);
         if (logical === null) return;
-        const index = Math.min(pts.length - 1, Math.max(0, Math.round(logical)));
-        const point = pts[index];
+        const point = pts[nearestSnapshot(pts, Math.min(pts.length - 1, Math.max(0, logical)))];
         chart.setCrosshairPosition(point.total_usd, point.time, series);
         const x = chart.timeScale().timeToCoordinate(point.time);
         const half = Math.min(70, rect.width / 2);
@@ -970,6 +972,20 @@
           first: pts[0].total_usd,
           firstDay: fmt.day(pts[0].time),
         };
+      }
+
+      // Index of the real snapshot closest to fractional index `at`. Filler points only keep the
+      // X axis proportional (an interpolated value nobody recorded), so the scrub skips them.
+      function nearestSnapshot(pts, at) {
+        let best = Math.round(at);
+        if (!pts[best].filled) return best;
+        let bestDist = Infinity;
+        for (let lo = Math.floor(at), hi = Math.ceil(at); lo >= 0 || hi < pts.length; lo--, hi++) {
+          if (lo >= 0 && !pts[lo].filled && at - lo < bestDist) { best = lo; bestDist = at - lo; }
+          if (hi < pts.length && !pts[hi].filled && hi - at < bestDist) { best = hi; bestDist = hi - at; }
+          if (bestDist <= hi - at && bestDist <= at - lo) break;
+        }
+        return best;
       }
 
       function endTouch() {

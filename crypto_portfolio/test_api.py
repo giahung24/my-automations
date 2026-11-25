@@ -689,3 +689,29 @@ def test_load_config_missing_ok(tmp_path):
     with pytest.raises(FileNotFoundError):
         config_module.load_config(tmp_path / "nope.yaml")
     assert config_module.load_config(tmp_path / "nope.yaml", missing_ok=True).path is None
+
+
+def test_history_resampled_puts_one_point_per_bucket(tmp_path):
+    client = make_client(tmp_path, sections=CONFIGURED)
+    now = datetime.now(timezone.utc)
+    db = tmp_path / "history.db"
+    seed(db, now - timedelta(days=20), 0.8)
+    for minutes in (90, 60, 30, 5):
+        seed(db, now - timedelta(minutes=minutes), 1.0)
+
+    raw = client.get("/api/portfolio/history", params={"days": 30}).json()
+    assert raw["count"] == 5 and "interval" not in raw            # default stays every snapshot
+
+    body = client.get("/api/portfolio/history", params={"days": 30, "interval": "1d"}).json()
+    assert body["interval"] == "1d"
+    points = body["points"]
+    assert 20 <= len(points) <= 22                                 # one per day, not 2 + 4 hourly
+    assert points[0]["filled"] is False and points[-1]["filled"] is False
+    assert points[-1]["time"] == raw["points"][-1]["time"]        # still ends on the newest snapshot
+    assert sum(not p["filled"] for p in points) <= 3
+
+
+def test_history_rejects_bad_interval(tmp_path):
+    client = make_client(tmp_path)
+    assert client.get("/api/portfolio/history", params={"interval": "2d"}).status_code == 422
+    assert client.get("/api/portfolio/history", params={"tz_offset": 9999}).status_code == 422

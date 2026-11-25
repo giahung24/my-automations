@@ -64,6 +64,7 @@ from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict
+from services.resample import TooManyBuckets, resample
 
 STATIC_DIR = ROOT / "static"
 BINANCE_SOURCES = (BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING)
@@ -386,9 +387,19 @@ def create_app(
                                  snapshot_id=snapshot_id)
 
     @app.get("/api/portfolio/history")
-    def portfolio_history(days: int = Query(30, ge=0, le=36500,
-                                            description="Look-back window in days; 0 = everything")):
-        """Snapshot totals oldest-first, one point per second, ready for a time-series chart."""
+    def portfolio_history(
+        days: int = Query(30, ge=0, le=36500, description="Look-back window in days; 0 = everything"),
+        interval: Literal["raw", "1h", "4h", "1d", "1w", "1mo"] = Query(
+            "raw", description="raw = every snapshot; otherwise one point per bucket (see services/resample.py)"),
+        tz_offset: int = Query(0, ge=-14 * 60, le=14 * 60,
+                               description="Viewer's clock in minutes east of UTC; sets day/week/month edges"),
+    ):
+        """Snapshot totals oldest-first, ready for a time-series chart.
+
+        `raw` keeps one point per second. A bucketed `interval` puts exactly one point in every
+        bucket (empty ones interpolated and flagged `filled`), so a chart that spaces points by
+        index, like Lightweight Charts, shows time proportionally on its X axis.
+        """
         cfg = config()
         snapshots = Database(cfg.db_path).history(days=days or None)
         points: dict[int, dict] = {}
@@ -408,6 +419,12 @@ def create_app(
                 "is_backfilled": snapshot.is_backfilled,
             }
         ordered = [points[key] for key in sorted(points)]
+        if interval != "raw":
+            try:
+                ordered = resample(ordered, interval, tz_offset)
+            except TooManyBuckets as error:
+                raise HTTPException(422, str(error)) from error
+            return {"days": days or None, "interval": interval, "count": len(ordered), "points": ordered}
         return {"days": days or None, "count": len(ordered), "points": ordered}
 
     @app.get("/api/portfolio/attribution")
