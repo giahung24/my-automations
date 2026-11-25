@@ -10,3 +10,5 @@ config.yaml.bak
 .config-*.yaml
 .env
 .env.gateway
+logs/
+*.log
