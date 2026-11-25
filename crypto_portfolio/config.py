@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -253,16 +254,24 @@ class ManualAsset:
     `label` is unique and is the key everywhere (`snapshot_assets.detail`, `manual:<label>` in
     `snapshot_sources`, `cash_flows.account`). `updated_at` is the day the quantities were last
     edited (set by the settings screen), '' when unknown.
+
+    `linked_wallet` is the label of a configured on-chain wallet (`wallets.evm` / `wallets.solana`)
+    that is the same physical device - the BTC on the Ledger whose EVM address is also tracked.
+    It only changes how the dashboard *groups* the asset; data and analytics still key on `label`
+    and `source = 'manual'`. '' when the asset stands alone.
     """
 
     label: str
     kind: str
     holdings: tuple[ManualHolding, ...]
     updated_at: str = ""
+    linked_wallet: str = ""
 
     def to_raw(self) -> dict:
         """The config.yaml form of this asset (what `parse_manual_assets` reads back)."""
         entry: dict = {"label": self.label, "kind": self.kind}
+        if self.linked_wallet:
+            entry["linked_wallet"] = self.linked_wallet
         if self.updated_at:
             entry["updated_at"] = self.updated_at
         entry["holdings"] = []
@@ -291,13 +300,28 @@ def _number(value) -> float | None:
     return number
 
 
-def parse_manual_assets(raw) -> tuple[list[ManualAsset], list[str]]:
+def resolve_linked_wallet(value, wallet_labels: Iterable[str]) -> str | None:
+    """The configured wallet label `value` names (case-insensitive), or None when none matches."""
+    wanted = str(value).strip().casefold()
+    for label in wallet_labels:
+        if label.casefold() == wanted:
+            return label
+    return None
+
+
+def parse_manual_assets(raw, wallet_labels: Iterable[str] | None = None) -> tuple[list[ManualAsset], list[str]]:
     """Validate the `manual_assets:` block. Returns ``(assets, errors)``, never raises.
 
     Each problem yields one readable message and only the faulty part is dropped: a holding
     with a negative quantity is skipped but its siblings are kept; an asset with a missing or
     duplicate label is skipped whole (the label is its key). A missing block is ``([], [])``.
+
+    `wallet_labels` are the labels of the configured wallets. A `linked_wallet` must name one of
+    them (case-insensitive, stored with the wallet's own spelling); one that does not is reported
+    and the asset is kept *unlinked* - dropping it would book its whole balance as a withdrawal.
+    ``None`` skips that check (the caller validates later).
     """
+    wallet_labels = None if wallet_labels is None else list(wallet_labels)
     if raw is None:
         return [], []
     if not isinstance(raw, list):
@@ -375,8 +399,21 @@ def parse_manual_assets(raw) -> tuple[list[ManualAsset], list[str]]:
         if len(raw_holdings) > MANUAL_HOLDINGS_MAX:
             errors.append(f"{where}: only the first {MANUAL_HOLDINGS_MAX} holdings are read")
         updated_at = entry.get("updated_at") or ""
+        linked_wallet = ""
+        raw_link = entry.get("linked_wallet")
+        if raw_link is not None and not isinstance(raw_link, str):
+            errors.append(f"{where}: linked_wallet must be a wallet label (text); ignored")
+        elif raw_link and raw_link.strip():
+            if wallet_labels is None:
+                linked_wallet = raw_link.strip()
+            else:
+                linked_wallet = resolve_linked_wallet(raw_link, wallet_labels) or ""
+                if not linked_wallet:
+                    known = ", ".join(f"'{name}'" for name in wallet_labels) or "none configured"
+                    errors.append(f"{where}: linked_wallet '{raw_link.strip()}' is not a configured wallet "
+                                  f"(wallets.evm / wallets.solana labels: {known}); shown unlinked")
         assets.append(ManualAsset(label=label, kind=kind, holdings=tuple(holdings),
-                                  updated_at=str(updated_at).strip()))
+                                  updated_at=str(updated_at).strip(), linked_wallet=linked_wallet))
     return assets, errors
 
 
@@ -673,13 +710,25 @@ class Config:
         return CashFlowSettings.from_raw(self.cash_flows)
 
     @property
+    def wallet_labels(self) -> list[str]:
+        """Labels of the configured wallets, EVM then Solana, each once (a `linked_wallet` target).
+
+        One label on both lists is one device holding both kinds of keys (a Ledger)."""
+        labels: list[str] = []
+        for wallet in self.evm_wallets + self.solana_wallets:
+            label = str(wallet.get("label") or "")
+            if label and label not in labels:
+                labels.append(label)
+        return labels
+
+    @property
     def manual(self) -> list[ManualAsset]:
         """The valid manual assets (invalid entries are dropped, see `manual_errors`)."""
-        return parse_manual_assets(self.manual_assets)[0]
+        return parse_manual_assets(self.manual_assets, self.wallet_labels)[0]
 
     @property
     def manual_errors(self) -> list[str]:
-        return parse_manual_assets(self.manual_assets)[1]
+        return parse_manual_assets(self.manual_assets, self.wallet_labels)[1]
 
     @property
     def has_manual_assets(self) -> bool:

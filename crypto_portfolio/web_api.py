@@ -43,6 +43,8 @@ from config import (
     ManualHolding,
     _normalize_wallets,
     parse_allocation,
+    parse_manual_assets,
+    resolve_linked_wallet,
     active_env_overrides,
     load_config,
     read_raw_config,
@@ -72,7 +74,7 @@ from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.manual import after_snapshot, last_changes
-from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict
+from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict, wallet_groups
 from services.resample import TooManyBuckets, resample
 
 STATIC_DIR = ROOT / "static"
@@ -133,6 +135,8 @@ class ManualHoldingIn(BaseModel):
 class ManualAssetIn(BaseModel):
     label: str = Field(min_length=1, max_length=40)
     kind: Literal["cold_wallet", "staking", "other"] = "cold_wallet"
+    # label of a configured wallet that is the same device (shown together); None/"" = standalone
+    linked_wallet: str | None = Field(default=None, max_length=40)
     holdings: list[ManualHoldingIn] = Field(default_factory=list, max_length=50)
 
 
@@ -283,6 +287,7 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
         asset["manual_quantity"] = by_qty.get(MANUAL, 0.0)
         asset["manual_value_usd"] = round(by_value.get(MANUAL, 0.0), 2)
         asset["manual_labels"] = manual_labels.get(asset["symbol"], [])
+        asset.setdefault("locations_by_source", {})
 
     totals = portfolio.totals
     cex = sum(totals.get(s, 0.0) for s in BINANCE_SOURCES)
@@ -298,7 +303,12 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
             "binance": round(cex, 2),
             "onchain": round(totals.get(ONCHAIN, 0.0), 2),
             "manual": round(totals.get(MANUAL, 0.0), 2),
+            # the Wallets view: self-custody (on-chain + manual) grouped by physical wallet
+            "wallets": round(self_custody, 2),
         },
+        # display-only grouping; PnL, TWR and snapshot_sources keep on-chain and manual apart
+        wallet_groups=wallet_groups(portfolio.holdings, config.wallet_labels, config.manual,
+                                    config.min_value),
         # Exchange vs your own keys; a manual asset (cold wallet, validator) is self-custody.
         custody={
             "cex_usd": round(cex, 2),
@@ -719,12 +729,22 @@ def create_app(
             if body.wallets is not None:
                 raw["wallets"] = _wallet_sections(body.wallets, raw.get("wallets"))
 
+            labels = _file_wallet_labels(raw)
+            if {"EVM_WALLETS", "SOLANA_WALLETS"} & set(active_env_overrides()):
+                labels = config().wallet_labels  # the wallets that actually run come from the env
             if body.manual_assets is not None:
-                section = _manual_section(body.manual_assets, raw.get("manual_assets"))
+                section = _manual_section(body.manual_assets, raw.get("manual_assets"), labels)
                 if section:
                     raw["manual_assets"] = section
                 else:
                     raw.pop("manual_assets", None)
+            elif body.wallets is not None:
+                # a renamed or removed wallet must not leave a manual asset pointing at nothing
+                dangling = [error for error in parse_manual_assets(raw.get("manual_assets"), labels)[1]
+                            if "linked_wallet" in error]
+                if dangling:
+                    raise HTTPException(422, dangling[0] + ". Link the manual asset to another wallet "
+                                        "or unlink it first.")
 
             try:
                 write_raw_config(raw, path)
@@ -920,6 +940,7 @@ def manual_asset_view(asset: ManualAsset, last_change: str = "", today: datetime
     return {
         "label": asset.label,
         "kind": asset.kind,
+        "linked_wallet": asset.linked_wallet or None,
         "holdings": [
             {"symbol": h.symbol, "quantity": h.quantity, "price_id": h.price_id,
              "price_usd": h.price_usd, "liquid": h.liquid}
@@ -932,14 +953,26 @@ def manual_asset_view(asset: ManualAsset, last_change: str = "", today: datetime
     }
 
 
-def _manual_section(assets: list[ManualAssetIn], existing) -> list[dict]:
+def _file_wallet_labels(raw: dict) -> list[str]:
+    """Labels of the wallets in a raw config.yaml mapping (EVM then Solana, each once)."""
+    wallets = raw.get("wallets") if isinstance(raw.get("wallets"), dict) else {}
+    labels: list[str] = []
+    for kind in ("evm", "solana"):
+        for wallet in _normalize_wallets(wallets.get(kind)):
+            if wallet["label"] not in labels:
+                labels.append(wallet["label"])
+    return labels
+
+
+def _manual_section(assets: list[ManualAssetIn], existing, wallet_labels=None) -> list[dict]:
     """The `manual_assets:` block to write. Labels must be unique (case-insensitive).
 
     `updated_at` moves to today only for an asset whose quantities changed (or is new); an
     asset saved untouched keeps its date, so the staking reminder is not reset by accident.
+    A `linked_wallet` must name one of `wallet_labels` (422 otherwise) and is stored with the
+    wallet's own spelling.
     """
-    from config import parse_manual_assets
-
+    wallet_labels = list(wallet_labels or [])
     previous = {asset.label.casefold(): asset for asset in parse_manual_assets(existing)[0]}
     today = datetime.now(timezone.utc).date().isoformat()
     section, seen = [], set()
@@ -963,8 +996,16 @@ def _manual_section(assets: list[ManualAssetIn], existing) -> list[dict]:
         same = old is not None and {(x.symbol, x.quantity) for x in old.holdings} == \
             {(x.symbol, x.quantity) for x in holdings}
         updated_at = old.updated_at if same and old.updated_at else ("" if same else today)
+        linked = ""
+        if item.linked_wallet and item.linked_wallet.strip():
+            linked = resolve_linked_wallet(item.linked_wallet, wallet_labels) or ""
+            if not linked:
+                known = ", ".join(f"'{name}'" for name in wallet_labels) or "none configured"
+                raise HTTPException(422, f"Manual asset '{label}' is linked to wallet "
+                                         f"'{item.linked_wallet.strip()}', which is not configured "
+                                         f"(wallets: {known}).")
         section.append(ManualAsset(label=label, kind=item.kind, holdings=tuple(holdings),
-                                   updated_at=updated_at).to_raw())
+                                   updated_at=updated_at, linked_wallet=linked).to_raw())
     return section
 
 

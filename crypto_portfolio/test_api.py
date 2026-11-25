@@ -148,7 +148,8 @@ def test_portfolio_empty_when_nothing_configured_or_recorded(tmp_path):
     assert data["total_usd"] == 0
     assert data["assets"] == []
     assert data["change_24h"] is None
-    assert data["groups"] == {"all": 0, "binance": 0, "onchain": 0, "manual": 0}  # manual: M6.2
+    assert data["groups"] == {"all": 0, "binance": 0, "onchain": 0, "manual": 0, "wallets": 0}  # manual: M6.2
+    assert data["wallet_groups"] == []
 
 
 def test_portfolio_reads_latest_snapshot_without_fetching(tmp_path):

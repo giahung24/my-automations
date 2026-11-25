@@ -38,9 +38,16 @@
     { id: 'all', label: 'All', hint: 'Every source' },
     { id: 'binance', label: 'Binance', hint: 'Spot + Simple Earn + Funding' },
     { id: 'onchain', label: 'On-chain', hint: 'Every configured wallet and chain' },
+    { id: 'wallets', label: 'Wallets', hint: 'Self-custody by physical wallet: on-chain + manual coins together' },
   ];
   const SOURCE_ORDER = ['binance_spot', 'binance_earn', 'binance_funding', 'onchain', 'manual'];
   const BINANCE_SOURCES = ['binance_spot', 'binance_earn', 'binance_funding'];
+  // Sources each asset-list tab shows. A location is filtered by the source it was read from
+  // (`locations_by_source`), never guessed from its spelling: a manual label has no `chain/`.
+  const TAB_SOURCES = { binance: BINANCE_SOURCES, onchain: ['onchain'], all: SOURCE_ORDER };
+  const CHAIN_LABELS = {
+    ethereum: 'Ethereum', bsc: 'BNB Chain', arbitrum: 'Arbitrum', base: 'Base', polygon: 'Polygon', solana: 'Solana',
+  };
   const CHAIN_COLORS = {
     ethereum: '#7B93F0', bsc: '#F0B90B', arbitrum: '#28A0F0',
     base: '#3D7BFF', polygon: '#9B6CF0', solana: '#14F195',
@@ -257,7 +264,7 @@
 
   const emptyPortfolio = () => ({
     timestamp: '', total_usd: 0, origin: 'empty', configured: true, assets: [], errors: [],
-    groups: { all: 0, binance: 0, onchain: 0 }, source_labels: {}, change_24h: null,
+    groups: { all: 0, binance: 0, onchain: 0, wallets: 0 }, wallet_groups: [], source_labels: {}, change_24h: null,
     dust: { assets: 0, value_usd: 0 }, min_value: 1,
   });
 
@@ -392,6 +399,7 @@
           ...data,
           assets: Array.isArray(data.assets) ? data.assets : [],
           errors: Array.isArray(data.errors) ? data.errors : [],
+          wallet_groups: Array.isArray(data.wallet_groups) ? data.wallet_groups : [],
           groups: { ...base.groups, ...(data.groups || {}) },
           dust: data.dust || base.dust,
         };
@@ -555,13 +563,30 @@
       });
 
       // -- computed: assets ----------------------------------------------------
+      // Where an asset sits, for the tab's sources only. On-chain names read `chain/wallet`; a
+      // manual label is tagged as such so "My Ledgy" the cold wallet is not mistaken for the
+      // on-chain wallet of the same name. Old payloads without the split fall back to nothing
+      // rather than to a guess.
+      function assetLocations(asset, sources) {
+        const bySource = asset.locations_by_source || {};
+        const out = [];
+        for (const source of sources) {
+          for (const name of bySource[source] || []) {
+            const text = source === 'manual' ? `${name} (manual)` : name;
+            if (!out.includes(text)) out.push(text);
+          }
+        }
+        return out;
+      }
+
       const visibleAssets = computed(() => {
         const p = portfolio.value;
         const tab = tabId.value;
         const groupTotal = num(p.groups[tab]);
         const labels = p.source_labels || {};
         const minValue = num(p.min_value);
-        const sources = tab === 'binance' ? BINANCE_SOURCES : tab === 'onchain' ? ['onchain'] : SOURCE_ORDER;
+        const sources = TAB_SOURCES[tab] || SOURCE_ORDER;
+        if (tab === 'wallets') return [];   // that tab renders walletGroups instead
 
         return p.assets
           .map((asset) => {
@@ -587,14 +612,21 @@
               }));
             return {
               symbol: asset.symbol, quantity, value, pct, price: num(asset.price_usd), breakdown,
-              locations: tab === 'binance' ? (asset.locations || []).filter((l) => !l.includes('/'))
-                : tab === 'onchain' ? (asset.locations || []).filter((l) => l.includes('/'))
-                  : (asset.locations || []),
+              locations: assetLocations(asset, sources),
             };
           })
           .filter((a) => a.quantity > 0 && (tab === 'all' || a.value >= minValue))
           .sort((a, b) => b.value - a.value || a.symbol.localeCompare(b.symbol));
       });
+
+      // Wallets tab: one card per physical wallet. A manual asset linked to a configured wallet
+      // (`linked_wallet`) sits in that wallet's card next to its on-chain coins; each row keeps
+      // its source, so declared balances never pass for RPC reads.
+      const walletGroups = computed(() => (portfolio.value.wallet_groups || [])
+        .filter((g) => (g.holdings || []).length || num(g.dust && g.dust.assets)));
+      const walletRowWhere = (row) => (row.source === 'onchain'
+        ? (CHAIN_LABELS[row.chain] || row.chain || 'On-chain')
+        : `Manual · ${manualKindLabel(row.manual_kind)}`);
 
       // Width of the value column: wide enough for the longest balance or price in the list, so
       // money is never cut off. Tabular Manrope digits are ~9.3px at 15px/800, ~7.8px at 13px/600.
@@ -610,6 +642,7 @@
         if (portfolio.value.origin === 'empty') return 'No balances fetched yet';
         if (tabId.value === 'binance') return 'No Binance balances to show';
         if (tabId.value === 'onchain') return 'No on-chain balances to show';
+        if (tabId.value === 'wallets') return 'No self-custody balances to show';
         return 'No balances above the dust filter';
       });
       const emptyHint = computed(() => {
@@ -617,6 +650,7 @@
         if (portfolio.value.origin === 'empty') return 'Fetch balances to take your first snapshot.';
         if (tabId.value === 'binance') return `Binance is not connected, or nothing there is worth ${min} or more.`;
         if (tabId.value === 'onchain') return `No wallet is configured, or nothing on-chain is worth ${min} or more.`;
+        if (tabId.value === 'wallets') return 'Add a wallet address or a manual asset (cold wallet, staking) in Settings.';
         return `Every asset is worth less than ${min}. They still count in the total.`;
       });
 
@@ -1518,7 +1552,7 @@
 
       // -- settings ------------------------------------------------------------
       const manualSnapshot = () => JSON.stringify(form.manual.map((a) => ({
-        label: a.label, kind: a.kind,
+        label: a.label, kind: a.kind, linked_wallet: a.linked_wallet || null,
         holdings: a.holdings.map((h) => ({ symbol: h.symbol, quantity: num(h.quantity), price_id: h.price_id || '',
           price_usd: h.price_usd ?? null, liquid: h.liquid !== false })),
       })));
@@ -1537,7 +1571,8 @@
         form.binance.clear = false;
         form.wallets = data.wallets.map((w) => ({ name: w.name, address: w.address, type: w.type, chains: [...w.chains] }));
         form.manual = (data.manual_assets || []).map((a) => ({
-          label: a.label, kind: a.kind, updated_at: a.updated_at, age_days: a.age_days, review_hint: a.review_hint,
+          label: a.label, kind: a.kind, linked_wallet: a.linked_wallet || '',
+          updated_at: a.updated_at, age_days: a.age_days, review_hint: a.review_hint,
           holdings: a.holdings.map((h) => ({ symbol: h.symbol, quantity: num(h.quantity), price_id: h.price_id || '',
             price_usd: h.price_usd ?? null, liquid: h.liquid !== false })),
         }));
@@ -1676,8 +1711,11 @@
       const secretCheck = computed(() => (settings.value
         ? credentialCheck(form.binance.api_secret, form.binance.api_key, settings.value.binance.has_api_secret, 'secret key', 'API key')
         : null));
-      const saveBlocker = computed(() => ([keyCheck.value, secretCheck.value].some((c) => c && c.tone === 'error')
-        ? 'Fix the Binance key first' : ''));
+      const saveBlocker = computed(() => {
+        if ([keyCheck.value, secretCheck.value].some((c) => c && c.tone === 'error')) return 'Fix the Binance key first';
+        const orphan = form.manual.find((a) => a.linked_wallet && !walletOptions.value.includes(a.linked_wallet));
+        return orphan ? `Re-link "${orphan.label}": wallet "${orphan.linked_wallet}" is gone` : '';
+      });
 
       const fieldClass = (check) => ({
         'is-invalid': !!check && check.tone === 'error',
@@ -1852,8 +1890,14 @@
         const chains = kind === 'solana' ? ['solana'] : d.chains.filter((c) => c !== 'solana');
         if (!chains.length) { draftError.value = 'Pick at least one chain to scan.'; return; }
         const entry = { name: d.name.trim(), address: d.address, type: kind, chains };
+        const before = d.index === -1 ? null : walletLabel(form.wallets[d.index]);
         if (d.index === -1) form.wallets.push(entry);
         else form.wallets.splice(d.index, 1, entry);
+        // a renamed wallet takes its linked manual assets along, unless another wallet keeps the old name
+        const after = walletLabel(entry);
+        if (before && before !== after && !walletOptions.value.includes(before)) {
+          form.manual.forEach((a) => { if (a.linked_wallet === before) a.linked_wallet = after; });
+        }
         draft.value = null;
         draftError.value = '';
       }
@@ -1887,6 +1931,11 @@
 
       // manual assets (M6): balances no API can read - a hardware wallet, a validator, another exchange
       const manualKindLabel = (id) => (MANUAL_KINDS.find((k) => k.id === id) || MANUAL_KINDS[2]).label;
+      // The label config.yaml stores for a wallet (the backend default when no name is given).
+      const walletLabel = (w) => (w.name || '').trim() || `${w.address.slice(0, 6)}..${w.address.slice(-4)}`;
+      // Configured wallets a manual asset can be linked to, each label once (EVM and Solana
+      // keys of one Ledger may share a name: same device).
+      const walletOptions = computed(() => [...new Set(form.wallets.map(walletLabel))]);
       const manualSummary = (asset) => asset.holdings.map((h) => `${fmt.qty(h.quantity)} ${h.symbol}`).join(' · ') || 'No balances';
       const manualAge = (asset) => {
         if (asset.age_days === null || asset.age_days === undefined) return '';
@@ -1905,7 +1954,7 @@
 
       function newManual() {
         armedManual.value = -1;
-        manualDraft.value = { index: -1, label: '', kind: 'cold_wallet', holdings: [blankHolding('BTC')], error: '', labelError: false };
+        manualDraft.value = { index: -1, label: '', kind: 'cold_wallet', linked_wallet: '', holdings: [blankHolding('BTC')], error: '', labelError: false };
         focusManual();
       }
 
@@ -1913,7 +1962,7 @@
         const a = form.manual[index];
         armedManual.value = -1;
         manualDraft.value = {
-          index, label: a.label, kind: a.kind, error: '', labelError: false,
+          index, label: a.label, kind: a.kind, linked_wallet: a.linked_wallet || '', error: '', labelError: false,
           holdings: a.holdings.map((h) => ({ ...h, quantity: String(h.quantity), invalid: '' })),
         };
         focusManual('.holding-qty input');
@@ -1946,7 +1995,13 @@
         if (!d) return;
         d.error = '';
         d.labelError = false;
-        const label = d.label.trim();
+        if (d.linked_wallet && !walletOptions.value.includes(d.linked_wallet)) {
+          d.error = `Wallet "${d.linked_wallet}" is no longer configured. Pick another one or "None".`;
+          focusManual('#manual-link');
+          return;
+        }
+        // Linked to a wallet: the name may stay empty and defaults to the wallet's, no retyping.
+        const label = d.label.trim() || d.linked_wallet;
         if (!label) { d.error = 'Give it a name, e.g. Ledger or Lido.'; d.labelError = true; focusManual('#manual-label'); return; }
         if (form.manual.some((a, i) => i !== d.index && a.label.toLowerCase() === label.toLowerCase())) {
           d.error = `"${label}" is already in the list. Names must be unique.`;
@@ -1976,7 +2031,7 @@
         }
         const previous = d.index === -1 ? null : form.manual[d.index];
         const entry = {
-          label, kind: d.kind,
+          label, kind: d.kind, linked_wallet: d.linked_wallet || '',
           updated_at: previous ? previous.updated_at : null,
           age_days: previous ? previous.age_days : null,
           review_hint: previous ? previous.review_hint : null,
@@ -2063,7 +2118,7 @@
         openSettings, closeSettings, onSheetKeydown, saveSettings, testBinance, clearBinance,
         draft, draftError, draftKind, armedDelete, chainColor, chainShort, chainAllowed,
         toggleChain, newWallet, editWallet, cancelDraft, applyDraft, deleteWallet, testWallet,
-        manualKinds: MANUAL_KINDS, manualDraft, armedManual, manualKindLabel, manualSummary, manualAge,
+        manualKinds: MANUAL_KINDS, walletOptions, walletGroups, walletRowWhere, manualDraft, armedManual, manualKindLabel, manualSummary, manualAge,
         newManual, editManual, cancelManual, addHolding, removeHolding, applyManual, deleteManual,
       };
     },

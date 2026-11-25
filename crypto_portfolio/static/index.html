@@ -240,7 +240,7 @@
         <!-- Source filter + asset breakdown -->
         <section v-else class="mt-5" aria-labelledby="assets-title">
           <h2 id="assets-title" class="sr-only">Assets</h2>
-          <div class="segmented" role="tablist" aria-label="Filter by source">
+          <div class="segmented segmented-4" role="tablist" aria-label="Filter by source">
             <button v-for="tab in tabs" :key="tab.id" type="button" class="segment" role="tab"
                     :aria-selected="tabId === tab.id" @click="tabId = tab.id" :title="tab.hint">
               <span class="seg-label">{{ tab.label }}</span>
@@ -248,7 +248,7 @@
             </button>
           </div>
 
-          <div class="asset-cols asset-head mt-4 text-[12px] font-bold text-ink-3" :style="{ '--value-col': valueCol }">
+          <div v-if="tabId !== 'wallets'" class="asset-cols asset-head mt-4 text-[12px] font-bold text-ink-3" :style="{ '--value-col': valueCol }">
             <span class="min-w-0 flex-1">{{ visibleAssets.length }} {{ visibleAssets.length === 1 ? 'asset' : 'assets' }}</span>
             <span class="share">Share</span><span class="value-col">Value</span>
           </div>
@@ -261,7 +261,57 @@
             </div>
           </div>
 
-          <ul v-else-if="visibleAssets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
+          <!-- Wallets: one card per physical wallet; a manual asset linked to a configured wallet
+               (linked_wallet) is listed with that wallet's on-chain coins, each row tagged by source -->
+          <div v-else-if="tabId === 'wallets' && walletGroups.length" class="mt-4 space-y-3">
+            <section v-for="group in walletGroups" :key="group.id" class="card wallet-group" :aria-label="group.label">
+              <header class="wallet-group-head">
+                <span class="min-w-0 flex-1">
+                  <span class="flex min-w-0 items-center gap-2">
+                    <span class="truncate text-[15px] font-extrabold tracking-tight">{{ group.label }}</span>
+                    <span v-if="group.type === 'manual'" class="kind-badge" :class="'kind-' + group.manual_kind">{{ manualKindLabel(group.manual_kind) }}</span>
+                  </span>
+                  <span class="block truncate text-[12px] font-semibold text-ink-3">
+                    <template v-if="group.type === 'wallet'">
+                      {{ group.chains.length ? group.chains.map((c) => walletRowWhere({ source: 'onchain', chain: c })).join(' · ') : 'On-chain' }}<template v-if="group.linked_manual.length"> + manual<template v-if="group.linked_manual.some((l) => l !== group.label)">: {{ group.linked_manual.join(', ') }}</template></template>
+                    </template>
+                    <template v-else>Declared by hand, not read on-chain</template>
+                  </span>
+                </span>
+                <span class="value-col num" style="--value-col: auto">
+                  <span class="block whitespace-nowrap text-[15px] font-extrabold priv">{{ fmt.money(group.value_usd) }}</span>
+                  <span v-if="group.type === 'wallet' && group.manual_value_usd > 0" class="block whitespace-nowrap text-[12px] font-semibold text-ink-3">
+                    <span class="priv priv-soft">{{ fmt.money(group.manual_value_usd) }}</span> manual
+                  </span>
+                </span>
+              </header>
+              <ul class="wallet-group-rows">
+                <li v-for="row in group.holdings" :key="row.source + ':' + row.symbol + ':' + (row.chain || row.manual_label)" class="wallet-group-row">
+                  <span class="coin coin-sm" :style="{ '--hue': fmt.hue(row.symbol) }" aria-hidden="true">
+                    <img v-if="coinIcon(row.symbol)" :src="coinIcon(row.symbol)" alt="" @error="iconFailed[row.symbol] = true">
+                    <span v-else>{{ fmt.badge(row.symbol) }}</span>
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="flex min-w-0 items-center gap-2">
+                      <span class="truncate text-[14px] font-extrabold">{{ row.symbol }}</span>
+                      <span class="src-badge" :class="'src-' + row.source">{{ walletRowWhere(row) }}</span>
+                    </span>
+                    <span class="block truncate text-[12px] font-semibold text-ink-3 num priv priv-soft">{{ fmt.qty(row.quantity) }}</span>
+                  </span>
+                  <span class="num text-right">
+                    <span class="block whitespace-nowrap text-[14px] font-extrabold priv">{{ fmt.money(row.value_usd) }}</span>
+                    <span class="block whitespace-nowrap text-[12px] font-semibold text-ink-3">{{ fmt.price(row.price_usd) }}</span>
+                  </span>
+                </li>
+              </ul>
+              <p v-if="group.dust && group.dust.assets" class="px-4 pb-3 text-[12px] text-ink-3">
+                + {{ group.dust.assets }} small {{ group.dust.assets === 1 ? 'balance' : 'balances' }}
+                (<span class="priv priv-soft num">{{ fmt.money(group.dust.value_usd) }}</span>)
+              </p>
+            </section>
+          </div>
+
+          <ul v-else-if="tabId !== 'wallets' && visibleAssets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
             <li v-for="asset in visibleAssets" :key="asset.symbol">
               <button type="button" class="asset-row" @click="toggleAsset(asset.symbol)"
                       :aria-expanded="expanded === asset.symbol">
@@ -308,7 +358,7 @@
             </button>
           </div>
 
-          <p v-if="!loading && portfolio.dust && portfolio.dust.assets" class="mt-3 px-1 text-[12px] text-ink-3">
+          <p v-if="!loading && tabId !== 'wallets' && portfolio.dust && portfolio.dust.assets" class="mt-3 px-1 text-[12px] text-ink-3">
             {{ portfolio.dust.assets }} {{ portfolio.dust.assets === 1 ? 'balance' : 'balances' }} under
             {{ fmt.money(portfolio.min_value) }} hidden
             (<span class="priv priv-soft num">{{ fmt.money(portfolio.dust.value_usd) }}</span>, counted in the total).
@@ -1096,6 +1146,10 @@
                             <span class="truncate font-extrabold">{{ asset.label }}</span>
                             <span class="kind-badge" :class="'kind-' + asset.kind">{{ manualKindLabel(asset.kind) }}</span>
                           </p>
+                          <p v-if="asset.linked_wallet" class="mt-0.5 truncate text-[12px] font-semibold"
+                             :class="walletOptions.includes(asset.linked_wallet) ? 'text-ink-3' : 'text-down'">
+                            {{ walletOptions.includes(asset.linked_wallet) ? 'Linked to wallet ' + asset.linked_wallet : 'Wallet ' + asset.linked_wallet + ' is gone: edit to re-link' }}
+                          </p>
                           <p class="mt-0.5 truncate text-[13px] font-semibold text-ink-2 num priv priv-soft">{{ manualSummary(asset) }}</p>
                           <p v-if="manualAge(asset)" class="text-[12px] text-ink-3">{{ manualAge(asset) }}</p>
                         </div>
@@ -1116,16 +1170,37 @@
                   <!-- Manual asset editor -->
                   <div v-if="manualDraft" class="mt-4 rounded-2xl border border-line bg-surface-2/60 p-3.5" ref="manualEl">
                     <p class="mb-3 text-[14px] font-extrabold">{{ manualDraft.index === -1 ? 'Add manual asset' : 'Edit ' + (form.manual[manualDraft.index] || {}).label }}</p>
-                    <label class="label" for="manual-label">Name</label>
-                    <div class="field mb-3" :class="{ 'is-invalid': manualDraft.labelError }">
-                      <input id="manual-label" v-model="manualDraft.label" maxlength="40" placeholder="e.g. Ledger, Lido, Kraken" autocomplete="off"
-                             enterkeyhint="next" :aria-invalid="manualDraft.labelError ? 'true' : null">
+                    <label class="label" for="manual-kind">Kind</label>
+                    <div class="field field-select mb-3">
+                      <select id="manual-kind" v-model="manualDraft.kind">
+                        <option v-for="k in manualKinds" :key="k.id" :value="k.id">{{ k.label }}</option>
+                      </select>
+                      <svg class="icon icon-xs" aria-hidden="true"><use href="#i-chevron"/></svg>
                     </div>
 
-                    <p class="label" id="manual-kind-label">Type</p>
-                    <div class="flex flex-wrap gap-2" role="group" aria-labelledby="manual-kind-label">
-                      <button v-for="k in manualKinds" :key="k.id" type="button" class="chain-toggle" style="--chain: #8AB4FF"
-                              :aria-pressed="manualDraft.kind === k.id" @click="manualDraft.kind = k.id">{{ k.label }}</button>
+                    <label class="label" for="manual-link">Linked wallet <span class="font-semibold text-ink-3">(optional)</span></label>
+                    <div class="field field-select">
+                      <select id="manual-link" v-model="manualDraft.linked_wallet" aria-describedby="manual-link-hint">
+                        <option value="">— None / standalone name —</option>
+                        <option v-for="w in walletOptions" :key="w" :value="w">{{ w }}</option>
+                        <option v-if="manualDraft.linked_wallet && !walletOptions.includes(manualDraft.linked_wallet)" :value="manualDraft.linked_wallet" disabled>
+                          {{ manualDraft.linked_wallet }} (no longer configured)
+                        </option>
+                      </select>
+                      <svg class="icon icon-xs" aria-hidden="true"><use href="#i-chevron"/></svg>
+                    </div>
+                    <p id="manual-link-hint" class="field-msg mb-3">
+                      <svg class="icon icon-xs"><use href="#i-info"/></svg>
+                      <span v-if="manualDraft.linked_wallet">Same device as the on-chain wallet "{{ manualDraft.linked_wallet }}": shown in its card on the Wallets tab, still counted as manual.</span>
+                      <span v-else-if="walletOptions.length">Pick a wallet when these coins sit on the same device (e.g. BTC on the Ledger whose ETH address is tracked).</span>
+                      <span v-else>No on-chain wallet configured yet: this asset stands on its own.</span>
+                    </p>
+
+                    <label class="label" for="manual-label">Name <span v-if="manualDraft.linked_wallet" class="font-semibold text-ink-3">(optional)</span></label>
+                    <div class="field mb-3" :class="{ 'is-invalid': manualDraft.labelError }">
+                      <input id="manual-label" v-model="manualDraft.label" maxlength="40" autocomplete="off"
+                             :placeholder="manualDraft.linked_wallet || 'e.g. Ledger, Lido, Kraken'"
+                             enterkeyhint="next" :aria-invalid="manualDraft.labelError ? 'true' : null">
                     </div>
 
                     <p class="label mt-4" id="manual-holdings-label">Balances</p>

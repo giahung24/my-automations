@@ -598,6 +598,7 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 .btn-sm { min-height: 40px; padding: 0 12px; font-size: 13px; border-radius: 12px; }
 .btn-sm.btn-ghost { padding: 0 10px; }
 .segmented-2 { grid-template-columns: repeat(2, 1fr); }
+.segmented-4 { grid-template-columns: repeat(4, 1fr); }
 .segmented-2 .segment { min-height: 46px; }
 .field-prefix { padding-left: 14px; font-weight: 700; color: var(--ink-3); }
 .field .field-prefix + input { padding-left: 4px; }
@@ -737,8 +738,28 @@ button.flow-row:active { background: var(--surface-2); }
 }
 .kind-badge.kind-cold_wallet { background: rgba(138, 180, 255, 0.13); color: #C5D7FA; }
 .kind-badge.kind-staking { background: rgba(34, 229, 139, 0.12); color: var(--up); }
+.field-select { position: relative; }
+.field-select select {
+  flex: 1; min-width: 0; height: 46px; padding: 0 38px 0 14px; appearance: none; -webkit-appearance: none;
+  border: 0; background: transparent; outline: none; font: inherit; font-size: 16px; color: inherit; cursor: pointer;
+}
+.field-select select option { background: var(--surface-2); color: var(--ink); }
+.field-select .icon { position: absolute; right: 14px; pointer-events: none; color: var(--ink-3); }
 .holding-row { display: flex; align-items: center; gap: 8px; }
 .holding-sym { width: 104px; flex: none; }
 .holding-sym input { text-transform: uppercase; }
 .holding-qty { flex: 1; min-width: 0; }
 @media (max-width: 380px) { .holding-sym { width: 80px; } .holding-row { gap: 6px; } .holding-row .icon-btn { width: 36px; } }
+
+/* -- Wallets tab: self-custody grouped by physical wallet ------------------------------ */
+.wallet-group-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 10px; }
+.wallet-group-rows { border-top: 1px solid var(--line); }
+.wallet-group-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+.wallet-group-row + .wallet-group-row { border-top: 1px solid var(--line); }
+.coin.coin-sm { width: 30px; height: 30px; font-size: 11px; }
+/* where a row was read from: RPC (on-chain) or declared by hand (manual) - never blended */
+.src-badge {
+  flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 6px;
+  font-size: 11px; font-weight: 800; letter-spacing: 0.03em; background: var(--surface-3); color: var(--ink-2);
+}
+.src-badge.src-manual { background: rgba(138, 180, 255, 0.13); color: #C5D7FA; }

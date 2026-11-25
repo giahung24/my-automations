@@ -91,7 +91,10 @@ class AssetRow:
     price_usd: float = 0.0
     value_usd: float = 0.0
     pct: float = 0.0
-    details: list[str] = field(default_factory=list)
+    details: list[str] = field(default_factory=list)  # every location, all sources mixed
+    # source -> locations read from it (`ethereum/main` on-chain, the asset label manual): what
+    # a source filter must use - a location string alone does not say where it came from
+    details_by_source: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
