@@ -82,6 +82,9 @@ def iso(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).replace(microsecond=0).isoformat()
 
 
+EARN_WINDOW_CAP_MS = 30 * DAY_MS  # Simple Earn rewardsRecord rejects wider ranges (-6021)
+
+
 class FakeBinance:
     """A requests.Session stand-in serving Binance history from in-memory rows.
 
@@ -147,6 +150,10 @@ class FakeBinance:
             rows = [r for r in self.p2p if r["tradeType"] == params["tradeType"]
                     and self._in_range(r["createTime"], params["startTimestamp"], params["endTimestamp"])]
             return FakeResponse(self._paged(rows, params))
+        if "/simple-earn/" in url and "/history/rewardsRecord" in url \
+                and params["endTime"] - params["startTime"] > EARN_WINDOW_CAP_MS:
+            # live Binance answers -6021 for a range wider than its Simple Earn cap
+            return FakeResponse({"code": -6021, "msg": "Query time range too large"}, status=400)
         if "/simple-earn/flexible/history/rewardsRecord" in url:
             rows = [r for r in self.earn_flexible if r.get("type") == params["type"]
                     and self._in_range(r["time"], params["startTime"], params["endTime"])]
@@ -177,8 +184,10 @@ class FakeBinance:
         return [url for _, url, _ in self.calls if fragment in url]
 
 
-def client_for(session: FakeBinance) -> BinanceClient:
-    return BinanceClient("k" * 64, "s" * 64, session=session)
+def client_for(session: FakeBinance, sleeps: list | None = None) -> BinanceClient:
+    """A client whose request throttle records its pauses instead of sleeping."""
+    sink = sleeps if sleeps is not None else []
+    return BinanceClient("k" * 64, "s" * 64, session=session, sleep=sink.append)
 
 
 def deposit_row(id_, coin, amount, when, status=1, network="ETH", source_address="", tx="0xdep"):
@@ -366,6 +375,52 @@ def test_p2p_unsuccessful_payload_raises():
 
     with pytest.raises(BinanceError, match="no permission"):
         client_for(Session()).p2p_orders("BUY", NOW_MS - DAY_MS, NOW_MS)
+
+
+EARN_STREAMS_UNDER_TEST = ("earn_flexible", "earn_flexible_bonus", "earn_locked")
+
+
+@pytest.mark.parametrize("stream", EARN_STREAMS_UNDER_TEST)
+def test_earn_reward_streams_use_a_30_day_window(stream):
+    # Regression: 90-day chunks were rejected live with -6021 "Query time range too large".
+    assert HISTORY_STREAMS[stream].window_days <= 30
+
+
+@pytest.mark.parametrize("stream", EARN_STREAMS_UNDER_TEST)
+def test_earn_5_year_backfill_never_exceeds_the_api_range_cap(stream):
+    session = FakeBinance()
+    client = client_for(session)
+    client.history(stream, NOW_MS - 5 * 365 * DAY_MS, NOW_MS)  # raises on a -6021 answer
+    calls = [p for _, u, p in session.calls if "rewardsRecord" in u]
+    assert len(calls) == len(time_chunks(NOW_MS - 5 * 365 * DAY_MS, NOW_MS, 30))
+    assert all(c["endTime"] - c["startTime"] < 30 * DAY_MS for c in calls)
+
+
+def test_fiat_orders_are_spaced_to_respect_their_uid_weight():
+    # GET /sapi/v1/fiat/orders weighs UID 90000 out of 180000 per minute: 2 calls a minute.
+    # Deposits and withdrawals share that budget, so the spacing is per path, across streams.
+    assert HISTORY_STREAMS["fiat_deposit"].min_interval_s >= 30
+    assert HISTORY_STREAMS["fiat_withdraw"].min_interval_s >= 30
+    sleeps: list[float] = []
+    session = FakeBinance()
+    client = client_for(session, sleeps)
+    client.fiat_orders(0, NOW_MS - DAY_MS, NOW_MS)
+    assert sleeps == []  # the first call of a process never waits
+    client.fiat_orders(1, NOW_MS - DAY_MS, NOW_MS)
+    assert len(sleeps) == 1 and sleeps[0] >= 30
+    client.deposit_history(NOW_MS - DAY_MS, NOW_MS)  # unthrottled stream: no pause
+    assert len(sleeps) == 1
+
+
+def test_fiat_rate_limit_keeps_the_cursor_for_the_next_sync(tmp_path, monkeypatch):
+    monkeypatch.setattr("clients.binance.time.sleep", lambda _s: None)  # 429 back-off
+    config = make_config(tmp_path)
+    database = Database(config.db_path)
+    report = sync(config, database, client=client_for(full_session(fail={"/fiat/orders": 429})),
+                  now_ms=NOW_MS)
+    assert any("fiat deposit" in e and "429" in e for e in report.errors)
+    assert get_cursor(database, "binance.fiat_deposit") is None  # retried in full next time
+    assert get_cursor(database, "binance.deposit") is not None   # other streams unaffected
 
 
 def test_history_streams_are_all_read_only_get_paths():

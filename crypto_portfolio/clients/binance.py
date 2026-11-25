@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
@@ -52,20 +52,31 @@ class HistoryStream:
                                          # | "current" ({"rows": [...], "total": n}, Simple Earn)
     page_size: int
     params: dict = field(default_factory=dict)
+    min_interval_s: float = 0.0          # least pause between two calls to `path` (rate limit)
 
 
 # ROADMAP_LEDGER §3.4. [to verify against the live API docs] the window caps of the fiat and
 # C2C endpoints are not documented as firmly as the 90 days of the capital ones; 90 / 30 days
 # are the conservative values. Every one of them is a GET and only reads.
+#
+# GET /sapi/v1/fiat/orders weighs UID(90000) against a 180000-per-minute UID budget: two calls a
+# minute, shared by deposits and withdrawals. Spacing them 31 s apart avoids the HTTP 429 that a
+# back-to-back backfill otherwise hits after the second call.
+FIAT_ORDERS_INTERVAL_S = 31.0
+# Simple Earn rewardsRecord weighs IP(150) against 12000 per minute: 1 s apart stays well under.
+EARN_REWARDS_INTERVAL_S = 1.0
+# Simple Earn rewardsRecord answers -6021 "Query time range too large" for a 90-day range
+# (verified live, 2026-11); 30 days is accepted.
+EARN_WINDOW_DAYS = 30
 HISTORY_STREAMS: dict[str, HistoryStream] = {
     "deposit": HistoryStream("/sapi/v1/capital/deposit/hisrec", 90, ("startTime", "endTime"),
                              "offset", 1000),
     "withdraw": HistoryStream("/sapi/v1/capital/withdraw/history", 90, ("startTime", "endTime"),
                               "offset", 1000),
     "fiat_deposit": HistoryStream("/sapi/v1/fiat/orders", 90, ("beginTime", "endTime"),
-                                  "page", 500, {"transactionType": 0}),
+                                  "page", 500, {"transactionType": 0}, FIAT_ORDERS_INTERVAL_S),
     "fiat_withdraw": HistoryStream("/sapi/v1/fiat/orders", 90, ("beginTime", "endTime"),
-                                   "page", 500, {"transactionType": 1}),
+                                   "page", 500, {"transactionType": 1}, FIAT_ORDERS_INTERVAL_S),
     "fiat_buy": HistoryStream("/sapi/v1/fiat/payments", 90, ("beginTime", "endTime"),
                               "page", 500, {"transactionType": 0}),
     "fiat_sell": HistoryStream("/sapi/v1/fiat/payments", 90, ("beginTime", "endTime"),
@@ -74,14 +85,17 @@ HISTORY_STREAMS: dict[str, HistoryStream] = {
                              ("startTimestamp", "endTimestamp"), "page", 100, {"tradeType": "BUY"}),
     "p2p_sell": HistoryStream("/sapi/v1/c2c/orderMatch/listUserOrderHistory", 30,
                               ("startTimestamp", "endTimestamp"), "page", 100, {"tradeType": "SELL"}),
-    # Simple Earn income (M4). [to verify against the live API docs] the 3-month window cap and
-    # whether `type=ALL` is accepted; the two documented types are queried one by one instead.
-    "earn_flexible": HistoryStream("/sapi/v1/simple-earn/flexible/history/rewardsRecord", 90,
-                                   ("startTime", "endTime"), "current", 100, {"type": "REALTIME"}),
-    "earn_flexible_bonus": HistoryStream("/sapi/v1/simple-earn/flexible/history/rewardsRecord", 90,
-                                         ("startTime", "endTime"), "current", 100, {"type": "BONUS"}),
-    "earn_locked": HistoryStream("/sapi/v1/simple-earn/locked/history/rewardsRecord", 90,
-                                 ("startTime", "endTime"), "current", 100),
+    # Simple Earn income (M4). [to verify against the live API docs] whether `type=ALL` is
+    # accepted; the two documented types are queried one by one instead.
+    "earn_flexible": HistoryStream("/sapi/v1/simple-earn/flexible/history/rewardsRecord",
+                                   EARN_WINDOW_DAYS, ("startTime", "endTime"), "current", 100,
+                                   {"type": "REALTIME"}, EARN_REWARDS_INTERVAL_S),
+    "earn_flexible_bonus": HistoryStream("/sapi/v1/simple-earn/flexible/history/rewardsRecord",
+                                         EARN_WINDOW_DAYS, ("startTime", "endTime"), "current", 100,
+                                         {"type": "BONUS"}, EARN_REWARDS_INTERVAL_S),
+    "earn_locked": HistoryStream("/sapi/v1/simple-earn/locked/history/rewardsRecord",
+                                 EARN_WINDOW_DAYS, ("startTime", "endTime"), "current", 100,
+                                 {}, EARN_REWARDS_INTERVAL_S),
 }
 
 
@@ -110,7 +124,7 @@ class BinanceError(RuntimeError):
 
 class BinanceClient:
     def __init__(self, api_key: str, api_secret: str, timeout: int = 20, recv_window: int = 5000,
-                 session: requests.Session | None = None):
+                 session: requests.Session | None = None, sleep: Callable[[float], object] = time.sleep):
         self.api_key = api_key
         self.api_secret = (api_secret or "").encode()
         self.timeout = timeout
@@ -120,6 +134,8 @@ class BinanceClient:
         self._time_offset_ms = 0
         self._synced = False
         self._prices: dict[str, float] | None = None
+        self._sleep = sleep                       # injectable so tests do not really wait
+        self._last_call: dict[str, float] = {}    # path -> time.monotonic() of its last call
 
     # -- transport -------------------------------------------------------------
     def _request(self, method: str, path: str, hosts: list[str], params: dict | None = None,
@@ -354,10 +370,22 @@ class BinanceClient:
         return self.history("p2p_sell" if str(trade_type).upper() == "SELL" else "p2p_buy",
                             start_ms, end_ms)
 
+    def _throttle(self, spec: HistoryStream) -> None:
+        """Wait until `spec.min_interval_s` has passed since the last call to the same path."""
+        if spec.min_interval_s <= 0:
+            return
+        last = self._last_call.get(spec.path)
+        if last is not None:
+            wait = spec.min_interval_s - (time.monotonic() - last)
+            if wait > 0:
+                self._sleep(wait)
+        self._last_call[spec.path] = time.monotonic()
+
     def _history_pages(self, spec: HistoryStream, params: dict) -> list[dict]:
         """Every page of one time chunk. A full page means there may be another one."""
         collected: list[dict] = []
         for page in range(MAX_PAGES):
+            self._throttle(spec)
             if spec.paging == "offset":
                 payload = self._get(spec.path, {**params, "limit": spec.page_size,
                                                 "offset": page * spec.page_size}, signed=True)
