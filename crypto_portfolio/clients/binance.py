@@ -1,5 +1,5 @@
 """Binance read-only client: balances (Spot, Simple Earn, Funding), USDT pricing, and the
-deposit / withdrawal / fiat / P2P history used by the cash-flow engine (Epic F2).
+deposit / withdrawal / fiat / P2P / Earn-reward history used by the cash-flow engine (Epic F2, M4).
 
 Signed endpoints use HMAC-SHA256 over the query string with the API secret, exactly as
 documented, and the client only ever issues GET/POST calls that *read* balances - nothing
@@ -49,6 +49,7 @@ class HistoryStream:
     window_days: int
     time_keys: tuple[str, str]           # (start, end) parameter names, epoch ms
     paging: str                          # "offset" (plain list) | "page" ({"data": [...]})
+                                         # | "current" ({"rows": [...], "total": n}, Simple Earn)
     page_size: int
     params: dict = field(default_factory=dict)
 
@@ -73,6 +74,14 @@ HISTORY_STREAMS: dict[str, HistoryStream] = {
                              ("startTimestamp", "endTimestamp"), "page", 100, {"tradeType": "BUY"}),
     "p2p_sell": HistoryStream("/sapi/v1/c2c/orderMatch/listUserOrderHistory", 30,
                               ("startTimestamp", "endTimestamp"), "page", 100, {"tradeType": "SELL"}),
+    # Simple Earn income (M4). [to verify against the live API docs] the 3-month window cap and
+    # whether `type=ALL` is accepted; the two documented types are queried one by one instead.
+    "earn_flexible": HistoryStream("/sapi/v1/simple-earn/flexible/history/rewardsRecord", 90,
+                                   ("startTime", "endTime"), "current", 100, {"type": "REALTIME"}),
+    "earn_flexible_bonus": HistoryStream("/sapi/v1/simple-earn/flexible/history/rewardsRecord", 90,
+                                         ("startTime", "endTime"), "current", 100, {"type": "BONUS"}),
+    "earn_locked": HistoryStream("/sapi/v1/simple-earn/locked/history/rewardsRecord", 90,
+                                 ("startTime", "endTime"), "current", 100),
 }
 
 
@@ -298,11 +307,24 @@ class BinanceClient:
         Yielding per chunk lets the caller commit a sync cursor after each one, so a long
         backfill that hits a rate limit half way resumes where it stopped.
         """
+        for _, chunk_end, rows in self.history_windows(stream, start_ms, end_ms):
+            yield chunk_end, rows
+
+    def history_windows(self, stream: str, start_ms: int, end_ms: int,
+                        newest_first: bool = False) -> Iterator[tuple[int, int, list[dict]]]:
+        """Yield `(chunk_start_ms, chunk_end_ms, rows)` for every time chunk of one stream.
+
+        `newest_first` walks backwards in time: a back-fill that extends the history further
+        into the past (5 years, M4) can then record how far back it got after each chunk.
+        """
         spec = HISTORY_STREAMS[stream]
         self.sync_time()
-        for chunk_start, chunk_end in time_chunks(start_ms, end_ms, spec.window_days):
+        chunks = time_chunks(start_ms, end_ms, spec.window_days)
+        if newest_first:
+            chunks.reverse()
+        for chunk_start, chunk_end in chunks:
             params = {**spec.params, spec.time_keys[0]: chunk_start, spec.time_keys[1]: chunk_end}
-            yield chunk_end, self._history_pages(spec, params)
+            yield chunk_start, chunk_end, self._history_pages(spec, params)
 
     def history(self, stream: str, start_ms: int, end_ms: int) -> list[dict]:
         """Every row of one history stream between two epoch-ms instants."""
@@ -342,6 +364,17 @@ class BinanceClient:
                 if not isinstance(payload, list):
                     raise BinanceError(f"unexpected payload on {spec.path}: {str(payload)[:200]}")
                 rows = payload
+            elif spec.paging == "current":
+                payload = self._get(spec.path, {**params, "current": page + 1, "size": spec.page_size},
+                                    signed=True)
+                if not isinstance(payload, dict):
+                    raise BinanceError(f"unexpected payload on {spec.path}: {str(payload)[:200]}")
+                rows = payload.get("rows") or []
+                total = _to_int(payload.get("total"))
+                collected.extend(row for row in rows if isinstance(row, dict))
+                if len(rows) < spec.page_size or (total and len(collected) >= total):
+                    break
+                continue
             else:
                 payload = self._get(spec.path, {**params, "page": page + 1, "rows": spec.page_size},
                                     signed=True)

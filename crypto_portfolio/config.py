@@ -127,12 +127,14 @@ DEFAULTS = {
     # Epic F2 (ROADMAP_LEDGER §3.8): deposit / withdrawal / fiat / P2P history from Binance.
     "cash_flows": {
         "enabled": True,
-        "backfill_days": 365,      # first sync looks this far back
+        "backfill_days": 1827,     # history kept in sync: 5 years (the maximum); raising it later back-fills the gap
         "overlap_days": 2,         # later syncs re-read this much, to catch pending -> completed
         "sync_fiat": True,         # /sapi/v1/fiat/orders + /sapi/v1/fiat/payments
         "sync_p2p": True,          # /sapi/v1/c2c/orderMatch/listUserOrderHistory
+        "sync_earn": True,         # Simple Earn flexible + locked rewards (income, M4)
         "in_transit_hours": 2,     # a Binance withdrawal this old can still pair with a manual change
         "amount_tolerance_pct": 0.5,  # |withdrawn - fee - received| allowed when pairing, % of withdrawn
+        "match_window_minutes": 30,   # heuristic transfer matching: time slack around a flow (§3.6)
     },
     # Epic M6 (ROADMAP_LEDGER §9.3): balances with no API - BTC on a hardware wallet, staking
     # elsewhere. Validated by `parse_manual_assets`; a bad entry is skipped, never fatal.
@@ -159,17 +161,23 @@ def _split(raw: str) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+# Binance history is synced at most 5 years back (M4.activity_tab): 5 x 365 + 2 leap days.
+MAX_BACKFILL_DAYS = 1827
+
+
 @dataclass(frozen=True)
 class CashFlowSettings:
     """The validated `cash_flows:` block. Anything missing or malformed falls back to the default."""
 
     enabled: bool = True
-    backfill_days: int = 365
+    backfill_days: int = MAX_BACKFILL_DAYS
     overlap_days: int = 2
     sync_fiat: bool = True
     sync_p2p: bool = True
+    sync_earn: bool = True
     in_transit_hours: int = 2
     amount_tolerance_pct: float = 0.5
+    match_window_minutes: int = 30
 
     @classmethod
     def from_raw(cls, raw) -> "CashFlowSettings":
@@ -200,12 +208,14 @@ class CashFlowSettings:
 
         return cls(
             enabled=flag("enabled"),
-            backfill_days=days("backfill_days", 1, 3650),
+            backfill_days=days("backfill_days", 1, MAX_BACKFILL_DAYS),
             overlap_days=days("overlap_days", 0, 30),
             sync_fiat=flag("sync_fiat"),
             sync_p2p=flag("sync_p2p"),
+            sync_earn=flag("sync_earn"),
             in_transit_hours=days("in_transit_hours", 0, 720),
             amount_tolerance_pct=percent("amount_tolerance_pct", 0.0, 10.0),
+            match_window_minutes=days("match_window_minutes", 1, 1440),
         )
 
 

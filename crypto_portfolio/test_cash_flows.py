@@ -68,6 +68,8 @@ READ_ONLY_PATHS = {
     "/sapi/v1/fiat/orders",
     "/sapi/v1/fiat/payments",
     "/sapi/v1/c2c/orderMatch/listUserOrderHistory",
+    "/sapi/v1/simple-earn/flexible/history/rewardsRecord",
+    "/sapi/v1/simple-earn/locked/history/rewardsRecord",
 }
 
 
@@ -89,7 +91,7 @@ class FakeBinance:
     """
 
     def __init__(self, deposits=(), withdrawals=(), fiat_orders=(), fiat_payments=(), p2p=(),
-                 tickers=None, fail=None, fail_after=None):
+                 tickers=None, fail=None, fail_after=None, earn_flexible=(), earn_locked=()):
         self.deposits = list(deposits)
         self.withdrawals = list(withdrawals)
         self.fiat_orders = {0: [], 1: []}
@@ -99,6 +101,8 @@ class FakeBinance:
         for row in fiat_payments:
             self.fiat_payments[row.pop("_type", 0)].append(row)
         self.p2p = list(p2p)
+        self.earn_flexible = list(earn_flexible)   # rows carry "type": REALTIME | BONUS
+        self.earn_locked = list(earn_locked)
         self.tickers = tickers or {"ETHUSDT": "3000", "BTCUSDT": "60000", "EURUSDT": "1.10"}
         self.fail = fail or {}
         self.fail_after = fail_after or {}
@@ -143,7 +147,20 @@ class FakeBinance:
             rows = [r for r in self.p2p if r["tradeType"] == params["tradeType"]
                     and self._in_range(r["createTime"], params["startTimestamp"], params["endTimestamp"])]
             return FakeResponse(self._paged(rows, params))
+        if "/simple-earn/flexible/history/rewardsRecord" in url:
+            rows = [r for r in self.earn_flexible if r.get("type") == params["type"]
+                    and self._in_range(r["time"], params["startTime"], params["endTime"])]
+            return FakeResponse(self._current(rows, params))
+        if "/simple-earn/locked/history/rewardsRecord" in url:
+            rows = [r for r in self.earn_locked
+                    if self._in_range(r["time"], params["startTime"], params["endTime"])]
+            return FakeResponse(self._current(rows, params))
         return FakeResponse({"code": -1121, "msg": "unknown"}, status=404)
+
+    @staticmethod
+    def _current(rows, params):
+        page, size = params["current"], params["size"]
+        return {"rows": rows[(page - 1) * size: page * size], "total": len(rows)}
 
     @staticmethod
     def _offset(rows, params):
@@ -468,7 +485,7 @@ def test_interrupted_backfill_resumes_from_last_chunk(tmp_path):
     session = FakeBinance(fail={"deposit/hisrec": 401}, fail_after={"deposit/hisrec": 2})
     report = sync(config, database, client=client_for(session), now_ms=NOW_MS)
     assert any("deposit" in e for e in report.errors)
-    chunks = time_chunks(NOW_MS - 365 * DAY_MS, NOW_MS, 90)
+    chunks = time_chunks(NOW_MS - CashFlowSettings().backfill_days * DAY_MS, NOW_MS, 90)
     assert get_cursor(database, "binance.deposit") == chunks[1][1]
     assert get_cursor(database, "binance.withdraw") == NOW_MS
 
@@ -689,7 +706,7 @@ def test_cash_flow_settings_defaults_and_validation(tmp_path):
     odd = make_config(tmp_path, cash_flows={"backfill_days": "lots", "overlap_days": 99,
                                             "enabled": "no", "sync_p2p": 0})
     settings = odd.cash_flow_settings
-    assert settings.backfill_days == 365 and settings.overlap_days == 30
+    assert settings.backfill_days == CashFlowSettings().backfill_days and settings.overlap_days == 30
     assert settings.enabled is False and settings.sync_p2p is False and settings.sync_fiat is True
     assert CashFlowSettings.from_raw(None) == CashFlowSettings()
 
