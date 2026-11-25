@@ -42,6 +42,7 @@ from config import (
     ManualAsset,
     ManualHolding,
     _normalize_wallets,
+    parse_allocation,
     active_env_overrides,
     load_config,
     read_raw_config,
@@ -59,6 +60,7 @@ from models import (
     Holding,
     Portfolio,
 )
+from services.analytics.allocation import allocation_report
 from services.analytics.attribution import (
     MAX_WINDOW_HOURS,
     attribution_report,
@@ -137,6 +139,10 @@ class SettingsIn(BaseModel):
     binance: BinanceSettingsIn | None = None
     wallets: list[WalletIn] | None = Field(default=None, max_length=50)
     manual_assets: list[ManualAssetIn] | None = Field(default=None, max_length=50)
+
+
+class AllocationToggleIn(BaseModel):
+    enabled: bool
 
 
 class TestBinanceIn(BaseModel):
@@ -519,6 +525,60 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
+    @app.get("/api/analytics/allocation")
+    def analytics_allocation(
+        contribution: float | None = Query(
+            None, gt=0, le=1e12, allow_inf_nan=False,
+            description="New money to invest (USD): suggest BUY orders only, adding up to it"),
+        include_dry_powder: bool = Query(
+            False, description="Count the `allocation.dry_powder` holdings in the weights too"),
+    ):
+        """Target vs actual weight per bucket, drift, and suggested orders (ROADMAP_LEDGER §4.5).
+
+        Off until turned on (`allocation.enabled`, or POST /api/settings/allocation): then the
+        answer is `{"enabled": false}`. Invalid targets -> 422 with one message per problem.
+        Suggestions only - nothing is ever traded. Reads SQLite, never the network.
+        """
+        cfg = config()
+        status = allocation_status(cfg)
+        if not status["enabled"]:
+            return {**status, "available": False, "reason": "disabled", "buckets": [], "actions": []}
+        if status["errors"]:
+            raise HTTPException(422, {"message": "The allocation targets in config.yaml are invalid.",
+                                      "errors": status["errors"]})
+        report = allocation_report(Database(cfg.db_path), cfg.allocation_settings, cfg.manual,
+                                   contribution=contribution, include_dry_powder=include_dry_powder)
+        return {**report, "configured": status["configured"], "errors": []}
+
+    def allocation_status(cfg: Config) -> dict:
+        settings, errors = parse_allocation(cfg.allocation, cfg.settings.get("stablecoins", []))
+        return {
+            "enabled": settings.enabled,
+            "configured": not settings.default_targets,
+            "default_targets": settings.default_targets,
+            "errors": errors,
+            "targets": [{"name": b.name, "target_pct": b.target} for b in settings.buckets],
+            "dry_powder_rules": len(settings.dry_powder),
+        }
+
+    @app.post("/api/settings/allocation")
+    def toggle_allocation(body: AllocationToggleIn):
+        """Turn the Allocation assistant on or off; every other `allocation` key is kept."""
+        path = config_file()
+        with app.state.settings_lock:
+            try:
+                raw = read_raw_config(path)
+            except (ValueError, OSError) as exc:
+                raise HTTPException(500, f"Cannot read {path.name}: {exc}") from exc
+            section = raw.get("allocation") if isinstance(raw.get("allocation"), dict) else {}
+            section["enabled"] = body.enabled
+            raw["allocation"] = section
+            try:
+                write_raw_config(raw, path)
+            except OSError as exc:
+                raise HTTPException(500, f"Cannot write {path.name}: {exc}") from exc
+        return {**allocation_status(config()), "saved": True}
+
     # -- settings ------------------------------------------------------------------
     def settings_payload(cfg: Config) -> dict:
         overrides = active_env_overrides()
@@ -562,6 +622,7 @@ def create_app(
             "manual_assets": manual_payload(cfg),
             "manual_errors": cfg.manual_errors,
             "manual_kinds": list(MANUAL_KINDS),
+            "allocation": allocation_status(cfg),
             "env_overrides": overrides,
             "config_path": str(config_file()),
             "config_exists": config_file().is_file(),

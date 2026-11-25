@@ -6,6 +6,8 @@
  *   GET  /api/portfolio/history   snapshot totals for the chart
  *   GET  /api/portfolio/attribution  why the total moved: price vs quantity effect per coin
  *   GET  /api/analytics/quant     Analytics: TWR, base 100 vs BTC/ETH, max drawdown, volatility
+ *   GET  /api/analytics/allocation  target vs actual weights + suggested orders (?contribution=)
+ *   POST /api/settings/allocation   the Allocation assistant's ON/OFF switch
  *
  * Two sections behind a bottom tab bar: Portfolio (glance: total, chart, assets) and Analytics
  * (attribution, performance, risk), both driven by one period selector. Sections are kept
@@ -252,6 +254,10 @@
       const benchEl = ref(null);
       const underwaterEl = ref(null);
       let insightSeq = 0;
+      // Allocation card (M7): `applied` is the contribution in force, `amount` what is typed
+      const alloc = reactive({ data: null, loading: false, error: '', errors: [], toggling: false,
+        mode: 'rebalance', amount: '', applied: null, amountError: '', includeDry: false });
+      let allocSeq = 0;
       let benchChart = null;
       let underwaterChart = null;
       let insightChartsStale = false;   // data arrived while Analytics was hidden: draw on show
@@ -620,14 +626,160 @@
       function loadAnalytics() {
         loadAttribution();
         loadInsights();
+        loadAllocation();
       }
 
       function setPeriod(id) {
         if (periodId.value === id) return;
         periodId.value = id;
         storage.set(STORE.period, id);
-        loadAnalytics();
+        loadAttribution();  // the allocation is a picture of now: the period does not change it
+        loadInsights();
       }
+
+      // -- allocation (Epic M7) ------------------------------------------------------
+      async function loadAllocation() {
+        const seq = ++allocSeq;
+        alloc.loading = true;
+        const params = new URLSearchParams();
+        if (alloc.mode === 'contribution' && alloc.applied) params.set('contribution', String(alloc.applied));
+        if (alloc.includeDry) params.set('include_dry_powder', 'true');
+        const query = params.toString();
+        try {
+          const data = await api('/api/analytics/allocation' + (query ? '?' + query : ''));
+          if (seq !== allocSeq) return;
+          alloc.data = data;
+          alloc.error = '';
+          alloc.errors = [];
+        } catch (error) {
+          if (seq !== allocSeq) return;
+          handleError(error, { silent: true });
+          alloc.data = null;
+          alloc.errors = error.status === 422 && error.detail && Array.isArray(error.detail.errors) ? error.detail.errors : [];
+          alloc.error = error.status === 401 ? '' : alloc.errors.length ? error.message : 'Could not load the allocation: ' + error.message;
+        } finally {
+          if (seq === allocSeq) alloc.loading = false;
+        }
+      }
+
+      async function toggleAllocation(on = !allocEnabled.value) {
+        if (alloc.toggling) return;
+        alloc.toggling = true;
+        try {
+          const status = await api('/api/settings/allocation', { method: 'POST', body: { enabled: on } });
+          if (settings.value) settings.value = { ...settings.value, allocation: status };
+          showToast(on ? 'Allocation assistant on' : 'Allocation assistant off');
+          await loadAllocation();
+        } catch (error) {
+          handleError(error);
+        } finally {
+          alloc.toggling = false;
+        }
+      }
+
+      function setAllocMode(mode) {
+        if (alloc.mode === mode) return;
+        alloc.mode = mode;
+        alloc.amountError = '';
+        if (mode === 'rebalance' || alloc.applied) loadAllocation();
+      }
+
+      function applyContribution() {
+        const raw = String(alloc.amount).replace(/[\s,$]/g, '');
+        const value = Number(raw);
+        if (!raw || !Number.isFinite(value) || value <= 0) {
+          alloc.amountError = 'Enter an amount in USD above 0.';
+          return;
+        }
+        alloc.amountError = '';
+        alloc.applied = Math.round(value * 100) / 100;
+        loadAllocation();
+      }
+
+      function toggleDryPowder() {
+        alloc.includeDry = !alloc.includeDry;
+        loadAllocation();
+      }
+
+      async function copyText(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (_) {  // no async clipboard (plain http on the LAN): the old textarea trick
+          const area = document.createElement('textarea');
+          area.value = text;
+          area.setAttribute('readonly', '');
+          area.style.position = 'fixed';
+          area.style.opacity = '0';
+          document.body.appendChild(area);
+          area.select();
+          let ok = false;
+          try { ok = document.execCommand('copy'); } catch (__) { ok = false; }
+          document.body.removeChild(area);
+          return ok;
+        }
+      }
+
+      async function copyOrder(action) {
+        const ok = await copyText(action.text);
+        showToast(ok ? 'Order copied' : 'Could not copy: select the text instead', ok ? 'ok' : 'error');
+      }
+
+      async function copyAllOrders() {
+        const actions = (alloc.data && alloc.data.actions) || [];
+        if (!actions.length) return;
+        const ok = await copyText(actions.map((a) => a.text).join('\n'));
+        showToast(ok ? `${actions.length} ${actions.length === 1 ? 'order' : 'orders'} copied` : 'Could not copy', ok ? 'ok' : 'error');
+      }
+
+      const allocEnabled = computed(() => !!(alloc.data ? alloc.data.enabled : alloc.errors.length));
+      const allocReady = computed(() => !!(alloc.data && alloc.data.enabled && alloc.data.available));
+      // One scale for every bar, so 10 % and 50 % buckets compare at a glance.
+      const allocScale = computed(() => {
+        if (!allocReady.value) return 100;
+        const top = Math.max(10, ...alloc.data.buckets.map((b) => Math.max(num(b.actual_pct), num(b.band[1]))));
+        return Math.min(100, Math.ceil(top / 10) * 10);
+      });
+      const allocRows = computed(() => {
+        if (!allocReady.value) return [];
+        const scale = allocScale.value;
+        const w = (v) => Math.max(0, Math.min(100, (num(v) / scale) * 100));
+        return alloc.data.buckets.map((b) => ({
+          ...b,
+          actualW: w(b.actual_pct),
+          targetW: w(b.target_pct),
+          bandL: w(b.band[0]),
+          bandW: Math.max(0.5, w(b.band[1]) - w(b.band[0])),
+          driftText: (num(b.drift_pp) < 0 ? '−' : '+') + Math.abs(num(b.drift_pp)).toFixed(1) + ' pp',
+          flag: b.breach ? (b.direction === 'over' ? 'Over target' : 'Under target') : '',
+          lockedNote: b.locked_usd > 0 ? (b.locked_reasons.includes('locked_earn') ? 'in locked Earn' : 'not sellable') : '',
+        }));
+      });
+      const allocActions = computed(() => {
+        if (!allocReady.value) return [];
+        return alloc.data.actions.map((a) => {
+          const notes = [a.bucket];
+          if (a.legs.length) notes.push('from ' + [...new Set(a.legs.map((l) => l.from))].join(', '));
+          if (a.requires_transfer) notes.push('transfer to Binance first');
+          if (a.constrained_by === 'locked_earn') notes.push('capped: the rest is in locked Earn');
+          else if (a.constrained_by) notes.push('capped: the rest cannot be sold now');
+          return { ...a, key: a.action + ':' + a.bucket, note: notes.join(' · '),
+            what: a.est_qty !== null && a.est_qty !== undefined ? fmt.qty(a.est_qty) + ' ' + a.asset : (a.asset || a.bucket) };
+        });
+      });
+      const allocMessage = computed(() => {
+        if (alloc.error) return alloc.error;
+        const d = alloc.data;
+        if (!d || !d.enabled) return '';
+        if (!d.available) {
+          return d.reason === 'no_snapshot' ? 'Take a snapshot first: the allocation is read from the newest one.'
+            : 'Nothing priced to allocate yet.';
+        }
+        if (d.mode === 'contribution') return d.actions.length ? '' : 'Nothing to buy with this amount.';
+        if (!d.rebalance_needed) return `Every bucket is within ±${d.tolerance_pp} pp of its target. Nothing to do.`;
+        if (!d.actions.length) return `Some buckets drifted, but every order would be under the $${d.min_trade_usd} minimum.`;
+        return '';
+      });
 
       const insightsReady = computed(() => !!(insights.data && insights.data.available));
       const insightMessage = computed(() => {
@@ -1484,6 +1636,8 @@
         periods: ANALYTICS_PERIODS, periodId, analyticsPeriod, setPeriod,
         why, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
         insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
+        alloc, allocEnabled, allocReady, allocRows, allocActions, allocMessage, loadAllocation, toggleAllocation,
+        setAllocMode, applyContribution, toggleDryPowder, copyOrder, copyAllOrders,
         peek, peekSheet, peekClose, peekReady, peekTrend, peekSpan, peekSpanNote, peekBuckets, peekRows, peekMessage,
         openPeek, closePeek, peekToAnalytics, onPeekKeydown,
         chartWrap, chartEl, sheet, sheetClose, draftEl,

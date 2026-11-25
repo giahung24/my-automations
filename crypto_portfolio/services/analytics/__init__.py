@@ -3,6 +3,15 @@
 Every engine here is a pure function over plain data; the loaders are the only code that
 touches SQLite, so the maths can be tested without a database.
 """
+from services.analytics.allocation import (
+    Lot,
+    allocate,
+    allocation_report,
+    band_edge_deltas,
+    contribution_deltas,
+    split_dry_powder,
+    target_deltas,
+)
 from services.analytics.attribution import (
     BUCKETS,
     GROUP_BY,
@@ -32,6 +41,13 @@ from services.analytics.quant import (
 )
 
 __all__ = [
+    "Lot",
+    "allocate",
+    "allocation_report",
+    "band_edge_deltas",
+    "contribution_deltas",
+    "split_dry_powder",
+    "target_deltas",
     "BUCKETS",
     "GROUP_BY",
     "METHODS",

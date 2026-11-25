@@ -139,6 +139,9 @@ DEFAULTS = {
     # Epic M6 (ROADMAP_LEDGER §9.3): balances with no API - BTC on a hardware wallet, staking
     # elsewhere. Validated by `parse_manual_assets`; a bad entry is skipped, never fatal.
     "manual_assets": [],
+    # Epic M7 (ROADMAP_LEDGER §4.5, §9.4): target weights + rebalancing suggestions. Off until
+    # the user turns it on (Settings or the Allocation card); validated by `parse_allocation`.
+    "allocation": {"enabled": False},
 }
 
 
@@ -371,6 +374,232 @@ def parse_manual_assets(raw) -> tuple[list[ManualAsset], list[str]]:
     return assets, errors
 
 
+# -- asset allocation (Epic M7) ---------------------------------------------------------
+REBALANCE_MODES = ("target", "band_edge")
+ALLOCATION_CATCH_ALL = "*"
+ALLOCATION_STABLECOINS = "@stablecoins"
+# Sources a dry-powder rule may name (models.SOURCES, repeated here to keep config import-light).
+DRY_POWDER_SOURCES = ("binance_spot", "binance_earn", "binance_funding", "onchain", "manual")
+# The targets used when `allocation.buckets` is absent (ROADMAP_LEDGER §9.4).
+DEFAULT_ALLOCATION_BUCKETS = {
+    "BTC": {"target": 50, "symbols": ["BTC", "WBTC", "BTCB"]},
+    "ETH": {"target": 25, "symbols": ["ETH", "WETH", "STETH", "WSTETH"]},
+    "Stablecoin": {"target": 15, "symbols": ALLOCATION_STABLECOINS},
+    "Altcoins": {"target": 10, "symbols": ALLOCATION_CATCH_ALL},
+}
+
+
+@dataclass(frozen=True)
+class AllocationBucket:
+    """One target bucket. `catch_all` takes every symbol no other bucket names;
+    `stablecoins` marks the bucket built from `settings.stablecoins` (it absorbs rounding)."""
+
+    name: str
+    target: float
+    symbols: tuple[str, ...] = ()
+    catch_all: bool = False
+    stablecoins: bool = False
+
+
+@dataclass(frozen=True)
+class DryPowderRule:
+    """Holdings set aside as "dry powder" (cash waiting to buy a dip): kept out of the weights,
+    the drift alerts and the suggested sells. Empty `sources` means every source; `max_usd`
+    caps how much of the matching value is set aside (None = all of it)."""
+
+    symbols: tuple[str, ...]
+    sources: tuple[str, ...] = ()
+    max_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class AllocationSettings:
+    """The validated `allocation:` block (ROADMAP_LEDGER §4.5.1)."""
+
+    enabled: bool = False
+    tolerance_pp: float = 5.0
+    rebalance_to: str = "target"
+    min_trade_usd: float = 20.0
+    fee_rate: float = 0.001
+    buckets: tuple[AllocationBucket, ...] = ()
+    dry_powder: tuple[DryPowderRule, ...] = ()
+    default_targets: bool = False  # True when `buckets` was not configured
+
+    def bucket_of(self, symbol: str) -> str | None:
+        """Name of the bucket holding `symbol`, the catch-all one otherwise, or None."""
+        symbol = symbol.upper()
+        catch_all = None
+        for bucket in self.buckets:
+            if symbol in bucket.symbols:
+                return bucket.name
+            if bucket.catch_all:
+                catch_all = bucket.name
+        return catch_all
+
+
+def _symbol_list(value) -> list[str] | None:
+    """`BTC` or `[BTC, wbtc]` -> upper-case symbols; None when it is neither."""
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return None
+    out = []
+    for item in value:
+        if isinstance(item, bool) or item is None:
+            return None
+        text = str(item).strip().upper()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def parse_allocation(raw, stablecoins=()) -> tuple[AllocationSettings, list[str]]:
+    """Validate the `allocation:` block. Returns ``(settings, errors)`` and never raises.
+
+    Errors (one readable message each) mean the targets cannot be trusted: the endpoint
+    answers 422 with them while the rest of the dashboard keeps working. A missing block is
+    valid: allocation is off, and turning it on uses `DEFAULT_ALLOCATION_BUCKETS`.
+    """
+    errors: list[str] = []
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        return AllocationSettings(), [f"allocation: expected a mapping, got {type(raw).__name__}"]
+    default = AllocationSettings()
+
+    enabled = raw.get("enabled", default.enabled)
+    enabled = _as_bool(enabled) if isinstance(enabled, str) else bool(enabled)
+
+    tolerance = _number(raw.get("tolerance_pp", default.tolerance_pp))
+    if tolerance is None or not 0 < tolerance < 50:
+        errors.append(f"allocation.tolerance_pp: must be a number strictly between 0 and 50, "
+                      f"got {raw.get('tolerance_pp')!r}")
+        tolerance = default.tolerance_pp
+
+    rebalance_to = str(raw.get("rebalance_to", default.rebalance_to) or "").strip().lower()
+    if rebalance_to not in REBALANCE_MODES:
+        errors.append(f"allocation.rebalance_to: '{rebalance_to}' is not one of "
+                      f"{' | '.join(REBALANCE_MODES)}")
+        rebalance_to = default.rebalance_to
+
+    min_trade = _number(raw.get("min_trade_usd", default.min_trade_usd))
+    if min_trade is None or min_trade < 0:
+        errors.append(f"allocation.min_trade_usd: must be a number >= 0, got {raw.get('min_trade_usd')!r}")
+        min_trade = default.min_trade_usd
+
+    fee_rate = _number(raw.get("fee_rate", default.fee_rate))
+    if fee_rate is None or not 0 <= fee_rate < 0.1:
+        errors.append(f"allocation.fee_rate: must be a number in [0, 0.1), got {raw.get('fee_rate')!r}")
+        fee_rate = default.fee_rate
+
+    raw_buckets = raw.get("buckets")
+    default_targets = raw_buckets is None
+    if default_targets:
+        raw_buckets = DEFAULT_ALLOCATION_BUCKETS
+    buckets = _parse_buckets(raw_buckets, stablecoins, errors)
+    dry_powder = _parse_dry_powder(raw.get("dry_powder"), errors)
+
+    return AllocationSettings(
+        enabled=enabled, tolerance_pp=tolerance, rebalance_to=rebalance_to,
+        min_trade_usd=min_trade, fee_rate=fee_rate, buckets=tuple(buckets),
+        dry_powder=tuple(dry_powder), default_targets=default_targets,
+    ), errors
+
+
+def _parse_buckets(raw, stablecoins, errors: list[str]) -> list[AllocationBucket]:
+    if not isinstance(raw, dict) or not raw:
+        errors.append("allocation.buckets: expected a mapping of bucket name -> {target, symbols}")
+        return []
+    stable = sorted({str(s).strip().upper() for s in stablecoins if str(s).strip()})
+    buckets: list[AllocationBucket] = []
+    owner: dict[str, str] = {}
+    catch_all: list[str] = []
+    total = 0.0
+    for name, spec in raw.items():
+        name = str(name).strip()
+        where = f"allocation.buckets.{name}"
+        if not name:
+            errors.append("allocation.buckets: a bucket has an empty name")
+            continue
+        if not isinstance(spec, dict):
+            errors.append(f"{where}: expected {{target, symbols}}")
+            continue
+        target = _number(spec.get("target"))
+        if target is None or target < 0 or target > 100:
+            errors.append(f"{where}.target: must be a number between 0 and 100, got {spec.get('target')!r}")
+            continue
+        total += target
+        raw_symbols = spec.get("symbols")
+        is_catch_all = isinstance(raw_symbols, str) and raw_symbols.strip() == ALLOCATION_CATCH_ALL
+        is_stable = isinstance(raw_symbols, str) and raw_symbols.strip().lower() == ALLOCATION_STABLECOINS
+        if is_catch_all:
+            symbols: list[str] = []
+            catch_all.append(name)
+        elif is_stable:
+            symbols = list(stable)
+        else:
+            symbols = _symbol_list(raw_symbols)
+            if not symbols:
+                errors.append(f"{where}.symbols: expected a list of symbols, "
+                              f"'{ALLOCATION_STABLECOINS}' or '{ALLOCATION_CATCH_ALL}'")
+                continue
+        for symbol in symbols:
+            if symbol in owner:
+                errors.append(f"{where}: {symbol} is already in bucket '{owner[symbol]}' "
+                              f"(a symbol belongs to exactly one bucket)")
+            else:
+                owner[symbol] = name
+        buckets.append(AllocationBucket(name=name, target=target, symbols=tuple(symbols),
+                                        catch_all=is_catch_all, stablecoins=is_stable))
+    if len(catch_all) > 1:
+        errors.append(f"allocation.buckets: only one bucket may use '{ALLOCATION_CATCH_ALL}', "
+                      f"found {', '.join(catch_all)}")
+    if buckets and abs(total - 100) > 0.01:
+        errors.append(f"allocation.buckets: targets add up to {total:g}, they must add up to 100")
+    return buckets
+
+
+def _parse_dry_powder(raw, errors: list[str]) -> list[DryPowderRule]:
+    if raw is None:
+        return []
+    if isinstance(raw, dict):  # a single rule written without the list dash
+        raw = [raw]
+    if not isinstance(raw, list):
+        errors.append("allocation.dry_powder: expected a list of {symbols, sources, max_usd}")
+        return []
+    rules = []
+    for index, item in enumerate(raw, start=1):
+        where = f"allocation.dry_powder #{index}"
+        if not isinstance(item, dict):
+            errors.append(f"{where}: expected {{symbols, sources, max_usd}}")
+            continue
+        symbols = _symbol_list(item.get("symbols", item.get("symbol")))
+        if not symbols:
+            errors.append(f"{where}: needs at least one symbol")
+            continue
+        raw_sources = item.get("sources", item.get("source")) or []
+        if isinstance(raw_sources, str):
+            raw_sources = [raw_sources]
+        sources = [str(s).strip().lower() for s in raw_sources if str(s).strip()] \
+            if isinstance(raw_sources, list) else None
+        if sources is None:
+            errors.append(f"{where}.sources: expected a list")
+            continue
+        unknown = [s for s in sources if s not in DRY_POWDER_SOURCES]
+        if unknown:
+            errors.append(f"{where}.sources: unknown {', '.join(unknown)} "
+                          f"(expected {' | '.join(DRY_POWDER_SOURCES)})")
+            continue
+        max_usd = None
+        if item.get("max_usd") is not None:
+            max_usd = _number(item.get("max_usd"))
+            if max_usd is None or max_usd < 0:
+                errors.append(f"{where}.max_usd: must be a number >= 0")
+                continue
+        rules.append(DryPowderRule(symbols=tuple(symbols), sources=tuple(sources), max_usd=max_usd))
+    return rules
+
+
 @dataclass
 class Config:
     binance: dict = field(default_factory=dict)
@@ -380,6 +609,7 @@ class Config:
     path: Path | None = None
     cash_flows: dict = field(default_factory=dict)
     manual_assets: list = field(default_factory=list)  # raw `manual_assets:` block
+    allocation: dict = field(default_factory=dict)     # raw `allocation:` block
 
     # -- convenience accessors -------------------------------------------------
     @property
@@ -448,6 +678,14 @@ class Config:
     @property
     def has_manual_assets(self) -> bool:
         return any(asset.holdings for asset in self.manual)
+
+    @property
+    def allocation_settings(self) -> AllocationSettings:
+        return parse_allocation(self.allocation, self.settings.get("stablecoins", []))[0]
+
+    @property
+    def allocation_errors(self) -> list[str]:
+        return parse_allocation(self.allocation, self.settings.get("stablecoins", []))[1]
 
     @property
     def has_sources(self) -> bool:
@@ -596,4 +834,6 @@ def load_config(path: str | Path | None = None, missing_ok: bool = False) -> Con
         path=config_path if config_path.is_file() else None,
         cash_flows=merged["cash_flows"] if isinstance(merged.get("cash_flows"), dict) else {},
         manual_assets=merged.get("manual_assets") if merged.get("manual_assets") is not None else [],
+        allocation=merged["allocation"] if isinstance(merged.get("allocation"), dict) else
+        ({} if merged.get("allocation") is None else merged["allocation"]),
     )
