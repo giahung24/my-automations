@@ -5,7 +5,11 @@
  *   POST /api/portfolio/refresh   live fetch from Binance + chains, records a snapshot
  *   GET  /api/portfolio/history   snapshot totals for the chart
  *   GET  /api/portfolio/attribution  why the total moved: price vs quantity effect per coin
- *   GET  /api/analytics/quant     Insights: TWR, base 100 vs BTC/ETH, max drawdown, volatility
+ *   GET  /api/analytics/quant     Analytics: TWR, base 100 vs BTC/ETH, max drawdown, volatility
+ *
+ * Two sections behind a bottom tab bar: Portfolio (glance: total, chart, assets) and Analytics
+ * (attribution, performance, risk), both driven by one period selector. Sections are kept
+ * mounted (v-show) so charts survive a switch; they are re-fitted when their section shows.
  *   GET/POST /api/settings (+ test-binance, test-wallet) for the settings sheet
  */
 (function () {
@@ -47,22 +51,21 @@
   const BINANCE_KEY_LENGTH = 64;   // HMAC API keys and secrets are both 64 letters and digits
   const SCRUB_HOLD_MS = 130;       // a finger resting this long on the chart starts scrubbing
   const SCRUB_SLOP_PX = 8;         // ...or one that moved this far sideways first
-  const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab', why: 'portfolio.why',
-    insights: 'portfolio.insights' };
-  // Windows of the "Why it moved" card (GET /api/portfolio/attribution?window=...).
-  const WHY_WINDOWS = [
-    { id: '24h', label: '24H' },
-    { id: '7d', label: '7D' },
-    { id: '30d', label: '30D' },
+  const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab',
+    period: 'portfolio.analytics.period' };
+  const SECTIONS = ['portfolio', 'analytics'];
+  // One period drives the whole Analytics section. `why` is the attribution window
+  // (GET /api/portfolio/attribution, at most 365d); `quant` the period of
+  // GET /api/analytics/quant, which works on daily closes and so needs two of them at least.
+  const ANALYTICS_PERIODS = [
+    { id: '24H', why: '24h', quant: '2d', quantNote: 'Performance and risk use daily closes, so the shortest view is the last 2 days.' },
+    { id: '7D', why: '7d', quant: '7d' },
+    { id: '30D', why: '30d', quant: '30d' },
+    { id: '1Y', why: '365d', quant: '1y' },
+    { id: 'ALL', why: '365d', quant: 'all', whyNote: 'The breakdown looks back one year at most.' },
   ];
-  const WHY_TOP = 4;  // coins listed on each side (pulling up / pulling down)
-  // Periods of the Insights card (GET /api/analytics/quant?period=...).
-  const INSIGHT_PERIODS = [
-    { id: '30d', label: '30D' },
-    { id: '90d', label: '90D' },
-    { id: '1y', label: '1Y' },
-    { id: 'all', label: 'ALL' },
-  ];
+  const WHY_TOP = 4;   // coins listed on each side (pulling up / pulling down)
+  const PEEK_TOP = 3;  // coins in the 24h peek sheet
   const BENCH_COLORS = { portfolio: '#22E58B', BTC: '#F7931A', ETH: '#8AB4FF' };
 
   // -- formatting --------------------------------------------------------------
@@ -231,24 +234,28 @@
       const scrolled = ref(false);
       const nowMs = ref(Date.now());
 
-      // attribution card ("Why it moved")
-      const why = reactive({
-        window: WHY_WINDOWS.some((w) => w.id === storage.get(STORE.why)) ? storage.get(STORE.why) : '24h',
-        data: null, loading: false, error: '',
-      });
-      const whyCard = ref(null);
-      let whySeq = 0;
+      // sections: the app always opens on Portfolio (a one-second glance)
+      const activeTab = ref('portfolio');
+      const tabScroll = { portfolio: 0, analytics: 0 };   // each section keeps its own scroll position
 
-      // Insights card: TWR, base 100 vs BTC/ETH, max drawdown + underwater, volatility
-      const insights = reactive({
-        period: INSIGHT_PERIODS.some((p) => p.id === storage.get(STORE.insights)) ? storage.get(STORE.insights) : 'all',
-        data: null, loading: false, error: '',
-      });
+      // Analytics: one period for attribution, performance and risk
+      const periodId = ref(ANALYTICS_PERIODS.some((p) => p.id === storage.get(STORE.period)) ? storage.get(STORE.period) : '30D');
+      const analyticsPeriod = computed(() => ANALYTICS_PERIODS.find((p) => p.id === periodId.value) || ANALYTICS_PERIODS[2]);
+      const why = reactive({ data: null, loading: false, error: '' });
+      let whySeq = 0;
+      const insights = reactive({ data: null, loading: false, error: '' });
       const benchEl = ref(null);
       const underwaterEl = ref(null);
       let insightSeq = 0;
       let benchChart = null;
       let underwaterChart = null;
+      let insightChartsStale = false;   // data arrived while Analytics was hidden: draw on show
+
+      // "Why it moved" peek sheet, opened from the 24h chip
+      const peek = reactive({ open: false, data: null, loading: false, error: '' });
+      const peekSheet = ref(null);
+      const peekClose = ref(null);
+      let peekSeq = 0;
 
       // access token
       const locked = ref(false);
@@ -351,7 +358,7 @@
         if (!change) return null;
         return {
           usd: change.usd, pct: change.pct, trend: trendOf(change.usd), label: fmt.hours(change.hours),
-          explainable: !!change.has_attribution,  // tapping the chip opens "Why it moved"
+          explainable: !!change.has_attribution,  // tapping the chip opens the "Why it moved" peek
         };
       });
 
@@ -371,13 +378,13 @@
 
       const updatedAgo = computed(() => fmt.ago(portfolio.value.timestamp, nowMs.value));
 
-      // -- computed: attribution card ---------------------------------------------
+      // -- computed: attribution ---------------------------------------------------
       // What made the total move: market price vs holdings change, per coin (§2 of ROADMAP_LEDGER).
-      const whyReady = computed(() => !!(why.data && !why.data.insufficient_history));
+      // The same helpers feed the Analytics section and the 24h peek sheet.
+      const attributionReady = (data) => !!(data && !data.insufficient_history);
 
-      const whyBuckets = computed(() => {
-        if (!whyReady.value) return [];
-        const b = why.data.buckets || {};
+      function attributionBuckets(data) {
+        const b = data.buckets || {};
         const other = num(b.interaction) + num(b.revaluation);
         return [
           { id: 'price', label: 'Market prices', value: num(b.price), hint: 'Same holdings, new prices' },
@@ -386,12 +393,10 @@
           { id: 'data_gap', label: 'Missing data', value: num(b.data_gap), hint: 'A source failed in one of the snapshots', optional: true },
         ].filter((bucket) => !bucket.optional || Math.abs(bucket.value) >= 0.005)
           .map((bucket) => ({ ...bucket, trend: trendOf(bucket.value) }));
-      });
+      }
 
-      const whyRows = computed(() => {
-        if (!whyReady.value) return [];
-        const d = why.data;
-        const rows = [...(d.gainers || []), ...(d.losers || [])];
+      // Bars are scaled to the biggest mover so the list reads as relative weight.
+      function attributionRows(rows) {
         const scale = Math.max(...rows.map((r) => Math.abs(num(r.total))), 0.01);
         return rows.map((r) => {
           const total = num(r.total);
@@ -413,26 +418,48 @@
             breakdown: parts.join(' · '),
           };
         });
-      });
-
-      const whyTrend = computed(() => (whyReady.value ? trendOf(num(why.data.delta_usd)) : 'flat'));
+      }
 
       // Real span covered (the window can be shorter than asked when the history is).
-      const whySpan = computed(() => {
-        if (!whyReady.value) return '';
-        const h = num(why.data.hours);
+      function attributionSpan(data) {
+        const h = num(data.hours);
         if (h < 1) return Math.max(1, Math.round(h * 60)) + ' min';
         return h < 48 ? Math.round(h) + 'h' : (h / 24).toFixed(h < 240 ? 1 : 0) + ' days';
-      });
+      }
 
+      const INSUFFICIENT_WHY = 'Needs at least two snapshots in this window. Each refresh, and each cron `record`, adds one.';
+
+      const whyReady = computed(() => attributionReady(why.data));
+      const whyBuckets = computed(() => (whyReady.value ? attributionBuckets(why.data) : []));
+      const whyRows = computed(() => (whyReady.value
+        ? attributionRows([...(why.data.gainers || []), ...(why.data.losers || [])]) : []));
+      const whyTrend = computed(() => (whyReady.value ? trendOf(num(why.data.delta_usd)) : 'flat'));
+      const whySpan = computed(() => (whyReady.value ? attributionSpan(why.data) : ''));
       const whyOthers = computed(() => (whyReady.value && why.data.others && why.data.others.count ? why.data.others : null));
-
       const whyMessage = computed(() => {
         if (why.error) return why.error;
-        if (why.data && why.data.insufficient_history) {
-          return 'Needs at least two snapshots in this window. Each refresh, and each cron `record`, adds one.';
-        }
+        if (why.data && why.data.insufficient_history) return INSUFFICIENT_WHY;
         if (whyReady.value && !whyRows.value.length) return 'Nothing moved by more than a cent.';
+        return '';
+      });
+
+      // Peek: the 24h move in one look - total, price vs holdings, the three biggest movers.
+      const peekReady = computed(() => attributionReady(peek.data));
+      const peekTrend = computed(() => (peekReady.value ? trendOf(num(peek.data.delta_usd)) : 'flat'));
+      const peekSpan = computed(() => (peekReady.value ? attributionSpan(peek.data) : ''));
+      const peekBuckets = computed(() => (peekReady.value
+        ? attributionBuckets(peek.data).filter((b) => b.id === 'price' || b.id === 'quantity') : []));
+      const peekRows = computed(() => {
+        if (!peekReady.value) return [];
+        const rows = [...(peek.data.gainers || []), ...(peek.data.losers || [])]
+          .sort((a, b) => Math.abs(num(b.total)) - Math.abs(num(a.total)))
+          .slice(0, PEEK_TOP);
+        return attributionRows(rows);
+      });
+      const peekMessage = computed(() => {
+        if (peek.error) return peek.error;
+        if (peek.data && peek.data.insufficient_history) return INSUFFICIENT_WHY;
+        if (peekReady.value && !peekRows.value.length) return 'Nothing moved by more than a cent.';
         return '';
       });
 
@@ -526,10 +553,10 @@
       }
 
       async function loadAttribution() {
-        const seq = ++whySeq;  // a slower answer for a window the user already left is dropped
+        const seq = ++whySeq;  // a slower answer for a period the user already left is dropped
         why.loading = true;
         try {
-          const data = await api(`/api/portfolio/attribution?window=${why.window}&top=${WHY_TOP}`);
+          const data = await api(`/api/portfolio/attribution?window=${analyticsPeriod.value.why}&top=${WHY_TOP}`);
           if (seq !== whySeq) return;
           why.data = data;
           why.error = '';
@@ -547,7 +574,7 @@
         const seq = ++insightSeq;
         insights.loading = true;
         try {
-          const data = await api(`/api/analytics/quant?period=${insights.period}`);
+          const data = await api(`/api/analytics/quant?period=${analyticsPeriod.value.quant}`);
           if (seq !== insightSeq) return;
           insights.data = data;
           insights.error = '';
@@ -555,26 +582,32 @@
           if (seq !== insightSeq) return;
           handleError(error, { silent: true });
           insights.data = null;
-          insights.error = error.status === 401 ? '' : 'Could not load insights: ' + error.message;
+          insights.error = error.status === 401 ? '' : 'Could not load performance: ' + error.message;
         } finally {
           if (seq === insightSeq) insights.loading = false;
         }
+        if (seq !== insightSeq) return;
         await nextTick();
         drawInsightCharts();
       }
 
-      function setInsightPeriod(id) {
-        if (insights.period === id) return;
-        insights.period = id;
-        storage.set(STORE.insights, id);
+      function loadAnalytics() {
+        loadAttribution();
         loadInsights();
+      }
+
+      function setPeriod(id) {
+        if (periodId.value === id) return;
+        periodId.value = id;
+        storage.set(STORE.period, id);
+        loadAnalytics();
       }
 
       const insightsReady = computed(() => !!(insights.data && insights.data.available));
       const insightMessage = computed(() => {
         if (insights.error) return insights.error;
         if (insights.data && !insights.data.available) {
-          return 'Insights need daily closes on at least two days. Come back tomorrow.';
+          return 'Performance needs daily closes on at least two days. Come back tomorrow.';
         }
         return '';
       });
@@ -585,40 +618,46 @@
         const vol = d.volatility || {};
         const dd = d.drawdown || {};
         const twr = d.twr || {};
-        const tiles = [
+        return [
           {
-            id: 'twr', label: 'Time-weighted return', value: twr.twr_pct, signed: true,
-            note: twr.annualized_pct !== undefined ? `${fmt.signedPct(twr.annualized_pct)} / year` : `${d.span_days}d · deposits removed`,
-            hint: 'Growth of $100 invested, with deposits and withdrawals taken out',
+            id: 'twr', label: 'TWR', value: twr.twr_pct, signed: true,
+            note: twr.annualized_pct !== undefined ? `${fmt.signedPct(twr.annualized_pct)} / year` : 'flows removed',
+            hint: 'Time-weighted return: growth of $100 invested, with deposits and withdrawals taken out',
             sufficient: d.n_obs >= 1,
           },
           {
             id: 'mdd', label: 'Max drawdown', value: dd.max_drawdown_pct, signed: false, down: true,
-            note: dd.peak ? (dd.recovered ? `${dd.peak} → recovered ${dd.recovery}` : `since ${dd.peak} · not recovered`) : 'no drawdown',
-            hint: 'Worst fall from a high-water mark of the TWR index',
+            note: dd.peak ? (dd.recovered ? 'recovered' : 'not recovered') : 'no drawdown',
+            hint: dd.peak ? (dd.recovered ? `Peak ${dd.peak}, recovered ${dd.recovery}` : `Peak ${dd.peak}, not recovered yet`)
+              : 'Worst fall from a high-water mark of the TWR index',
             sufficient: d.n_obs >= 1,
           },
           {
-            id: 'vol', label: 'Volatility (annual)', value: vol.annualized_pct, signed: false,
-            note: vol.sufficient ? `${vol.n_obs} daily returns` : `need ${Math.max(0, d.min_observations - (vol.n_obs || 0))} more days of data`,
+            id: 'vol', label: 'Volatility', value: vol.annualized_pct, signed: false,
+            note: vol.sufficient ? 'annualised' : `needs ${Math.max(0, d.min_observations - (vol.n_obs || 0))} more days`,
             hint: 'Standard deviation of daily returns × √365',
             sufficient: !!vol.sufficient && vol.annualized_pct !== null,
           },
-        ];
-        for (const symbol of ['BTC', 'ETH']) {
-          const b = (d.benchmarks || {})[symbol];
-          if (!b) continue;
-          tiles.push({
-            id: symbol, label: `vs ${symbol}`, value: b.available ? b.excess_pct : null, signed: true,
-            note: b.available ? `${symbol} ${fmt.signedPct(b.return_pct)} · you ${fmt.signedPct(b.portfolio_return_pct)}` : `no ${symbol} price recorded`,
-            hint: `Portfolio TWR minus ${symbol} return over the same days`,
-            sufficient: !!b.available,
-          });
-        }
-        return tiles.map((t) => ({
+        ].map((t) => ({
           ...t,
           text: t.value === null || t.value === undefined ? '—' : (t.signed ? fmt.signedPct(t.value) : num(t.value).toFixed(2) + '%'),
           trend: t.value === null || t.value === undefined ? 'flat' : (t.down ? (num(t.value) < 0 ? 'down' : 'flat') : trendOf(num(t.value))),
+        }));
+      });
+
+      // Legend of the base-100 chart doubles as the scoreboard: each line's return over the period.
+      const benchLegend = computed(() => {
+        if (!insightsReady.value) return [];
+        const d = insights.data;
+        const twr = d.twr || {};
+        const rows = [{ key: 'portfolio', label: 'You', pct: twr.twr_pct }];
+        for (const symbol of ['BTC', 'ETH']) {
+          const b = (d.benchmarks || {})[symbol];
+          if (b) rows.push({ key: symbol, label: symbol, pct: b.available ? b.return_pct : null });
+        }
+        return rows.map((r) => ({
+          ...r, color: BENCH_COLORS[r.key],
+          text: r.pct === null || r.pct === undefined ? 'no data' : fmt.signedPct(r.pct),
         }));
       });
 
@@ -647,6 +686,10 @@
       }
 
       function drawInsightCharts() {
+        // A chart created inside a hidden (display: none) section starts at zero width; wait
+        // until Analytics is on screen and draw it then.
+        if (activeTab.value !== 'analytics') { insightChartsStale = true; return; }
+        insightChartsStale = false;
         destroyInsightCharts();
         if (!LWC || !insightsReady.value) return;
         const d = insights.data;
@@ -681,21 +724,93 @@
         }
       }
 
-      function setWhyWindow(id) {
-        if (why.window === id) return;
-        why.window = id;
-        storage.set(STORE.why, id);
-        loadAttribution();
+      // -- sections ------------------------------------------------------------
+      function setTab(tab) {
+        if (SECTIONS.includes(tab)) activeTab.value = tab;
       }
 
-      // The hero's 24h chip leads to the card that explains it.
-      async function showWhy() {
-        if (why.window !== '24h') setWhyWindow('24h');
+      // Left/right arrows move between the two tabs (WAI-ARIA tabs pattern).
+      function onTabKeydown(event) {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        const next = SECTIONS[(SECTIONS.indexOf(activeTab.value) + 1) % SECTIONS.length];
+        setTab(next);
+        nextTick(() => { const el = document.getElementById('tab-' + next); if (el) el.focus(); });
+      }
+
+      // Charts in a section that was display: none come back at zero or stale width. Once the
+      // section is laid out again (next frame), let every chart re-measure and re-fit.
+      function refitCharts(tab) {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new Event('resize'));
+          if (tab === 'portfolio') {
+            if (chart) chart.timeScale().fitContent();
+            return;
+          }
+          if (insightChartsStale) { drawInsightCharts(); return; }
+          if (benchChart) benchChart.timeScale().fitContent();
+          if (underwaterChart) underwaterChart.timeScale().fitContent();
+        });
+      }
+
+      watch(activeTab, async (tab, previous) => {
+        tabScroll[previous] = window.scrollY;
+        onChartRelease();
         await nextTick();
-        const el = whyCard.value;
-        if (!el) return;
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        el.focus({ preventScroll: true });
+        window.scrollTo({ top: tabScroll[tab] || 0, behavior: 'instant' });
+        if (tab === 'analytics' && !why.data && !why.loading && !insights.data && !insights.loading
+            && portfolio.value.origin !== 'empty') {
+          loadAnalytics();
+        }
+        refitCharts(tab);
+      });
+
+      // -- peek sheet ("Why it moved", 24h) ------------------------------------------
+      async function loadPeek() {
+        const seq = ++peekSeq;
+        peek.loading = true;
+        try {
+          const data = await api(`/api/portfolio/attribution?window=24h&top=${PEEK_TOP}`);
+          if (seq !== peekSeq) return;
+          peek.data = data;
+          peek.error = '';
+        } catch (error) {
+          if (seq !== peekSeq) return;
+          handleError(error, { silent: true });
+          peek.data = null;
+          peek.error = error.status === 401 ? '' : 'Could not explain the move: ' + error.message;
+        } finally {
+          if (seq === peekSeq) peek.loading = false;
+        }
+      }
+
+      async function openPeek() {
+        lastFocus = document.activeElement;
+        peek.open = true;
+        document.body.classList.add('sheet-open');
+        if (!peek.data || peek.error) loadPeek();
+        await nextTick();
+        if (peekClose.value) peekClose.value.focus();
+      }
+
+      function closePeek({ restoreFocus = true } = {}) {
+        if (!peek.open) return;
+        peek.open = false;
+        if (!settingsOpen.value) document.body.classList.remove('sheet-open');
+        if (restoreFocus && lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
+      }
+
+      // "See full analysis": same 24h move, explained in full on the Analytics tab.
+      function peekToAnalytics() {
+        closePeek({ restoreFocus: false });
+        setPeriod('24H');
+        setTab('analytics');
+        nextTick(() => { const el = document.getElementById('tab-analytics'); if (el) el.focus({ preventScroll: true }); });
+      }
+
+      function onPeekKeydown(event) {
+        if (event.key === 'Escape') { event.preventDefault(); closePeek(); return; }
+        trapFocus(event, peekSheet.value);
       }
 
       async function refresh({ silent = false } = {}) {
@@ -704,8 +819,9 @@
         try {
           portfolio.value = normalise(await api('/api/portfolio/refresh', { method: 'POST' }));
           await loadHistory({ force: true });
-          loadAttribution();
-          loadInsights();
+          loadAnalytics();
+          peek.data = null;   // a new snapshot changes the 24h story
+          if (peek.open) loadPeek();
           if (!silent) {
             const failed = portfolio.value.errors.length;
             showToast(failed ? `Updated, but ${failed} ${failed === 1 ? 'source' : 'sources'} failed` : 'Balances updated',
@@ -736,7 +852,9 @@
         await nextTick();
         ensureChart();
         await loadHistory();
-        if (portfolio.value.origin !== 'empty') { loadAttribution(); loadInsights(); }
+        // Analytics is fetched up front (SQLite only, cheap) so the tab opens filled in; its
+        // charts are drawn the first time it is shown.
+        if (portfolio.value.origin !== 'empty') loadAnalytics();
         const p = portfolio.value;
         if (p.configured && (p.origin === 'empty' || ageMinutes() > STALE_MINUTES)) refresh({ silent: true });
       }
@@ -954,6 +1072,7 @@
       }
 
       async function openSettings() {
+        closePeek({ restoreFocus: false });
         lastFocus = document.activeElement;
         settingsOpen.value = true;
         document.body.classList.add('sheet-open');
@@ -970,7 +1089,7 @@
       function closeSettings(force = false) {
         if (force !== true && dirty.value && !window.confirm('Discard your unsaved changes?')) return;
         settingsOpen.value = false;
-        document.body.classList.remove('sheet-open');
+        if (!peek.open) document.body.classList.remove('sheet-open');
         if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
       }
 
@@ -980,8 +1099,13 @@
           closeSettings();
           return;
         }
-        if (event.key !== 'Tab' || !sheet.value) return;
-        const focusable = [...sheet.value.querySelectorAll('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+        trapFocus(event, sheet.value);
+      }
+
+      // Keep Tab inside an open sheet.
+      function trapFocus(event, container) {
+        if (event.key !== 'Tab' || !container) return;
+        const focusable = [...container.querySelectorAll('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
           .filter((el) => el.offsetParent !== null);
         if (!focusable.length) return;
         const first = focusable[0];
@@ -1286,7 +1410,7 @@
       // Bindings on the mount element are ignored by Vue, so privacy lives on <body>.
       watch(privacy, (on) => document.body.classList.toggle('privacy', on), { immediate: true });
       watch(tabId, (id) => { storage.set(STORE.tab, id); expanded.value = null; });
-      watch(locked, (isLocked) => { if (isLocked) { destroyChart(); destroyInsightCharts(); } });
+      watch(locked, (isLocked) => { if (isLocked) { closePeek({ restoreFocus: false }); destroyChart(); destroyInsightCharts(); } });
 
       const onBlur = () => onChartRelease();
       const noop = () => {};
@@ -1317,10 +1441,12 @@
         iconFailed, toast, scrolled, locked, unlockToken, unlockError, unlocking,
         heroParts, heroChange, heroTrend, scrubLabel, rangeChange, rangeLabel, chartMessage, updatedAgo,
         visibleAssets, valueCol, emptyTitle, emptyHint,
-        whyWindows: WHY_WINDOWS, why, whyCard, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
-        setWhyWindow, showWhy,
-        insightPeriods: INSIGHT_PERIODS, insights, insightsReady, insightMessage, insightTiles, benchEl, underwaterEl,
-        setInsightPeriod, benchColors: BENCH_COLORS,
+        activeTab, setTab, onTabKeydown,
+        periods: ANALYTICS_PERIODS, periodId, analyticsPeriod, setPeriod,
+        why, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
+        insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
+        peek, peekSheet, peekClose, peekReady, peekTrend, peekSpan, peekBuckets, peekRows, peekMessage,
+        openPeek, closePeek, peekToAnalytics, onPeekKeydown,
         chartWrap, chartEl, sheet, sheetClose, draftEl,
         refresh, setRange, togglePrivacy, toggleAsset, coinIcon, onChartDown, onChartMove, onChartRelease, onChartLeave, unlock,
         settingsOpen, settings, form, showKey, showSecret, saving, saveError, binanceTest, dirty,

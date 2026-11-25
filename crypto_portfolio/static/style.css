@@ -32,6 +32,7 @@
   --radius-card: 22px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --tabbar-h: 56px;
   color-scheme: dark;
 }
 
@@ -224,8 +225,8 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 }
 .chart-empty svg.ghost { position: absolute; inset: auto 0 18px 0; width: 100%; height: 96px; opacity: 0.5; }
 
-/* timeframe pills: 44px hit area, smaller visual chip inside */
-.pills { display: grid; grid-template-columns: repeat(5, 1fr); }
+/* timeframe pills: 44px hit area, smaller visual chip inside; one equal column per pill */
+.pills { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 .pill {
   height: 44px; border: 0; background: transparent; padding: 0;
   display: grid; place-items: center;
@@ -468,8 +469,8 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 .expand-enter-from, .expand-leave-to { opacity: 0; transform: translateY(-4px); }
 
 /* -- toast ------------------------------------------------------------------ */
-.toast-wrap {
-  position: fixed; left: 0; right: 0; bottom: calc(18px + var(--safe-bottom)); z-index: 70;
+.toast-wrap {   /* floats just above the tab bar */
+  position: fixed; left: 0; right: 0; bottom: calc(var(--tabbar-h) + 14px + var(--safe-bottom)); z-index: 70;
   display: flex; justify-content: center; pointer-events: none; padding: 0 16px;
 }
 .toast {
@@ -493,10 +494,6 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 }
 
 /* -- why it moved (attribution card) ------------------------------------------ */
-.why:focus { outline: none; }
-.why:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
-.why-pills { grid-template-columns: repeat(3, auto); flex: none; }
-.why-pills .pill { height: 40px; }
 .pnl-chip.is-link { cursor: pointer; border: 0; font: inherit; }
 .pnl-chip.is-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 @media (hover: hover) { .pnl-chip.is-link:hover { filter: brightness(1.15); } }
@@ -524,14 +521,64 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 }
 .why-row .pnl .icon { vertical-align: -1px; }
 
-/* Insights card (F3.quant): metric tiles, base-100 benchmark chart, underwater chart */
-.insight-pills { grid-template-columns: repeat(4, auto); flex: none; }
-.insight-pills .pill { height: 40px; }
-.insight-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.insight-tile { min-width: 0; padding: 10px 12px; border-radius: 14px; background: var(--surface-2, rgba(255, 255, 255, 0.03)); }
+/* Performance + risk cards (F3.quant): metric tiles, base-100 benchmark chart, underwater chart */
+.insight-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.insight-tile { min-width: 0; padding: 10px; border-radius: 14px; background: var(--surface-2, rgba(255, 255, 255, 0.03)); }
 .insight-tile.insufficient { opacity: 0.55; filter: grayscale(1); }
 .insight-sub { font-size: 13px; font-weight: 800; letter-spacing: -0.01em; }
-.insight-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; font-size: 11px; font-weight: 600; color: #8590A0; }
-.insight-legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+.insight-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.insight-legend li { display: inline-flex; align-items: center; gap: 5px; }
+.insight-legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; }
 .insight-chart { height: 180px; margin: 6px 8px 0; min-width: 0; }
 .insight-chart-sm { height: 120px; }
+
+/* -- tabs: Portfolio | Analytics ---------------------------------------------- */
+/* Content clears the fixed tab bar (and the home indicator on iOS). */
+.app-main { padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 28px); }
+
+.tabbar {
+  padding-bottom: env(safe-area-inset-bottom, 12px);
+  -webkit-backdrop-filter: blur(12px);   /* Safari still needs the prefix next to backdrop-blur-md */
+}
+.tabbar-btn {
+  min-height: var(--tabbar-h);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  border: 0; background: transparent; padding: 4px 0 6px;
+  color: var(--ink-3);
+  transition: color 0.2s ease;
+}
+.tabbar-ico {
+  display: grid; place-items: center;
+  width: 52px; height: 28px; border-radius: 999px;
+  transition: background-color 0.25s var(--ease-out), transform 0.15s ease;
+}
+.tabbar-label { font-size: 11px; font-weight: 700; letter-spacing: 0.01em; }
+.tabbar-btn[aria-selected="true"] { color: var(--ink); }
+.tabbar-btn[aria-selected="true"] .tabbar-ico { background: var(--surface-3); }
+.tabbar-btn[aria-selected="true"] .icon { stroke-width: 2.1; }
+.tabbar-btn:active .tabbar-ico { transform: scale(0.94); }
+@media (hover: hover) { .tabbar-btn:hover { color: var(--ink); } }
+.tabbar-btn:focus-visible { outline-offset: -4px; border-radius: 14px; }
+
+/* The period selector pinned under the Analytics title */
+.period-pills .pill { height: 40px; }
+
+/* Sections inside the Analytics tab */
+.section-title { font-size: 16px; font-weight: 800; letter-spacing: -0.015em; }
+.section-sub { margin-top: 1px; font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.block-sub { font-size: 13px; font-weight: 800; letter-spacing: -0.01em; }
+.legend-note { font-size: 11px; font-weight: 600; color: var(--ink-3); }
+
+.delta-figure { gap: 8px; align-items: baseline; font-size: 28px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; }
+.delta-figure .delta-pct { font-size: 15px; font-weight: 700; letter-spacing: 0; }
+
+/* Price vs holdings: two equal tiles, extra buckets (overlap, missing data) wrap below */
+.bucket-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.bucket-tile { min-width: 0; padding: 10px 12px; border-radius: 14px; background: var(--surface-2); }
+.bucket-tile .pnl { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* "›" on the hero chip: it opens the peek */
+.pnl-chip .chip-more { margin: 0 -3px 0 1px; opacity: 0.75; }
+
+/* Peek sheet: rows run edge to edge of the sheet body */
+.peek-list .why-row { padding-left: 4px; padding-right: 4px; }

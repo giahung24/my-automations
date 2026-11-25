@@ -58,6 +58,9 @@
     <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
     <symbol id="i-key" viewBox="0 0 24 24"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4M21 2l-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-pie" viewBox="0 0 24 24"><path d="M21 12c.55 0 1-.45.95-1A10 10 0 0 0 13 2.05c-.55-.05-1 .4-1 .95v8a1 1 0 0 0 1 1z"/><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></symbol>
   </svg>
 
   <div id="app" v-cloak>
@@ -92,7 +95,7 @@
         <div class="mx-auto flex h-14 max-w-[560px] items-center justify-between pl-4 pr-2">
           <div class="flex items-center gap-2.5">
             <img src="/static/icons/icon.svg" alt="" class="size-7 rounded-[9px]">
-            <span class="text-[16px] font-extrabold tracking-tight">Portfolio</span>
+            <span class="text-[16px] font-extrabold tracking-tight">{{ activeTab === 'analytics' ? 'Analytics' : 'Portfolio' }}</span>
           </div>
           <div class="flex items-center">
             <button class="icon-btn" type="button" @click="refresh()" :disabled="refreshing || !portfolio.configured"
@@ -104,9 +107,21 @@
             </button>
           </div>
         </div>
+        <!-- One period for the whole Analytics tab, pinned with the title -->
+        <div v-show="activeTab === 'analytics' && !loading && portfolio.configured && portfolio.origin !== 'empty'" class="mx-auto max-w-[560px] px-3 pb-1.5">
+          <div class="pills period-pills" role="tablist" aria-label="Analytics period">
+            <button v-for="p in periods" :key="p.id" type="button" class="pill" role="tab"
+                    :aria-selected="periodId === p.id" @click="setPeriod(p.id)">
+              <span>{{ p.id }}</span>
+            </button>
+          </div>
+        </div>
       </header>
 
-      <main class="mx-auto max-w-[560px] px-4 pb-[calc(env(safe-area-inset-bottom)+32px)] pt-2">
+      <main class="app-main mx-auto max-w-[560px] px-4 pt-2">
+
+        <!-- ============ Portfolio: the one-second glance ============ -->
+        <div v-show="activeTab === 'portfolio'" id="panel-portfolio" role="tabpanel" aria-labelledby="tab-portfolio">
 
         <!-- Hero: total, 24h move, chart, timeframes -->
         <section class="card hero" :class="'trend-' + heroTrend" aria-labelledby="networth-label">
@@ -134,11 +149,13 @@
               <template v-if="loading"><div class="skeleton h-5 w-40"></div></template>
               <template v-else-if="heroChange">
                 <component :is="heroChange.explainable ? 'button' : 'span'" class="pnl-chip num" :class="[heroChange.trend, { 'is-link': heroChange.explainable }]"
-                           :type="heroChange.explainable ? 'button' : null" @click="heroChange.explainable && showWhy()"
-                           :title="heroChange.explainable ? 'Why it moved' : null">
+                           :type="heroChange.explainable ? 'button' : null" @click="heroChange.explainable && openPeek()"
+                           :aria-haspopup="heroChange.explainable ? 'dialog' : null"
+                           :aria-label="heroChange.explainable ? 'Why it moved: ' + fmt.signedMoney(heroChange.usd) + (heroChange.pct !== null ? ' (' + fmt.signedPct(heroChange.pct) + ')' : '') : null">
                   <svg class="icon icon-xs"><use :href="heroChange.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
                   <span class="priv priv-soft">{{ fmt.signedMoney(heroChange.usd) }}</span>
                   <span v-if="heroChange.pct !== null">({{ fmt.signedPct(heroChange.pct) }})</span>
+                  <svg v-if="heroChange.explainable" class="icon icon-xs chip-more" aria-hidden="true"><use href="#i-chevron-right"/></svg>
                 </component>
                 <span class="truncate font-semibold text-ink-3">{{ heroChange.label }}</span>
               </template>
@@ -206,139 +223,6 @@
             </ul>
           </div>
         </div>
-
-        <!-- Why it moved: NAV change split into market price vs holdings change, per coin -->
-        <section v-if="!loading && portfolio.configured && portfolio.origin !== 'empty'" ref="whyCard" tabindex="-1"
-                 class="card why mt-4" aria-labelledby="why-title" :aria-busy="why.loading">
-          <div class="flex items-center justify-between gap-2 pl-5 pr-2 pt-2">
-            <h2 id="why-title" class="text-[15px] font-extrabold tracking-tight">Why it moved</h2>
-            <div class="pills why-pills" role="tablist" aria-label="Explain the change over">
-              <button v-for="w in whyWindows" :key="w.id" type="button" class="pill" role="tab"
-                      :aria-selected="why.window === w.id" @click="setWhyWindow(w.id)">
-                <span>{{ w.label }}</span>
-              </button>
-            </div>
-          </div>
-
-          <div v-if="why.loading && !why.data && !why.error" class="space-y-3 px-5 pb-5 pt-1">
-            <div class="skeleton h-5 w-48"></div>
-            <div v-for="n in 3" :key="n" class="skeleton h-4 w-full"></div>
-          </div>
-
-          <template v-else>
-            <template v-if="whyReady">
-              <p class="px-5 text-[13px] font-semibold text-ink-3 num">
-                <span class="pnl" :class="whyTrend">
-                  <span class="priv priv-soft">{{ fmt.signedMoney(why.data.delta_usd) }}</span>
-                  <span v-if="why.data.delta_pct !== null"> ({{ fmt.signedPct(why.data.delta_pct) }})</span>
-                </span>
-                over {{ whySpan }} · {{ why.data.snapshots }} snapshots
-              </p>
-
-              <ul class="why-buckets mt-3 px-5" aria-label="Where the change came from">
-                <li v-for="bucket in whyBuckets" :key="bucket.id" :title="bucket.hint">
-                  <span class="text-ink-3">{{ bucket.label }}</span>
-                  <span class="pnl num font-extrabold" :class="bucket.trend">
-                    <span class="priv priv-soft">{{ fmt.signedMoney(bucket.value) }}</span>
-                  </span>
-                </li>
-              </ul>
-
-              <div v-if="why.data.degraded_pairs" class="notice mx-4 mt-3" role="status">
-                <svg class="icon icon-sm"><use href="#i-alert"/></svg>
-                <span>{{ why.data.degraded_pairs }} {{ why.data.degraded_pairs === 1 ? 'snapshot pair has' : 'snapshot pairs have' }}
-                  a failed source; <span class="priv priv-soft num">{{ fmt.signedMoney(why.data.buckets.data_gap) }}</span>
-                  is counted as missing data, not as a price move.</span>
-              </div>
-              <div v-if="why.data.identity_error" class="notice error mx-4 mt-3" role="alert">
-                <svg class="icon icon-sm"><use href="#i-alert"/></svg>
-                <span>The stored totals and the per-coin rows disagree, so this breakdown is incomplete
-                  (off by <span class="priv priv-soft num">{{ fmt.money(Math.abs(why.data.identity_error.difference_usd)) }}</span>).</span>
-              </div>
-
-              <ul v-if="whyRows.length" class="why-list mt-3" aria-label="Coins that pulled the total up or down">
-                <li v-for="r in whyRows" :key="r.key" class="why-row" :title="r.breakdown">
-                  <span class="coin coin-sm" :style="{ '--hue': fmt.hue(r.key) }" aria-hidden="true">
-                    <img v-if="coinIcon(r.key)" :src="coinIcon(r.key)" alt="" @error="iconFailed[r.key] = true">
-                    <span v-else>{{ fmt.badge(r.key) }}</span>
-                  </span>
-                  <span class="min-w-0">
-                    <span class="block truncate text-[14px] font-extrabold tracking-tight">{{ r.key }}</span>
-                    <span class="block truncate text-[12px] font-semibold text-ink-3 num">{{ r.note }}</span>
-                  </span>
-                  <span class="why-bar" aria-hidden="true">
-                    <i :class="[r.trend, { qty: !r.byPrice }]" :style="{ width: r.width + '%' }"></i>
-                  </span>
-                  <span class="pnl num whitespace-nowrap text-right text-[14px] font-extrabold" :class="r.trend">
-                    <svg class="icon icon-xs"><use :href="r.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
-                    <span class="priv priv-soft">{{ fmt.signedMoney(r.total) }}</span>
-                    <span class="sr-only">{{ r.breakdown }}</span>
-                  </span>
-                </li>
-              </ul>
-              <p v-if="whyOthers" class="px-5 pt-1 text-[12px] font-semibold text-ink-3">
-                + {{ whyOthers.count }} other {{ whyOthers.count === 1 ? 'asset' : 'assets' }}
-                <span class="priv priv-soft num">{{ fmt.signedMoney(whyOthers.total) }}</span>
-              </p>
-            </template>
-            <p v-if="whyMessage" class="px-5 pt-1 text-[13px] font-semibold text-ink-3">{{ whyMessage }}</p>
-            <div class="h-4"></div>
-          </template>
-        </section>
-
-        <!-- Insights: TWR, base 100 vs BTC/ETH, max drawdown + underwater, volatility -->
-        <section v-if="!loading && portfolio.configured && portfolio.origin !== 'empty'"
-                 class="card insights mt-4" aria-labelledby="insights-title" :aria-busy="insights.loading">
-          <div class="flex items-center justify-between gap-2 pl-5 pr-2 pt-2">
-            <h2 id="insights-title" class="text-[15px] font-extrabold tracking-tight">Insights</h2>
-            <div class="pills insight-pills" role="tablist" aria-label="Insights period">
-              <button v-for="p in insightPeriods" :key="p.id" type="button" class="pill" role="tab"
-                      :aria-selected="insights.period === p.id" @click="setInsightPeriod(p.id)">
-                <span>{{ p.label }}</span>
-              </button>
-            </div>
-          </div>
-
-          <div v-if="insights.loading && !insights.data && !insights.error" class="space-y-3 px-5 pb-5 pt-1">
-            <div class="skeleton h-5 w-48"></div>
-            <div v-for="n in 3" :key="n" class="skeleton h-4 w-full"></div>
-          </div>
-
-          <template v-else>
-            <template v-if="insightsReady">
-              <p class="px-5 text-[12px] font-semibold text-ink-3 num">
-                {{ insights.data.start }} → {{ insights.data.end }} · {{ insights.data.n_obs }} daily returns
-              </p>
-              <div v-if="!insights.data.flow_adjusted" class="notice mx-4 mt-2" role="status">
-                <svg class="icon icon-sm"><use href="#i-alert"/></svg>
-                <span>Deposits and withdrawals are not synced yet, so returns still include them.</span>
-              </div>
-
-              <ul class="insight-tiles mt-3 px-4" aria-label="Performance and risk metrics">
-                <li v-for="t in insightTiles" :key="t.id" class="insight-tile" :class="{ insufficient: !t.sufficient }" :title="t.hint">
-                  <span class="block text-[12px] font-semibold text-ink-3">{{ t.label }}</span>
-                  <span class="pnl num block text-[18px] font-extrabold" :class="t.trend">{{ t.text }}</span>
-                  <span class="block truncate text-[11px] font-semibold text-ink-3 num">{{ t.note }}</span>
-                </li>
-              </ul>
-
-              <h3 class="insight-sub px-5 mt-4">Base 100 vs BTC &amp; ETH</h3>
-              <div class="insight-legend px-5" aria-hidden="true">
-                <span><i :style="{ background: benchColors.portfolio }"></i>You (TWR)</span>
-                <span><i :style="{ background: benchColors.BTC }"></i>BTC</span>
-                <span><i :style="{ background: benchColors.ETH }"></i>ETH</span>
-              </div>
-              <div ref="benchEl" class="insight-chart" role="img"
-                   aria-label="Portfolio time-weighted index against BTC and ETH, all starting at 100"></div>
-
-              <h3 class="insight-sub px-5 mt-4">Underwater (drawdown from peak)</h3>
-              <div ref="underwaterEl" class="insight-chart insight-chart-sm" role="img"
-                   :aria-label="'Drawdown from the high-water mark; maximum ' + (insights.data.drawdown.max_drawdown_pct ?? 0) + '%'"></div>
-            </template>
-            <p v-if="insightMessage" class="px-5 pt-1 text-[13px] font-semibold text-ink-3">{{ insightMessage }}</p>
-            <div class="h-4"></div>
-          </template>
-        </section>
 
         <!-- First run -->
         <section v-if="!loading && !portfolio.configured" class="card mt-4 p-5">
@@ -425,11 +309,194 @@
             (<span class="priv priv-soft num">{{ fmt.money(portfolio.dust.value_usd) }}</span>, counted in the total).
           </p>
         </section>
+        </div>
+
+        <!-- ============ Analytics: why it moved, performance, risk ============ -->
+        <div v-show="activeTab === 'analytics'" id="panel-analytics" role="tabpanel" aria-labelledby="tab-analytics">
+
+          <template v-if="!loading && portfolio.configured && portfolio.origin !== 'empty'">
+            <!-- 1. Attribution: what made the total move over the period -->
+            <section class="card mt-2" aria-labelledby="why-title" :aria-busy="why.loading">
+              <div class="px-5 pt-4">
+                <h2 id="why-title" class="section-title">Why it moved</h2>
+                <p class="section-sub">Market prices versus changes in what you hold</p>
+              </div>
+
+              <div v-if="why.loading && !why.data && !why.error" class="space-y-3 px-5 pb-5 pt-3">
+                <div class="skeleton h-8 w-44"></div>
+                <div class="grid grid-cols-2 gap-2"><div class="skeleton h-16"></div><div class="skeleton h-16"></div></div>
+                <div v-for="n in 3" :key="n" class="skeleton h-4 w-full"></div>
+              </div>
+
+              <template v-else>
+                <template v-if="whyReady">
+                  <div class="px-5 pt-3">
+                    <p class="delta-figure num pnl" :class="whyTrend">
+                      <span class="priv">{{ fmt.signedMoney(why.data.delta_usd) }}</span>
+                      <span v-if="why.data.delta_pct !== null" class="delta-pct">{{ fmt.signedPct(why.data.delta_pct) }}</span>
+                    </p>
+                    <p class="mt-0.5 text-[12px] font-semibold text-ink-3 num">
+                      over {{ whySpan }} · {{ why.data.snapshots }} snapshots
+                      <template v-if="analyticsPeriod.whyNote"> · {{ analyticsPeriod.whyNote }}</template>
+                    </p>
+                  </div>
+
+                  <ul class="bucket-tiles mt-3 px-4" aria-label="Where the change came from">
+                    <li v-for="bucket in whyBuckets" :key="bucket.id" class="bucket-tile" :class="'bucket-' + bucket.id" :title="bucket.hint">
+                      <span class="block text-[12px] font-semibold text-ink-3">{{ bucket.label }}</span>
+                      <span class="pnl num block text-[16px] font-extrabold" :class="bucket.trend">
+                        <span class="priv priv-soft">{{ fmt.signedMoney(bucket.value) }}</span>
+                      </span>
+                    </li>
+                  </ul>
+
+                  <div v-if="why.data.degraded_pairs" class="notice mx-4 mt-3" role="status">
+                    <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                    <span>{{ why.data.degraded_pairs }} {{ why.data.degraded_pairs === 1 ? 'snapshot pair has' : 'snapshot pairs have' }}
+                      a failed source; <span class="priv priv-soft num">{{ fmt.signedMoney(why.data.buckets.data_gap) }}</span>
+                      is counted as missing data, not as a price move.</span>
+                  </div>
+                  <div v-if="why.data.identity_error" class="notice error mx-4 mt-3" role="alert">
+                    <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                    <span>The stored totals and the per-coin rows disagree, so this breakdown is incomplete
+                      (off by <span class="priv priv-soft num">{{ fmt.money(Math.abs(why.data.identity_error.difference_usd)) }}</span>).</span>
+                  </div>
+
+                  <h3 v-if="whyRows.length" class="block-sub mt-4 px-5">Biggest movers</h3>
+                  <ul v-if="whyRows.length" class="why-list mt-1" aria-label="Coins that pulled the total up or down">
+                    <li v-for="r in whyRows" :key="r.key" class="why-row" :title="r.breakdown">
+                      <span class="coin coin-sm" :style="{ '--hue': fmt.hue(r.key) }" aria-hidden="true">
+                        <img v-if="coinIcon(r.key)" :src="coinIcon(r.key)" alt="" @error="iconFailed[r.key] = true">
+                        <span v-else>{{ fmt.badge(r.key) }}</span>
+                      </span>
+                      <span class="min-w-0">
+                        <span class="block truncate text-[14px] font-extrabold tracking-tight">{{ r.key }}</span>
+                        <span class="block truncate text-[12px] font-semibold text-ink-3 num">{{ r.note }}</span>
+                      </span>
+                      <span class="why-bar" aria-hidden="true">
+                        <i :class="[r.trend, { qty: !r.byPrice }]" :style="{ width: r.width + '%' }"></i>
+                      </span>
+                      <span class="pnl num whitespace-nowrap text-right text-[14px] font-extrabold" :class="r.trend">
+                        <svg class="icon icon-xs"><use :href="r.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
+                        <span class="priv priv-soft">{{ fmt.signedMoney(r.total) }}</span>
+                        <span class="sr-only">{{ r.breakdown }}</span>
+                      </span>
+                    </li>
+                  </ul>
+                  <p v-if="whyOthers" class="px-5 pt-1 text-[12px] font-semibold text-ink-3">
+                    + {{ whyOthers.count }} other {{ whyOthers.count === 1 ? 'asset' : 'assets' }}
+                    <span class="priv priv-soft num">{{ fmt.signedMoney(whyOthers.total) }}</span>
+                  </p>
+                  <p v-if="whyRows.length" class="legend-note px-5 pt-2">Striped bar: moved by a change in holdings rather than by price.</p>
+                </template>
+                <p v-if="whyMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ whyMessage }}</p>
+                <div class="h-4"></div>
+              </template>
+            </section>
+
+            <!-- 2. Performance & benchmark -->
+            <section class="card mt-4" aria-labelledby="perf-title" :aria-busy="insights.loading">
+              <div class="px-5 pt-4">
+                <h2 id="perf-title" class="section-title">Performance</h2>
+                <p v-if="insightsReady" class="section-sub num">
+                  {{ insights.data.start }} → {{ insights.data.end }} · {{ insights.data.n_obs }} daily {{ insights.data.n_obs === 1 ? 'return' : 'returns' }}
+                </p>
+              </div>
+
+              <div v-if="insights.loading && !insights.data && !insights.error" class="space-y-3 px-5 pb-5 pt-3">
+                <div class="grid grid-cols-3 gap-2"><div class="skeleton h-16"></div><div class="skeleton h-16"></div><div class="skeleton h-16"></div></div>
+                <div class="skeleton h-40 w-full"></div>
+              </div>
+
+              <template v-else>
+                <template v-if="insightsReady">
+                  <div v-if="analyticsPeriod.quantNote" class="notice info mx-4 mt-3" role="status">
+                    <svg class="icon icon-sm"><use href="#i-info"/></svg>
+                    <span>{{ analyticsPeriod.quantNote }}</span>
+                  </div>
+                  <div v-if="!insights.data.flow_adjusted" class="notice mx-4 mt-3" role="status">
+                    <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                    <span>Deposits and withdrawals are not synced yet, so returns still include them.</span>
+                  </div>
+
+                  <ul class="insight-tiles mt-3 px-4" aria-label="Performance and risk metrics">
+                    <li v-for="t in insightTiles" :key="t.id" class="insight-tile" :class="{ insufficient: !t.sufficient }" :title="t.hint">
+                      <span class="block text-[11px] font-semibold leading-tight text-ink-3">{{ t.label }}</span>
+                      <span class="pnl num mt-0.5 block text-[17px] font-extrabold" :class="t.trend">{{ t.text }}</span>
+                      <span class="block text-[11px] font-semibold leading-tight text-ink-3 num">{{ t.note }}</span>
+                    </li>
+                  </ul>
+
+                  <h3 class="block-sub mt-5 px-5">You vs BTC vs ETH <span class="font-semibold text-ink-3">· base 100</span></h3>
+                  <ul class="insight-legend px-5" aria-label="Return over the period">
+                    <li v-for="l in benchLegend" :key="l.key">
+                      <i :style="{ background: l.color }" aria-hidden="true"></i>{{ l.label }}
+                      <span class="num font-extrabold text-ink-2">{{ l.text }}</span>
+                    </li>
+                  </ul>
+                  <div ref="benchEl" class="insight-chart" role="img"
+                       aria-label="Portfolio time-weighted index against BTC and ETH, all starting at 100"></div>
+                </template>
+                <p v-if="insightMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ insightMessage }}</p>
+                <div class="h-4"></div>
+              </template>
+            </section>
+
+            <!-- 3. Risk: how far below the high-water mark -->
+            <section v-if="insightsReady" class="card mt-4" aria-labelledby="risk-title">
+              <div class="px-5 pt-4">
+                <h2 id="risk-title" class="section-title">Risk</h2>
+                <p class="section-sub num">
+                  Drawdown from peak · worst
+                  <span class="pnl" :class="(insights.data.drawdown.max_drawdown_pct ?? 0) < 0 ? 'down' : 'flat'">{{ (insights.data.drawdown.max_drawdown_pct ?? 0).toFixed(2) }}%</span>
+                </p>
+              </div>
+              <div ref="underwaterEl" class="insight-chart insight-chart-sm" role="img"
+                   :aria-label="'Underwater chart: drawdown from the high-water mark; maximum ' + (insights.data.drawdown.max_drawdown_pct ?? 0) + '%'"></div>
+              <div class="h-4"></div>
+            </section>
+          </template>
+
+          <!-- Nothing to analyse yet -->
+          <section v-else-if="!loading" class="card mt-2 p-5">
+            <span class="grid size-11 place-items-center rounded-2xl bg-surface-3 text-up"><svg class="icon"><use href="#i-trend"/></svg></span>
+            <h2 class="mt-4 text-[18px] font-extrabold tracking-tight">Analytics need some history</h2>
+            <p class="mt-1 text-ink-2">
+              {{ portfolio.configured ? 'Each refresh, and each cron `record`, stores a snapshot. Attribution starts from the second one, performance from the second day.'
+                                      : 'Connect a source first: analytics are built from the snapshots of your balances.' }}
+            </p>
+            <button v-if="!portfolio.configured" type="button" class="btn btn-primary mt-5 w-full" @click="openSettings">Open settings</button>
+            <button v-else type="button" class="btn btn-secondary mt-5 w-full" @click="refresh()" :disabled="refreshing">
+              {{ refreshing ? 'Fetching balances…' : 'Take a snapshot now' }}
+            </button>
+          </section>
+          <div v-else class="space-y-3 pt-2">
+            <div class="skeleton h-48 w-full rounded-[22px]"></div>
+            <div class="skeleton h-64 w-full rounded-[22px]"></div>
+          </div>
+        </div>
+
         <footer class="mt-10 px-1 text-[12px] leading-relaxed text-ink-3">
           Read-only. Balances from Binance and public RPCs, prices from Binance and DefiLlama.
           Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts™.
         </footer>
       </main>
+
+      <!-- Bottom tab bar -->
+      <nav class="tabbar fixed bottom-0 left-0 right-0 z-30 bg-[#161B22]/90 backdrop-blur-md border-t border-line" aria-label="Sections">
+        <div class="mx-auto grid max-w-[560px] grid-cols-2" role="tablist" aria-label="Sections" @keydown="onTabKeydown">
+          <button id="tab-portfolio" type="button" class="tabbar-btn" role="tab" aria-controls="panel-portfolio"
+                  :aria-selected="activeTab === 'portfolio'" :tabindex="activeTab === 'portfolio' ? 0 : -1" @click="setTab('portfolio')">
+            <span class="tabbar-ico"><svg class="icon"><use href="#i-pie"/></svg></span>
+            <span class="tabbar-label">Portfolio</span>
+          </button>
+          <button id="tab-analytics" type="button" class="tabbar-btn" role="tab" aria-controls="panel-analytics"
+                  :aria-selected="activeTab === 'analytics'" :tabindex="activeTab === 'analytics' ? 0 : -1" @click="setTab('analytics')">
+            <span class="tabbar-ico"><svg class="icon"><use href="#i-trend"/></svg></span>
+            <span class="tabbar-label">Analytics</span>
+          </button>
+        </div>
+      </nav>
 
       <!-- Settings sheet -->
       <transition name="sheet">
@@ -653,6 +720,72 @@
               </p>
               <button type="button" class="btn btn-primary btn-block" @click="saveSettings" :disabled="!settings || saving || !dirty || !!draft || !!saveBlocker">
                 {{ saving ? 'Saving…' : (draft ? 'Finish the wallet first' : (saveBlocker || (dirty ? 'Save settings' : 'No changes'))) }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <!-- "Why it moved" peek: the 24h move at a glance, opened from the hero chip -->
+      <transition name="sheet">
+        <div v-if="peek.open" class="sheet-backdrop" @click.self="closePeek()" @keydown="onPeekKeydown">
+          <div class="sheet peek" role="dialog" aria-modal="true" aria-labelledby="peek-title" ref="peekSheet" :aria-busy="peek.loading">
+            <div class="sheet-grip" aria-hidden="true"></div>
+            <div class="flex items-center justify-between py-2 pl-5 pr-2">
+              <h2 id="peek-title" class="text-[19px] font-extrabold tracking-tight">Why it moved
+                <span class="font-bold text-ink-3">· {{ peekReady ? peekSpan : '24h' }}</span></h2>
+              <button type="button" class="icon-btn" @click="closePeek()" aria-label="Close" ref="peekClose">
+                <svg class="icon"><use href="#i-x"/></svg>
+              </button>
+            </div>
+
+            <div class="sheet-body px-4 pb-4">
+              <div v-if="peek.loading && !peek.data" class="space-y-3 px-1 py-2">
+                <div class="skeleton h-9 w-48"></div>
+                <div class="grid grid-cols-2 gap-2"><div class="skeleton h-16"></div><div class="skeleton h-16"></div></div>
+                <div v-for="n in 3" :key="n" class="skeleton h-10 w-full"></div>
+              </div>
+              <template v-else-if="peekReady">
+                <p class="delta-figure num pnl px-1" :class="peekTrend">
+                  <span class="priv">{{ fmt.signedMoney(peek.data.delta_usd) }}</span>
+                  <span v-if="peek.data.delta_pct !== null" class="delta-pct">{{ fmt.signedPct(peek.data.delta_pct) }}</span>
+                </p>
+                <ul class="bucket-tiles mt-3" aria-label="Where the change came from">
+                  <li v-for="bucket in peekBuckets" :key="bucket.id" class="bucket-tile" :class="'bucket-' + bucket.id" :title="bucket.hint">
+                    <span class="block text-[12px] font-semibold text-ink-3">{{ bucket.label }}</span>
+                    <span class="pnl num block text-[16px] font-extrabold" :class="bucket.trend">
+                      <span class="priv priv-soft">{{ fmt.signedMoney(bucket.value) }}</span>
+                    </span>
+                  </li>
+                </ul>
+                <h3 v-if="peekRows.length" class="block-sub mt-4 px-1">Biggest movers</h3>
+                <ul v-if="peekRows.length" class="why-list peek-list mt-1" aria-label="Coins that moved the total most">
+                  <li v-for="r in peekRows" :key="r.key" class="why-row" :title="r.breakdown">
+                    <span class="coin coin-sm" :style="{ '--hue': fmt.hue(r.key) }" aria-hidden="true">
+                      <img v-if="coinIcon(r.key)" :src="coinIcon(r.key)" alt="" @error="iconFailed[r.key] = true">
+                      <span v-else>{{ fmt.badge(r.key) }}</span>
+                    </span>
+                    <span class="min-w-0">
+                      <span class="block truncate text-[14px] font-extrabold tracking-tight">{{ r.key }}</span>
+                      <span class="block truncate text-[12px] font-semibold text-ink-3 num">{{ r.note }}</span>
+                    </span>
+                    <span class="why-bar" aria-hidden="true">
+                      <i :class="[r.trend, { qty: !r.byPrice }]" :style="{ width: r.width + '%' }"></i>
+                    </span>
+                    <span class="pnl num whitespace-nowrap text-right text-[14px] font-extrabold" :class="r.trend">
+                      <svg class="icon icon-xs"><use :href="r.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
+                      <span class="priv priv-soft">{{ fmt.signedMoney(r.total) }}</span>
+                      <span class="sr-only">{{ r.breakdown }}</span>
+                    </span>
+                  </li>
+                </ul>
+              </template>
+              <p v-if="peekMessage" class="px-1 pt-2 text-[13px] font-semibold text-ink-3">{{ peekMessage }}</p>
+            </div>
+
+            <div class="sheet-foot">
+              <button type="button" class="btn btn-primary btn-block" @click="peekToAnalytics">
+                See full analysis <span aria-hidden="true">→</span>
               </button>
             </div>
           </div>
