@@ -7,7 +7,8 @@ reconstructed by `services/backfill.py` (P0.8): they feed the long-range charts,
 never "the latest snapshot", never the reference of a 24h change, and never part of the
 hole heuristic - they were not fetched, so they say nothing about a source's health. From
 schema v4, `cash_flows` holds deposits/withdrawals (crypto, fiat, P2P) and `sync_state` the
-incremental sync cursors (`services/cash_flows.py`, Epic F2).
+incremental sync cursors (`services/cash_flows.py`, Epic F2). From schema v5, `snapshots.manual_usd`
+is the fifth per-source total: assets declared by hand in `manual_assets:` (Epic M6).
 
 The schema is versioned with `PRAGMA user_version` and upgraded by `migrate()` every time
 a `Database` is opened: the pending steps of `MIGRATIONS` run in a single transaction (all or
@@ -33,6 +34,7 @@ from models import (
     BINANCE_EARN,
     BINANCE_FUNDING,
     BINANCE_SPOT,
+    MANUAL,
     ONCHAIN,
     STATUS_INFERRED_ERROR,
     Portfolio,
@@ -142,17 +144,25 @@ CREATE TABLE IF NOT EXISTS sync_state (
 );
 """
 
+# v5 (M6.2): the fifth per-source total, manual assets (cold wallet, external staking). Older
+# snapshots had none, so 0 is their true value; the four other totals are untouched.
+SCHEMA_V5 = """
+ALTER TABLE snapshots ADD COLUMN manual_usd REAL NOT NULL DEFAULT 0;
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
     SCHEMA_V2,  # v2
     SCHEMA_V3,  # v3
     SCHEMA_V4,  # v4
+    SCHEMA_V5,  # v5
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
 BACKFILL_SCHEMA_VERSION = 3  # first version with snapshots.is_backfilled
 CASH_FLOWS_SCHEMA_VERSION = 4  # first version with cash_flows / sync_state
+MANUAL_SCHEMA_VERSION = 5  # first version with snapshots.manual_usd
 
 # Readers (the `mode=ro` API gateway) never block on, or are blocked by, the collector's writes.
 # Persistent: once set, every later connection to the file - from any process - uses it.
@@ -180,6 +190,7 @@ SOURCE_COLUMNS = {
     BINANCE_EARN: "binance_earn_usd",
     BINANCE_FUNDING: "binance_funding_usd",
     ONCHAIN: "onchain_usd",
+    MANUAL: "manual_usd",
 }
 
 
@@ -194,6 +205,7 @@ class Snapshot:
     onchain_usd: float
     trigger: str = TRIGGER_UNKNOWN
     is_backfilled: bool = False
+    manual_usd: float = 0.0
 
     @property
     def dt(self) -> datetime:
@@ -290,7 +302,7 @@ class Database:
     def backfill_inferred_errors(self) -> int:
         """Mark the holes of snapshots that have no `snapshot_sources` row (taken before v2).
 
-        For each of the four source totals, a snapshot whose value fell by more than
+        For each per-source total, a snapshot whose value fell by more than
         `HOLE_DROP` from the previous snapshot and recovered more than `HOLE_RECOVERY` of the
         fall in the next one gets `status = 'inferred_error'` for that source. Only single-
         snapshot holes are detected. Idempotent; returns the number of rows inserted.
@@ -403,8 +415,8 @@ def _insert_snapshot(connection: sqlite3.Connection, portfolio: Portfolio, trigg
     cursor = connection.execute(
         """INSERT INTO snapshots
                (timestamp, total_portfolio_usd, binance_spot_usd, binance_earn_usd,
-                binance_funding_usd, onchain_usd, trigger, is_backfilled)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                binance_funding_usd, onchain_usd, manual_usd, trigger, is_backfilled)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             portfolio.timestamp or utc_now_iso(),
             float(portfolio.total_usd),
@@ -412,6 +424,7 @@ def _insert_snapshot(connection: sqlite3.Connection, portfolio: Portfolio, trigg
             totals[BINANCE_EARN],
             totals[BINANCE_FUNDING],
             totals[ONCHAIN],
+            totals[MANUAL],
             trigger,
             int(is_backfilled),
         ),
@@ -597,4 +610,5 @@ def _as_snapshot(row: sqlite3.Row) -> Snapshot:
         onchain_usd=float(row["onchain_usd"]),
         trigger=row["trigger"] if "trigger" in row.keys() else TRIGGER_UNKNOWN,
         is_backfilled=bool(row["is_backfilled"]) if "is_backfilled" in row.keys() else False,
+        manual_usd=float(row["manual_usd"] or 0.0) if "manual_usd" in row.keys() else 0.0,
     )

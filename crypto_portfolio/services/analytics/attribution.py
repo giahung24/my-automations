@@ -39,7 +39,16 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from models import ONCHAIN, STATUS_ERROR, STATUS_INFERRED_ERROR, is_onchain_source, onchain_source
+from models import (
+    MANUAL,
+    ONCHAIN,
+    STATUS_ERROR,
+    STATUS_INFERRED_ERROR,
+    is_manual_source,
+    is_onchain_source,
+    manual_source,
+    onchain_source,
+)
 from services.db import Database, Snapshot, parse_timestamp
 
 log = logging.getLogger(__name__)
@@ -124,6 +133,11 @@ class SnapshotState:
                 return True
             if source_key == ONCHAIN:
                 return any(is_onchain_source(s) for s in degraded)
+        if is_manual_source(source_key):
+            if MANUAL in degraded:
+                return True
+            if source_key == MANUAL:
+                return any(is_manual_source(s) for s in degraded)
         return False
 
 
@@ -159,12 +173,17 @@ def position_key(symbol: str, source: str, detail: str = "") -> tuple[str, str]:
     """
     if source == ONCHAIN and detail:
         return symbol, onchain_source(detail)
+    if source == MANUAL and detail:  # keyed by asset label, like `snapshot_sources` (M6.2)
+        return symbol, manual_source(detail)
     return symbol, source
 
 
 def base_source(source_key: str) -> str:
-    """``onchain:<chain>/<label>`` -> ``onchain``; Binance keys are unchanged."""
-    return ONCHAIN if is_onchain_source(source_key) else source_key
+    """``onchain:<chain>/<label>`` -> ``onchain``, ``manual:<label>`` -> ``manual``; Binance keys
+    are unchanged."""
+    if is_onchain_source(source_key):
+        return ONCHAIN
+    return MANUAL if is_manual_source(source_key) else source_key
 
 
 def group_key(key: tuple[str, str], group_by: str) -> str:

@@ -131,7 +131,12 @@ DEFAULTS = {
         "overlap_days": 2,         # later syncs re-read this much, to catch pending -> completed
         "sync_fiat": True,         # /sapi/v1/fiat/orders + /sapi/v1/fiat/payments
         "sync_p2p": True,          # /sapi/v1/c2c/orderMatch/listUserOrderHistory
+        "in_transit_hours": 2,     # a Binance withdrawal this old can still pair with a manual change
+        "amount_tolerance_pct": 0.5,  # |withdrawn - fee - received| allowed when pairing, % of withdrawn
     },
+    # Epic M6 (ROADMAP_LEDGER §9.3): balances with no API - BTC on a hardware wallet, staking
+    # elsewhere. Validated by `parse_manual_assets`; a bad entry is skipped, never fatal.
+    "manual_assets": [],
 }
 
 
@@ -163,6 +168,8 @@ class CashFlowSettings:
     overlap_days: int = 2
     sync_fiat: bool = True
     sync_p2p: bool = True
+    in_transit_hours: int = 2
+    amount_tolerance_pct: float = 0.5
 
     @classmethod
     def from_raw(cls, raw) -> "CashFlowSettings":
@@ -182,13 +189,176 @@ class CashFlowSettings:
                 return getattr(default, name)
             return min(max(value, low), high)
 
+        def percent(name: str, low: float, high: float) -> float:
+            try:
+                value = float(raw.get(name, getattr(default, name)))
+            except (TypeError, ValueError):
+                return getattr(default, name)
+            if value != value:  # NaN
+                return getattr(default, name)
+            return min(max(value, low), high)
+
         return cls(
             enabled=flag("enabled"),
             backfill_days=days("backfill_days", 1, 3650),
             overlap_days=days("overlap_days", 0, 30),
             sync_fiat=flag("sync_fiat"),
             sync_p2p=flag("sync_p2p"),
+            in_transit_hours=days("in_transit_hours", 0, 720),
+            amount_tolerance_pct=percent("amount_tolerance_pct", 0.0, 10.0),
         )
+
+
+# -- manual assets (Epic M6) -----------------------------------------------------------
+MANUAL_KINDS = ("cold_wallet", "staking", "other")
+MANUAL_LABEL_MAX = 40
+MANUAL_HOLDINGS_MAX = 50
+
+
+@dataclass(frozen=True)
+class ManualHolding:
+    """One balance of a manual asset. Priced like any holding: Binance ticker, then DefiLlama
+    (`price_id`), and `price_usd` only as the last resort for coins with no market price."""
+
+    symbol: str
+    quantity: float
+    price_id: str = ""
+    price_usd: float | None = None
+    liquid: bool = True
+
+
+@dataclass(frozen=True)
+class ManualAsset:
+    """A place holding coins no API can read: a hardware wallet, a validator, another exchange.
+
+    `label` is unique and is the key everywhere (`snapshot_assets.detail`, `manual:<label>` in
+    `snapshot_sources`, `cash_flows.account`). `updated_at` is the day the quantities were last
+    edited (set by the settings screen), '' when unknown.
+    """
+
+    label: str
+    kind: str
+    holdings: tuple[ManualHolding, ...]
+    updated_at: str = ""
+
+    def to_raw(self) -> dict:
+        """The config.yaml form of this asset (what `parse_manual_assets` reads back)."""
+        entry: dict = {"label": self.label, "kind": self.kind}
+        if self.updated_at:
+            entry["updated_at"] = self.updated_at
+        entry["holdings"] = []
+        for holding in self.holdings:
+            item: dict = {"symbol": holding.symbol, "quantity": holding.quantity}
+            if holding.price_id:
+                item["price_id"] = holding.price_id
+            if holding.price_usd is not None:
+                item["price_usd"] = holding.price_usd
+            if not holding.liquid:
+                item["liquid"] = False
+            entry["holdings"].append(item)
+        return entry
+
+
+def _number(value) -> float | None:
+    """A finite float, or None. Booleans are not numbers here (`quantity: yes` is a typo)."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def parse_manual_assets(raw) -> tuple[list[ManualAsset], list[str]]:
+    """Validate the `manual_assets:` block. Returns ``(assets, errors)``, never raises.
+
+    Each problem yields one readable message and only the faulty part is dropped: a holding
+    with a negative quantity is skipped but its siblings are kept; an asset with a missing or
+    duplicate label is skipped whole (the label is its key). A missing block is ``([], [])``.
+    """
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        return [], [f"manual_assets: expected a list of assets, got {type(raw).__name__}"]
+
+    assets: list[ManualAsset] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(raw, start=1):
+        where = f"manual_assets #{index}"
+        if not isinstance(entry, dict):
+            errors.append(f"{where}: expected a mapping with label, kind and holdings")
+            continue
+        label = str(entry.get("label") or "").strip()
+        if not label:
+            errors.append(f"{where}: label is empty")
+            continue
+        if len(label) > MANUAL_LABEL_MAX:
+            errors.append(f"{where}: label '{label[:20]}…' is longer than {MANUAL_LABEL_MAX} characters")
+            continue
+        where = f"manual_assets '{label}'"
+        if label.casefold() in seen:
+            errors.append(f"{where}: duplicate label (labels must be unique)")
+            continue
+        seen.add(label.casefold())
+
+        kind = str(entry.get("kind") or "other").strip().lower()
+        if kind not in MANUAL_KINDS:
+            errors.append(f"{where}: unknown kind '{kind}' (expected {' | '.join(MANUAL_KINDS)}); using 'other'")
+            kind = "other"
+
+        raw_holdings = entry.get("holdings")
+        if raw_holdings is None:
+            raw_holdings = []
+        if not isinstance(raw_holdings, list):
+            errors.append(f"{where}: holdings must be a list")
+            raw_holdings = []
+        holdings: list[ManualHolding] = []
+        symbols: set[str] = set()
+        for position, item in enumerate(raw_holdings[:MANUAL_HOLDINGS_MAX], start=1):
+            spot = f"{where} holding #{position}"
+            if not isinstance(item, dict):
+                errors.append(f"{spot}: expected {{symbol, quantity}}")
+                continue
+            symbol = str(item.get("symbol") or "").strip().upper()
+            if not symbol:
+                errors.append(f"{spot}: symbol is empty")
+                continue
+            spot = f"{where} {symbol}"
+            if symbol in symbols:
+                errors.append(f"{spot}: listed twice in this asset")
+                continue
+            quantity = _number(item.get("quantity"))
+            if quantity is None:
+                errors.append(f"{spot}: quantity must be a number")
+                continue
+            if quantity < 0:
+                errors.append(f"{spot}: quantity {quantity:g} is negative")
+                continue
+            price_usd = None
+            if item.get("price_usd") is not None:
+                price_usd = _number(item.get("price_usd"))
+                if price_usd is None:
+                    errors.append(f"{spot}: price_usd must be a number")
+                    continue
+                if price_usd < 0:
+                    errors.append(f"{spot}: price_usd {price_usd:g} is negative")
+                    continue
+            liquid = item.get("liquid", True)
+            liquid = _as_bool(liquid) if isinstance(liquid, str) else bool(liquid)
+            symbols.add(symbol)
+            holdings.append(ManualHolding(symbol=symbol, quantity=quantity,
+                                          price_id=str(item.get("price_id") or "").strip(),
+                                          price_usd=price_usd, liquid=liquid))
+        if len(raw_holdings) > MANUAL_HOLDINGS_MAX:
+            errors.append(f"{where}: only the first {MANUAL_HOLDINGS_MAX} holdings are read")
+        updated_at = entry.get("updated_at") or ""
+        assets.append(ManualAsset(label=label, kind=kind, holdings=tuple(holdings),
+                                  updated_at=str(updated_at).strip()))
+    return assets, errors
 
 
 @dataclass
@@ -199,6 +369,7 @@ class Config:
     settings: dict = field(default_factory=dict)
     path: Path | None = None
     cash_flows: dict = field(default_factory=dict)
+    manual_assets: list = field(default_factory=list)  # raw `manual_assets:` block
 
     # -- convenience accessors -------------------------------------------------
     @property
@@ -254,6 +425,24 @@ class Config:
     @property
     def cash_flow_settings(self) -> CashFlowSettings:
         return CashFlowSettings.from_raw(self.cash_flows)
+
+    @property
+    def manual(self) -> list[ManualAsset]:
+        """The valid manual assets (invalid entries are dropped, see `manual_errors`)."""
+        return parse_manual_assets(self.manual_assets)[0]
+
+    @property
+    def manual_errors(self) -> list[str]:
+        return parse_manual_assets(self.manual_assets)[1]
+
+    @property
+    def has_manual_assets(self) -> bool:
+        return any(asset.holdings for asset in self.manual)
+
+    @property
+    def has_sources(self) -> bool:
+        """Anything at all to fetch or value: Binance, a wallet or a manual asset."""
+        return self.binance_enabled or self.has_wallets or self.has_manual_assets
 
 
 def _as_address(value) -> str:
@@ -396,4 +585,5 @@ def load_config(path: str | Path | None = None, missing_ok: bool = False) -> Con
         settings=merged["settings"],
         path=config_path if config_path.is_file() else None,
         cash_flows=merged["cash_flows"] if isinstance(merged.get("cash_flows"), dict) else {},
+        manual_assets=merged.get("manual_assets") if merged.get("manual_assets") is not None else [],
     )

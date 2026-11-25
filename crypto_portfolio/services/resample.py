@@ -24,7 +24,7 @@ INTERVALS = ("1h", "4h", "1d", "1w", "1mo")
 MAX_BUCKETS = 10_000   # e.g. hourly over 5 years would be 43,800: too many for a phone chart
 
 _FIXED = {"1h": 3600, "4h": 4 * 3600, "1d": 86400}
-_NUMERIC = ("total_usd", "binance_usd", "onchain_usd",
+_NUMERIC = ("total_usd", "binance_usd", "onchain_usd", "manual_usd",
             "binance_spot_usd", "binance_earn_usd", "binance_funding_usd")
 
 

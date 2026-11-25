@@ -18,7 +18,9 @@ before ``end - days`` (else the oldest one after it, with ``complete = false``) 
 as the attribution engine. Backfilled monthly checkpoints are never used.
 
 Before any Binance history was synced, the flows are unknown, not zero: the payload then says
-``flow_adjusted = false`` and the PnL equals the raw NAV change (ROADMAP_LEDGER §4, "F_j = 0").
+``flow_adjusted = false`` and the PnL equals the raw NAV change (ROADMAP_LEDGER §4, "F_j = 0") -
+except for manual-asset quantity changes (Epic M6), which are recorded by the collector itself
+and so are always known: they are subtracted either way.
 
 `flow_adjusted_pnl()` is pure; `pnl_report()` reads SQLite and builds the ``GET /api/portfolio/pnl``
 payload.
@@ -29,6 +31,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from models import MANUAL
 from services.cash_flows import COMPLETED, CRYPTO_STREAMS, EXTERNAL_FLOW_TYPES, IN, flows_between, stream_key
 from services.db import Database, Snapshot, parse_timestamp
 
@@ -142,7 +145,9 @@ def window_pnl(database: Database, days: int, latest: Snapshot | None = None,
         return {**payload, "available": False, "reason": "need two snapshots in the window",
                 "end": _snapshot_dict(latest)}
 
-    rows = flows_between(database, reference.timestamp, latest.timestamp) if flow_adjusted else []
+    rows = flows_between(database, reference.timestamp, latest.timestamp)
+    if not flow_adjusted:  # only the flows the collector records itself are known
+        rows = [row for row in rows if row["source"] == MANUAL]
     external = [row for row in rows if row["status"] == COMPLETED and not row["is_internal_transfer"]
                 and row["flow_type"] in EXTERNAL_FLOW_TYPES]
     flows = [Flow(parse_timestamp(row["timestamp"]), _signed(row)) for row in external]

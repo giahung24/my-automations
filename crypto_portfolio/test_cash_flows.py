@@ -227,7 +227,7 @@ def flow(timestamp: datetime, asset="USDT", direction="in", amount=1000.0, price
 # == F2.1: schema v4 =========================================================================
 def test_schema_v4_creates_cash_flows_and_sync_state(tmp_path):
     database = Database(tmp_path / "h.db")
-    assert SCHEMA_VERSION == CASH_FLOWS_SCHEMA_VERSION == database.schema_version() == 4
+    assert SCHEMA_VERSION == database.schema_version() and CASH_FLOWS_SCHEMA_VERSION == 4
     with database.connect() as connection:
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         indexes = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
@@ -244,7 +244,7 @@ def test_v3_database_upgrades_to_v4_keeping_snapshots(tmp_path):
     connection.commit()
     connection.close()
     database = Database(path)
-    assert database.schema_version() == 4
+    assert database.schema_version() == SCHEMA_VERSION  # v3 -> latest
     assert database.history()[0].total_portfolio_usd == 42
     assert list(tmp_path.glob("h.db.bak_v3_*"))  # backed up before the upgrade
 

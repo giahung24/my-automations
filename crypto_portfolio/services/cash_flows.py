@@ -158,6 +158,7 @@ class SyncReport:
     errors: list[str] = field(default_factory=list)
     reclassified: int = 0
     repriced: int = 0
+    paired: int = 0  # Binance flows paired with a manual-asset change (services/manual.py)
 
     @property
     def total_inserted(self) -> int:
@@ -497,7 +498,8 @@ def upsert_flows(database: Database, flows: Iterable[CashFlow]) -> tuple[int, in
 
     Keyed on ``(source, flow_type, external_id)``. On a known row, the facts (status, time,
     tx hash, amounts...) are refreshed; the price is kept once known; the classification is
-    refreshed only while ``classified_by = 'auto'`` - a user override always survives.
+    refreshed only while ``classified_by = 'auto'`` and the row is not paired to another flow
+    (``matched_flow_id``, set by the manual-asset matcher) - a user override always survives.
     """
     inserted = updated = 0
     now = utc_now_iso()
@@ -524,7 +526,7 @@ def upsert_flows(database: Database, flows: Iterable[CashFlow]) -> tuple[int, in
             value = values["amount"] * price
             if abs(value - float(existing["value_usd"])) > 1e-9:
                 changes["value_usd"] = value
-            if existing["classified_by"] == CLASSIFIED_AUTO:
+            if existing["classified_by"] == CLASSIFIED_AUTO and existing["matched_flow_id"] is None:
                 changes.update({name: values[name] for name in _CLASS_COLUMNS
                                 if existing[name] != values[name]})
             if not changes:
@@ -553,7 +555,8 @@ def reclassify(database: Database, owned: dict[str, OwnedWallet]) -> int:
     now = utc_now_iso()
     with database.connect() as connection:
         rows = connection.execute(
-            "SELECT * FROM cash_flows WHERE classified_by = 'auto' AND source = ? AND detection_method = ?",
+            "SELECT * FROM cash_flows WHERE classified_by = 'auto' AND source = ? AND detection_method = ? "
+            "AND matched_flow_id IS NULL",  # a paired row keeps its pairing (services/manual.py)
             (SOURCE_BINANCE, DETECTION_BINANCE_API),
         ).fetchall()
         for row in rows:
@@ -700,6 +703,9 @@ def sync(config, database: Database, client: BinanceClient | None = None,
 
     report.reclassified = reclassify(database, owned)
     report.repriced = reprice_missing(database, prices)
+    # A withdrawal to the cold wallet only becomes known now: pair it with the manual change.
+    from services.manual import match_manual_transfers
+    report.paired = match_manual_transfers(database, settings)
     return report
 
 

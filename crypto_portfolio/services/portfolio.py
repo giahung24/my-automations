@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from models import (
     BINANCE_SOURCES,
+    MANUAL,
     SOURCES,
     STATUS_ERROR,
     STATUS_INFERRED_ERROR,
@@ -62,15 +63,20 @@ def aggregate(holdings: list[Holding], min_value: float = 0.0) -> Portfolio:
 
 
 def fetch_portfolio(config, min_value: float | None = None) -> Portfolio:
-    """Fetch Binance + every configured wallet, then aggregate. Never raises on a dead source."""
+    """Fetch Binance + every configured wallet + the manual assets, then aggregate.
+
+    Never raises on a dead source.
+    """
     # imported here so `--help` and the chart commands work without network libraries warm
     from clients.binance import BinanceClient
     from clients.onchain import OnChainClient
+    from services.manual import fetch_manual
 
     holdings: list[Holding] = []
     errors: list[str] = []
     expected: list[str] = []  # snapshot_sources keys queried this run
     disabled: list[str] = []
+    client = None
 
     if config.binance_enabled:
         expected.extend(BINANCE_SOURCES)
@@ -103,6 +109,15 @@ def fetch_portfolio(config, min_value: float | None = None) -> Portfolio:
             onchain_holdings, onchain_errors = [], [f"onchain: {exc}"]
         holdings.extend(onchain_holdings)
         errors.extend(onchain_errors)
+
+    # Manual assets (M6.2): priced from the Binance ticker already loaded above, when there is one.
+    try:
+        manual_holdings, manual_errors, manual_expected = fetch_manual(config, binance_client=client)
+    except Exception as exc:  # noqa: BLE001 - a manual-asset bug must not sink the other sources
+        manual_holdings, manual_errors, manual_expected = [], [f"{MANUAL}: {exc}"], []
+    holdings.extend(manual_holdings)
+    errors.extend(manual_errors)
+    expected.extend(manual_expected)
 
     portfolio = aggregate(holdings, config.min_value if min_value is None else min_value)
     portfolio.errors = errors

@@ -45,7 +45,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 
-from models import STATUS_ERROR, STATUS_INFERRED_ERROR
+from models import MANUAL, STATUS_ERROR, STATUS_INFERRED_ERROR
 from services.analytics.pnl import Flow, flow_tracking
 from services.cash_flows import COMPLETED, EXTERNAL_FLOW_TYPES, IN, flows_between
 from services.db import Database, Snapshot, parse_timestamp
@@ -313,11 +313,18 @@ def benchmark_prices(database: Database, snapshot_ids: Sequence[int],
     return out
 
 
-def load_flows(database: Database, start: datetime, end: datetime) -> list[Flow]:
-    """Completed external deposits / withdrawals of ``(start, end]``, signed (+in / -out)."""
+def load_flows(database: Database, start: datetime, end: datetime,
+               manual_only: bool = False) -> list[Flow]:
+    """Completed external deposits / withdrawals of ``(start, end]``, signed (+in / -out).
+
+    `manual_only` keeps only the manual-asset quantity changes (Epic M6): before any Binance
+    history is synced those are the only flows known, and they are known exactly.
+    """
     rows = flows_between(database, _iso(start), _iso(end))
     flows = []
     for row in rows:
+        if manual_only and row["source"] != MANUAL:
+            continue
         if row["status"] != COMPLETED or row["is_internal_transfer"] \
                 or row["flow_type"] not in EXTERNAL_FLOW_TYPES:
             continue
@@ -364,7 +371,8 @@ def quant_report(database: Database, period: str = "all", include_backfilled: bo
         return {**payload, "available": False, "n_obs": max(len(closes) - 1, 0), "sufficient": False,
                 "reason": "need daily closes on at least two days"}
 
-    flows = load_flows(database, closes[0].timestamp, closes[-1].timestamp) if flow_adjusted else []
+    flows = load_flows(database, closes[0].timestamp, closes[-1].timestamp,
+                       manual_only=not flow_adjusted)
     series = build_series(closes, flows)
     span_days = (closes[-1].day - closes[0].day).days
     vol = annualized_volatility(series.observations, min_observations)

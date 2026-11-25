@@ -12,13 +12,17 @@ BINANCE_SPOT = "binance_spot"
 BINANCE_EARN = "binance_earn"
 BINANCE_FUNDING = "binance_funding"
 ONCHAIN = "onchain"
-SOURCES = (BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING, ONCHAIN)
+MANUAL = "manual"  # Epic M6: declared in config.yaml (cold wallet, staking), priced by market
+SOURCES = (BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING, ONCHAIN, MANUAL)
 SOURCE_LABELS = {
     BINANCE_SPOT: "Binance Spot",
     BINANCE_EARN: "Binance Earn",
     BINANCE_FUNDING: "Binance Funding",
     ONCHAIN: "On-chain",
+    MANUAL: "Cold / Manual",
 }
+# Where the coins sit, for custody ratios: on an exchange, or under your own keys.
+SELF_CUSTODY_SOURCES = (ONCHAIN, MANUAL)
 BINANCE_SOURCES = (BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING)
 
 # Per-snapshot health of each data source (table `snapshot_sources`). The keys are finer than
@@ -48,6 +52,15 @@ def is_onchain_source(source: str) -> bool:
     return source == ONCHAIN or source.startswith(f"{ONCHAIN}:")
 
 
+def manual_source(label: str) -> str:
+    """`Ledger Nano X` -> `manual:Ledger Nano X`, the `snapshot_sources.source` of a manual asset."""
+    return f"{MANUAL}:{label}"
+
+
+def is_manual_source(source: str) -> bool:
+    return source == MANUAL or source.startswith(f"{MANUAL}:")
+
+
 @dataclass
 class Holding:
     """One asset balance from one source.
@@ -60,7 +73,7 @@ class Holding:
     source: str
     quantity: float
     price_usd: float = 0.0
-    detail: str = ""  # chain / wallet label, shown for on-chain rows
+    detail: str = ""  # chain / wallet label (on-chain rows), asset label (manual rows)
     price_id: str = ""
 
     @property
@@ -122,12 +135,14 @@ class SourceStatus:
     error: str = ""
 
 
-def classify_error(error: str, onchain_sources: Iterable[str] = ()) -> list[str]:
+def classify_error(error: str, onchain_sources: Iterable[str] = (),
+                   manual_sources: Iterable[str] = ()) -> list[str]:
     """The `snapshot_sources` keys an error message (as produced by the clients) is about.
 
     A pricing failure zeroes every row of its half, so it hits every source of that half.
     `onchain_sources` (``onchain:<chain>/<label>`` keys) lets a wallet label that contains
     spaces be matched exactly; without them the name is cut at the first space or colon.
+    `manual_sources` (``manual:<label>``) do the same for manual assets.
     """
     text = error.strip()
     lowered = text.lower()
@@ -135,6 +150,12 @@ def classify_error(error: str, onchain_sources: Iterable[str] = ()) -> list[str]
     for prefix, sources in _BINANCE_SECTIONS.items():
         if lowered.startswith(prefix):
             return list(sources)
+    if lowered.startswith(f"{MANUAL}:"):
+        # `manual:<label> <symbol>: ...`; longest label wins, as for wallets below
+        for source in sorted(manual_sources, key=len, reverse=True):
+            if text.startswith(source) and text[len(source):len(source) + 1] in (":", " "):
+                return [source]
+        return [MANUAL]
     if lowered.startswith("binance"):  # `binance prices:`, `binance: <client failure>`, no key...
         return list(BINANCE_SOURCES)
     if lowered.startswith("defillama") or lowered.startswith(f"{ONCHAIN}:"):
@@ -161,8 +182,9 @@ def source_statuses(errors: Iterable[str], expected: Iterable[str] = (),
     statuses = {source: SourceStatus(STATUS_DISABLED) for source in disabled}
     statuses.update({source: SourceStatus(STATUS_OK) for source in expected})
     onchain = [source for source in statuses if source.startswith(f"{ONCHAIN}:")]
+    manual = [source for source in statuses if source.startswith(f"{MANUAL}:")]
     for error in errors:
-        for source in classify_error(error, onchain):
+        for source in classify_error(error, onchain, manual):
             status = statuses.setdefault(source, SourceStatus(STATUS_OK))
             status.status = STATUS_ERROR
             status.error = f"{status.error}\n{error}" if status.error else error
@@ -175,6 +197,8 @@ def holding_sources(holdings: Iterable[Holding]) -> set[str]:
     for holding in holdings:
         if holding.source == ONCHAIN:
             sources.add(onchain_source(holding.detail) if holding.detail else ONCHAIN)
+        elif holding.source == MANUAL:
+            sources.add(manual_source(holding.detail) if holding.detail else MANUAL)
         else:
             sources.add(holding.source)
     return sources

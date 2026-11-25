@@ -173,7 +173,8 @@ def history_trend(snapshots, path: Path) -> Path:
             )
 
         series = {
-            source: [getattr(snapshot, SOURCE_COLUMNS[source]) for snapshot in snapshots]
+            # getattr default: a snapshot read before schema v5 has no manual_usd
+            source: [getattr(snapshot, SOURCE_COLUMNS[source], 0.0) or 0.0 for snapshot in snapshots]
             for source in SOURCES
         }
         active = {src: values for src, values in series.items() if any(v > 0 for v in values)}

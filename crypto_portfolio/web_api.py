@@ -23,7 +23,7 @@ import secrets
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -36,8 +36,11 @@ from pydantic import BaseModel, Field
 from clients.binance import BinanceClient, BinanceError
 from clients.onchain import EVM_CHAINS, OnChainClient, RpcError
 from config import (
+    MANUAL_KINDS,
     ROOT,
     Config,
+    ManualAsset,
+    ManualHolding,
     _normalize_wallets,
     active_env_overrides,
     load_config,
@@ -48,7 +51,9 @@ from models import (
     BINANCE_EARN,
     BINANCE_FUNDING,
     BINANCE_SPOT,
+    MANUAL,
     ONCHAIN,
+    SELF_CUSTODY_SOURCES,
     SOURCE_LABELS,
     SOURCES,
     Holding,
@@ -63,6 +68,7 @@ from services.analytics.attribution import (
 from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
+from services.manual import after_snapshot, last_changes
 from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict
 from services.resample import TooManyBuckets, resample
 
@@ -72,6 +78,9 @@ TOKEN_COOKIE = "portfolio_token"
 TOKEN_COOKIE_MAX_AGE = 365 * 86400
 TEST_TIMEOUT = 15  # seconds; a settings-screen check should fail fast, not hang the UI
 MASK = "****"
+# A staking balance untouched this long has probably grown with rewards (M6.4 AC3).
+MANUAL_REVIEW_DAYS = 90
+SYMBOL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$"
 
 # Display metadata for every chain the on-chain client can read, in settings-screen order.
 CHAIN_META = {
@@ -110,9 +119,24 @@ class WalletIn(BaseModel):
     chains: list[str] = Field(default_factory=list)
 
 
+class ManualHoldingIn(BaseModel):
+    symbol: str = Field(pattern=SYMBOL_PATTERN)
+    quantity: float = Field(ge=0, allow_inf_nan=False)
+    price_id: str = Field(default="", max_length=120)
+    price_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    liquid: bool = True
+
+
+class ManualAssetIn(BaseModel):
+    label: str = Field(min_length=1, max_length=40)
+    kind: Literal["cold_wallet", "staking", "other"] = "cold_wallet"
+    holdings: list[ManualHoldingIn] = Field(default_factory=list, max_length=50)
+
+
 class SettingsIn(BaseModel):
     binance: BinanceSettingsIn | None = None
     wallets: list[WalletIn] | None = Field(default=None, max_length=50)
+    manual_assets: list[ManualAssetIn] | None = Field(default=None, max_length=50)
 
 
 class TestBinanceIn(BaseModel):
@@ -226,9 +250,12 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
     """`show --json`'s schema plus what the dashboard needs to filter by source group."""
     data = to_dict(portfolio)
     values: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    manual_labels: dict[str, list[str]] = defaultdict(list)
     for holding in portfolio.holdings:
         if holding.quantity > 0:
             values[holding.symbol][holding.source] += holding.value_usd
+            if holding.source == MANUAL and holding.detail and holding.detail not in manual_labels[holding.symbol]:
+                manual_labels[holding.symbol].append(holding.detail)
 
     for asset in data["assets"]:
         by_value = values.get(asset["symbol"], {})
@@ -238,18 +265,34 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
         asset["binance_value_usd"] = round(sum(by_value.get(s, 0.0) for s in BINANCE_SOURCES), 2)
         asset["onchain_quantity"] = by_qty.get(ONCHAIN, 0.0)
         asset["onchain_value_usd"] = round(by_value.get(ONCHAIN, 0.0), 2)
+        asset["manual_quantity"] = by_qty.get(MANUAL, 0.0)
+        asset["manual_value_usd"] = round(by_value.get(MANUAL, 0.0), 2)
+        asset["manual_labels"] = manual_labels.get(asset["symbol"], [])
 
     totals = portfolio.totals
+    cex = sum(totals.get(s, 0.0) for s in BINANCE_SOURCES)
+    self_custody = sum(totals.get(s, 0.0) for s in SELF_CUSTODY_SOURCES)
+    custody_total = cex + self_custody
     data.update(
         origin=origin,
         snapshot_id=snapshot_id,
-        configured=config.binance_enabled or config.has_wallets,
+        configured=config.has_sources,
         min_value=config.min_value,
         groups={
             "all": round(portfolio.total_usd, 2),
-            "binance": round(sum(totals.get(s, 0.0) for s in BINANCE_SOURCES), 2),
+            "binance": round(cex, 2),
             "onchain": round(totals.get(ONCHAIN, 0.0), 2),
+            "manual": round(totals.get(MANUAL, 0.0), 2),
         },
+        # Exchange vs your own keys; a manual asset (cold wallet, validator) is self-custody.
+        custody={
+            "cex_usd": round(cex, 2),
+            "self_custody_usd": round(self_custody, 2),
+            "cex_pct": round(cex / custody_total * 100, 4) if custody_total > 0 else None,
+            "self_custody_pct": round(self_custody / custody_total * 100, 4) if custody_total > 0 else None,
+        },
+        has_manual=bool(config.manual) or totals.get(MANUAL, 0.0) > 0,
+        config_errors=config.manual_errors,
         source_labels=SOURCE_LABELS,
         change_24h=change_since(database, portfolio.total_usd, portfolio.timestamp)
         if origin != "empty" else None,
@@ -371,8 +414,9 @@ def create_app(
     def refresh_portfolio():
         """Fetch every source now, store the snapshot, return the fresh portfolio."""
         cfg = config()
-        if not cfg.binance_enabled and not cfg.has_wallets:
-            raise HTTPException(400, "Nothing to refresh yet: add Binance API keys or a wallet in Settings.")
+        if not cfg.has_sources:
+            raise HTTPException(400, "Nothing to refresh yet: add Binance API keys, a wallet or a "
+                                     "manual asset in Settings.")
         with app.state.refresh_lock:  # two taps on refresh must not double-record
             portfolio = app.state.fetcher(cfg, cfg.min_value)
             if not portfolio.holdings and portfolio.errors:
@@ -382,6 +426,7 @@ def create_app(
                 })
             database = Database(cfg.db_path)
             snapshot_id = database.record(portfolio, trigger=TRIGGER_REFRESH)
+            after_snapshot(cfg, database, snapshot_id)  # manual quantity changes -> cash_flows (M6.3)
             app.state.live = (portfolio, snapshot_id)
         return portfolio_payload(portfolio, origin="live", database=database, config=cfg,
                                  snapshot_id=snapshot_id)
@@ -412,6 +457,7 @@ def create_app(
                 "total_usd": round(snapshot.total_portfolio_usd, 2),
                 "binance_usd": round(binance, 2),
                 "onchain_usd": round(snapshot.onchain_usd, 2),
+                "manual_usd": round(snapshot.manual_usd, 2),
                 "binance_spot_usd": round(snapshot.binance_spot_usd, 2),
                 "binance_earn_usd": round(snapshot.binance_earn_usd, 2),
                 "binance_funding_usd": round(snapshot.binance_funding_usd, 2),
@@ -513,12 +559,23 @@ def create_app(
                  "native_symbol": cfg.chain(chain_id).get("native_symbol", meta["short"])}
                 for chain_id, meta in CHAIN_META.items()
             ],
+            "manual_assets": manual_payload(cfg),
+            "manual_errors": cfg.manual_errors,
+            "manual_kinds": list(MANUAL_KINDS),
             "env_overrides": overrides,
             "config_path": str(config_file()),
             "config_exists": config_file().is_file(),
             "min_value": cfg.min_value,
             "auth_required": bool(auth_token(cfg)),
         }
+
+    def manual_payload(cfg: Config) -> list[dict]:
+        """Manual assets for the settings form, with when their quantities last changed."""
+        try:
+            changed = last_changes(Database(cfg.db_path)) if cfg.manual else {}
+        except Exception:  # noqa: BLE001 - a missing/locked DB must not hide the settings
+            changed = {}
+        return [manual_asset_view(asset, changed.get(asset.label, "")) for asset in cfg.manual]
 
     @app.get("/api/settings")
     def get_settings():
@@ -546,6 +603,13 @@ def create_app(
 
             if body.wallets is not None:
                 raw["wallets"] = _wallet_sections(body.wallets, raw.get("wallets"))
+
+            if body.manual_assets is not None:
+                section = _manual_section(body.manual_assets, raw.get("manual_assets"))
+                if section:
+                    raw["manual_assets"] = section
+                else:
+                    raw.pop("manual_assets", None)
 
             try:
                 write_raw_config(raw, path)
@@ -723,6 +787,70 @@ def _wallet_sections(wallets: list[WalletIn], existing) -> dict:
             entry["tokens"] = kept_tokens[(kind, key)]
         sections[kind].append(entry)
     return sections
+
+
+def manual_asset_view(asset: ManualAsset, last_change: str = "", today: datetime | None = None) -> dict:
+    """One manual asset as the settings screen shows it.
+
+    `updated_at` is the day the quantities were last edited in Settings, else the newest manual
+    cash flow of the asset. A staking position unchanged for `MANUAL_REVIEW_DAYS` gets a hint:
+    rewards have most likely grown the balance since (ROADMAP_LEDGER M6.4 AC3).
+    """
+    today = today or datetime.now(timezone.utc)
+    updated = asset.updated_at or last_change
+    age_days = None
+    if updated:
+        age_days = max((today - parse_timestamp(updated)).days, 0)
+    review = asset.kind == "staking" and age_days is not None and age_days > MANUAL_REVIEW_DAYS
+    return {
+        "label": asset.label,
+        "kind": asset.kind,
+        "holdings": [
+            {"symbol": h.symbol, "quantity": h.quantity, "price_id": h.price_id,
+             "price_usd": h.price_usd, "liquid": h.liquid}
+            for h in asset.holdings
+        ],
+        "updated_at": updated or None,
+        "age_days": age_days,
+        "review_hint": ("Check the balance again: staking rewards have probably changed it."
+                        if review else None),
+    }
+
+
+def _manual_section(assets: list[ManualAssetIn], existing) -> list[dict]:
+    """The `manual_assets:` block to write. Labels must be unique (case-insensitive).
+
+    `updated_at` moves to today only for an asset whose quantities changed (or is new); an
+    asset saved untouched keeps its date, so the staking reminder is not reset by accident.
+    """
+    from config import parse_manual_assets
+
+    previous = {asset.label.casefold(): asset for asset in parse_manual_assets(existing)[0]}
+    today = datetime.now(timezone.utc).date().isoformat()
+    section, seen = [], set()
+    for item in assets:
+        label = item.label.strip()
+        if not label:
+            raise HTTPException(422, "A manual asset needs a name.")
+        if label.casefold() in seen:
+            raise HTTPException(422, f"Manual asset '{label}' is listed twice. Names must be unique.")
+        seen.add(label.casefold())
+        holdings, symbols = [], set()
+        for h in item.holdings:
+            symbol = h.symbol.strip().upper()
+            if symbol in symbols:
+                raise HTTPException(422, f"{symbol} is listed twice in '{label}'.")
+            symbols.add(symbol)
+            holdings.append(ManualHolding(symbol=symbol, quantity=float(h.quantity),
+                                          price_id=h.price_id.strip(), price_usd=h.price_usd,
+                                          liquid=h.liquid))
+        old = previous.get(label.casefold())
+        same = old is not None and {(x.symbol, x.quantity) for x in old.holdings} == \
+            {(x.symbol, x.quantity) for x in holdings}
+        updated_at = old.updated_at if same and old.updated_at else ("" if same else today)
+        section.append(ManualAsset(label=label, kind=item.kind, holdings=tuple(holdings),
+                                   updated_at=updated_at).to_raw())
+    return section
 
 
 app = create_app()

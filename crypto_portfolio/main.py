@@ -20,7 +20,7 @@ import json
 import sys
 
 from config import load_config
-from models import BINANCE_EARN, BINANCE_FUNDING, BINANCE_SPOT, ONCHAIN, SOURCE_LABELS, SOURCES
+from models import BINANCE_EARN, BINANCE_FUNDING, BINANCE_SPOT, MANUAL, ONCHAIN, SOURCE_LABELS, SOURCES
 from services.db import TRIGGER_CRON, Database
 from services.portfolio import fetch_portfolio, to_dict
 
@@ -30,12 +30,13 @@ COLUMNS = [
     ("Earn", 16, ">"),
     ("Funding", 14, ">"),
     ("On-chain", 16, ">"),
+    ("Manual", 14, ">"),
     ("Total Qty", 16, ">"),
     ("Price", 14, ">"),
     ("Value USD", 14, ">"),
     ("%", 7, ">"),
 ]
-SOURCE_ORDER = [BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING, ONCHAIN]
+SOURCE_ORDER = [BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING, ONCHAIN, MANUAL]
 
 
 def _fmt_row(cells: list[str]) -> str:
@@ -88,7 +89,8 @@ def render_history(snapshots) -> str:
 
     if not snapshots:
         return "\n  No snapshots recorded yet. Run:  python main.py record\n"
-    header = f"  {'Timestamp':<22}{'Spot':>14}{'Earn':>14}{'Funding':>12}{'On-chain':>14}{'Total':>16}{'Change':>14}"
+    header = (f"  {'Timestamp':<22}{'Spot':>14}{'Earn':>14}{'Funding':>12}{'On-chain':>14}{'Manual':>12}"
+              f"{'Total':>16}{'Change':>14}")
     lines = ["", header, "  " + "─" * (len(header) - 2)]
     previous = None
     for snapshot in snapshots:
@@ -97,6 +99,7 @@ def render_history(snapshots) -> str:
             f"  {snapshot.dt:%Y-%m-%d %H:%M}      "
             f"{money(snapshot.binance_spot_usd, 0):>14}{money(snapshot.binance_earn_usd, 0):>14}"
             f"{money(snapshot.binance_funding_usd, 0):>12}{money(snapshot.onchain_usd, 0):>14}"
+            f"{money(getattr(snapshot, 'manual_usd', 0.0), 0):>12}"
             f"{money(snapshot.total_portfolio_usd):>16}{change:>14}"
             + ("  (backfilled)" if snapshot.is_backfilled else "")
         )
@@ -112,12 +115,17 @@ def warn_errors(portfolio, stream=None) -> None:
         print(f"  warning: {error}", file=stream or sys.stderr)
 
 
-def check_sources(config) -> None:
-    """A run with nothing configured is a setup mistake, not an empty portfolio."""
-    if not config.binance_enabled and not config.has_wallets:
+def check_sources(config, stream=None) -> None:
+    """A run with nothing configured is a setup mistake, not an empty portfolio.
+
+    Invalid `manual_assets` entries are skipped, not fatal; each one is reported on stderr.
+    """
+    for error in getattr(config, "manual_errors", []):
+        print(f"  warning: config: {error}", file=stream or sys.stderr)
+    if not config.binance_enabled and not config.has_wallets and not getattr(config, "has_manual_assets", False):
         example = "config.example.yaml"
         raise SystemExit(
-            "No sources configured: set Binance API keys and/or wallet addresses.\n"
+            "No sources configured: set Binance API keys, wallet addresses and/or manual_assets.\n"
             f"  cp {example} config.yaml   (or export BINANCE_API_KEY / BINANCE_API_SECRET)"
         )
 
@@ -149,8 +157,11 @@ def cmd_record(args, config) -> int:
     database = Database(config.db_path)
     snapshot_id = database.record(portfolio, trigger=TRIGGER_CRON)
     warn_errors(portfolio)  # partial failures are recorded, but still reported on stderr
-    # Deposits/withdrawals (Epic F2): after the commit, and its errors never fail the snapshot.
+    # Manual-asset quantity changes (M6.3), then deposits/withdrawals (Epic F2): after the commit,
+    # and their errors never fail the snapshot.
     from services.cash_flows import sync_after_record
+    from services.manual import after_snapshot
+    after_snapshot(config, database, snapshot_id)
     sync_after_record(config, database)
     if args.verbose:
         from services.visualizer import money

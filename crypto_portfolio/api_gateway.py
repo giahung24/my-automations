@@ -50,6 +50,7 @@ SOURCES = (
     ("binance-earn", "binance_earn_usd"),
     ("binance-funding", "binance_funding_usd"),
     ("onchain", "onchain_usd"),
+    ("manual", "manual_usd"),  # schema v5 (M6.2); skipped on a database that predates it
 )
 
 SECURITY_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
@@ -215,9 +216,9 @@ def read_latest_snapshot(db_path: Path) -> sqlite3.Row | None:
     connection = connect_readonly(db_path)
     try:
         return connection.execute(
-            "SELECT timestamp, total_portfolio_usd, binance_spot_usd, binance_earn_usd,"
-            "       binance_funding_usd, onchain_usd"
-            "  FROM snapshots ORDER BY timestamp DESC, id DESC LIMIT 1"
+            # `*` rather than a column list: this read-only reader must keep working on a
+            # database the collector has not migrated yet (no manual_usd before schema v5).
+            "SELECT * FROM snapshots ORDER BY timestamp DESC, id DESC LIMIT 1"
         ).fetchone()
     finally:
         connection.close()
@@ -317,6 +318,7 @@ def create_app(settings: Settings) -> FastAPI:
         sources = [
             {"id": source_id, "status": "ok" if (row[column] or 0) > 0 else "empty", "value": money(row[column])}
             for source_id, column in SOURCES
+            if column in row.keys()
         ]
         body = {
             "value": money(row["total_portfolio_usd"]),
