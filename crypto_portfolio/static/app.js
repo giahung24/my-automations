@@ -4,6 +4,7 @@
  *   GET  /api/portfolio           instant: last live fetch or newest SQLite snapshot
  *   POST /api/portfolio/refresh   live fetch from Binance + chains, records a snapshot
  *   GET  /api/portfolio/history   snapshot totals for the chart
+ *   GET  /api/portfolio/attribution  why the total moved: price vs quantity effect per coin
  *   GET/POST /api/settings (+ test-binance, test-wallet) for the settings sheet
  */
 (function () {
@@ -45,7 +46,14 @@
   const BINANCE_KEY_LENGTH = 64;   // HMAC API keys and secrets are both 64 letters and digits
   const SCRUB_HOLD_MS = 130;       // a finger resting this long on the chart starts scrubbing
   const SCRUB_SLOP_PX = 8;         // ...or one that moved this far sideways first
-  const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab' };
+  const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab', why: 'portfolio.why' };
+  // Windows of the "Why it moved" card (GET /api/portfolio/attribution?window=...).
+  const WHY_WINDOWS = [
+    { id: '24h', label: '24H' },
+    { id: '7d', label: '7D' },
+    { id: '30d', label: '30D' },
+  ];
+  const WHY_TOP = 4;  // coins listed on each side (pulling up / pulling down)
 
   // -- formatting --------------------------------------------------------------
   const usd2 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -213,6 +221,14 @@
       const scrolled = ref(false);
       const nowMs = ref(Date.now());
 
+      // attribution card ("Why it moved")
+      const why = reactive({
+        window: WHY_WINDOWS.some((w) => w.id === storage.get(STORE.why)) ? storage.get(STORE.why) : '24h',
+        data: null, loading: false, error: '',
+      });
+      const whyCard = ref(null);
+      let whySeq = 0;
+
       // access token
       const locked = ref(false);
       const unlockToken = ref('');
@@ -312,7 +328,10 @@
         }
         const change = portfolio.value.change_24h;
         if (!change) return null;
-        return { usd: change.usd, pct: change.pct, trend: trendOf(change.usd), label: fmt.hours(change.hours) };
+        return {
+          usd: change.usd, pct: change.pct, trend: trendOf(change.usd), label: fmt.hours(change.hours),
+          explainable: !!change.has_attribution,  // tapping the chip opens "Why it moved"
+        };
       });
 
       const heroTrend = computed(() => (heroChange.value ? heroChange.value.trend : 'flat'));
@@ -330,6 +349,71 @@
       });
 
       const updatedAgo = computed(() => fmt.ago(portfolio.value.timestamp, nowMs.value));
+
+      // -- computed: attribution card ---------------------------------------------
+      // What made the total move: market price vs holdings change, per coin (§2 of ROADMAP_LEDGER).
+      const whyReady = computed(() => !!(why.data && !why.data.insufficient_history));
+
+      const whyBuckets = computed(() => {
+        if (!whyReady.value) return [];
+        const b = why.data.buckets || {};
+        const other = num(b.interaction) + num(b.revaluation);
+        return [
+          { id: 'price', label: 'Market prices', value: num(b.price), hint: 'Same holdings, new prices' },
+          { id: 'quantity', label: 'Holdings change', value: num(b.quantity), hint: 'Deposits, withdrawals, trades, Earn interest' },
+          { id: 'other', label: 'Other', value: other, hint: 'Price × quantity overlap and newly (un)priced tokens', optional: true },
+          { id: 'data_gap', label: 'Missing data', value: num(b.data_gap), hint: 'A source failed in one of the snapshots', optional: true },
+        ].filter((bucket) => !bucket.optional || Math.abs(bucket.value) >= 0.005)
+          .map((bucket) => ({ ...bucket, trend: trendOf(bucket.value) }));
+      });
+
+      const whyRows = computed(() => {
+        if (!whyReady.value) return [];
+        const d = why.data;
+        const rows = [...(d.gainers || []), ...(d.losers || [])];
+        const scale = Math.max(...rows.map((r) => Math.abs(num(r.total))), 0.01);
+        return rows.map((r) => {
+          const total = num(r.total);
+          const price = num(r.price);
+          const quantity = num(r.quantity);
+          const byPrice = Math.abs(price) >= Math.abs(quantity);
+          const pct = r.price_change_pct;
+          let note;
+          if (Math.abs(num(r.data_gap)) > Math.abs(total) / 2) note = 'missing data';
+          else if (byPrice) note = pct === null || pct === undefined ? 'price' : 'price ' + fmt.signedPct(pct);
+          else note = quantity > 0 ? 'more held' : 'less held';
+          const parts = [['Price', price], ['Holdings', quantity], ['Overlap', num(r.interaction)],
+            ['Revaluation', num(r.revaluation)], ['Missing data', num(r.data_gap)]]
+            .filter(([, v]) => Math.abs(v) >= 0.005)
+            .map(([label, v]) => `${label} ${fmt.signedMoney(v)}`);
+          return {
+            key: r.key, total, trend: trendOf(total), note, byPrice,
+            width: Math.max(2, (Math.abs(total) / scale) * 50),
+            breakdown: parts.join(' · '),
+          };
+        });
+      });
+
+      const whyTrend = computed(() => (whyReady.value ? trendOf(num(why.data.delta_usd)) : 'flat'));
+
+      // Real span covered (the window can be shorter than asked when the history is).
+      const whySpan = computed(() => {
+        if (!whyReady.value) return '';
+        const h = num(why.data.hours);
+        if (h < 1) return Math.max(1, Math.round(h * 60)) + ' min';
+        return h < 48 ? Math.round(h) + 'h' : (h / 24).toFixed(h < 240 ? 1 : 0) + ' days';
+      });
+
+      const whyOthers = computed(() => (whyReady.value && why.data.others && why.data.others.count ? why.data.others : null));
+
+      const whyMessage = computed(() => {
+        if (why.error) return why.error;
+        if (why.data && why.data.insufficient_history) {
+          return 'Needs at least two snapshots in this window. Each refresh, and each cron `record`, adds one.';
+        }
+        if (whyReady.value && !whyRows.value.length) return 'Nothing moved by more than a cent.';
+        return '';
+      });
 
       // -- computed: assets ----------------------------------------------------
       const visibleAssets = computed(() => {
@@ -420,12 +504,48 @@
         drawChart();
       }
 
+      async function loadAttribution() {
+        const seq = ++whySeq;  // a slower answer for a window the user already left is dropped
+        why.loading = true;
+        try {
+          const data = await api(`/api/portfolio/attribution?window=${why.window}&top=${WHY_TOP}`);
+          if (seq !== whySeq) return;
+          why.data = data;
+          why.error = '';
+        } catch (error) {
+          if (seq !== whySeq) return;
+          handleError(error, { silent: true });
+          why.data = null;
+          why.error = error.status === 401 ? '' : 'Could not explain the move: ' + error.message;
+        } finally {
+          if (seq === whySeq) why.loading = false;
+        }
+      }
+
+      function setWhyWindow(id) {
+        if (why.window === id) return;
+        why.window = id;
+        storage.set(STORE.why, id);
+        loadAttribution();
+      }
+
+      // The hero's 24h chip leads to the card that explains it.
+      async function showWhy() {
+        if (why.window !== '24h') setWhyWindow('24h');
+        await nextTick();
+        const el = whyCard.value;
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        el.focus({ preventScroll: true });
+      }
+
       async function refresh({ silent = false } = {}) {
         if (refreshing.value) return;
         refreshing.value = true;
         try {
           portfolio.value = normalise(await api('/api/portfolio/refresh', { method: 'POST' }));
           await loadHistory({ force: true });
+          loadAttribution();
           if (!silent) {
             const failed = portfolio.value.errors.length;
             showToast(failed ? `Updated, but ${failed} ${failed === 1 ? 'source' : 'sources'} failed` : 'Balances updated',
@@ -456,6 +576,7 @@
         await nextTick();
         ensureChart();
         await loadHistory();
+        if (portfolio.value.origin !== 'empty') loadAttribution();
         const p = portfolio.value;
         if (p.configured && (p.origin === 'empty' || ageMinutes() > STALE_MINUTES)) refresh({ silent: true });
       }
@@ -1035,6 +1156,8 @@
         iconFailed, toast, scrolled, locked, unlockToken, unlockError, unlocking,
         heroParts, heroChange, heroTrend, scrubLabel, rangeChange, rangeLabel, chartMessage, updatedAgo,
         visibleAssets, valueCol, emptyTitle, emptyHint,
+        whyWindows: WHY_WINDOWS, why, whyCard, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
+        setWhyWindow, showWhy,
         chartWrap, chartEl, sheet, sheetClose, draftEl,
         refresh, setRange, togglePrivacy, toggleAsset, coinIcon, onChartDown, onChartMove, onChartRelease, onChartLeave, unlock,
         settingsOpen, settings, form, showKey, showSecret, saving, saveError, binanceTest, dirty,

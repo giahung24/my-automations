@@ -25,7 +25,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 import requests
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -54,6 +54,7 @@ from models import (
     Holding,
     Portfolio,
 )
+from services.analytics.attribution import MAX_WINDOW_HOURS, attribution_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict
 
@@ -211,6 +212,7 @@ def change_since(database: Database, current_total: float, current_ts: str,
         "since": reference.timestamp,
         "hours": round(span, 2),
         "reference_usd": round(reference.total_portfolio_usd, 2),
+        "has_attribution": True,  # GET /api/portfolio/attribution can explain this move
     }
 
 
@@ -403,6 +405,26 @@ def create_app(
             }
         ordered = [points[key] for key in sorted(points)]
         return {"days": days or None, "count": len(ordered), "points": ordered}
+
+    @app.get("/api/portfolio/attribution")
+    def portfolio_attribution(
+        window: str = Query("24h", pattern=r"^\d{1,3}[hd]$",
+                            description=f"Look-back window, e.g. 24h or 7d; at most {MAX_WINDOW_HOURS // 24}d"),
+        group_by: Literal["symbol", "source", "symbol_source"] = Query("symbol"),
+        method: Literal["chained", "endpoint"] = Query("chained"),
+        top: int = Query(5, ge=1, le=20, description="Gainers and losers listed on each side"),
+    ):
+        """Why the net worth moved: price / quantity / interaction effect per coin, from SQLite only.
+
+        Splits the NAV change over `window` (ROADMAP_LEDGER §2.2) and lists the coins that pulled
+        it up and down. Never touches the network.
+        """
+        cfg = config()
+        try:
+            return attribution_report(Database(cfg.db_path), window=window, method=method,
+                                      group_by=group_by, top=top)
+        except ValueError as exc:  # 0h or over 365d: the regex cannot say it
+            raise HTTPException(422, str(exc)) from exc
 
     # -- settings ------------------------------------------------------------------
     def settings_payload(cfg: Config) -> dict:

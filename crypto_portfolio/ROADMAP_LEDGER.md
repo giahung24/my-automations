@@ -154,7 +154,7 @@ dòng = ~440k dòng `snapshot_assets`/năm, vẫn rất nhỏ với SQLite.
 - [x] **P0.5** Cron `0 * * * *` — ✅ 2026-11-25 · `crontab` · Đã cập nhật crontab hệ thống sang nhịp 1h/lần (`0 * * * *`)
 - [ ] **P0.6** `PORTFOLIO_WEB_TOKEN` + `--host 192.168.1.66` + unit `deploy/crypto-web.service` (SEC-1, SEC-2) — AC: `GET /api/settings` không token trả 401
 - [ ] **P0.7** Multicall3 — AC: số RPC call mỗi refresh giảm từ ~70 xuống ≤ 15 (đo bằng counter trong test mock), kết quả số dư không đổi
-- [ ] **P0.8** Backfill lịch sử 5 năm (60 checkpoints tháng): Kéo klines tháng từ Binance / DefiLlama cho BTC/ETH/Stablecoins, tạo 60 snapshot ngày đầu tháng (2021-11 đến 2026-10), gắn cờ `is_backfilled = 1` trong SQLite — AC: có 60 checkpoint lịch sử liên tục, biểu đồ hiển thị được view 1Y/5Y/ALL mà không bị rỗng.
+- [x] **P0.8** Backfill lịch sử 5 năm (60 checkpoints tháng): Kéo klines tháng từ Binance / DefiLlama cho BTC/ETH/Stablecoins, tạo 60 snapshot ngày đầu tháng (2021-11 đến 2026-10), gắn cờ `is_backfilled = 1` trong SQLite — AC: có 60 checkpoint lịch sử liên tục, biểu đồ hiển thị được view 1Y/5Y/ALL mà không bị rỗng. — ✅ 2026-11-25 · commit 56ebc4f]
 
 ---
 
@@ -199,8 +199,11 @@ thành một dòng riêng, còn không thì gộp vào "Khác".
 `snapshot_assets` lưu **một dòng mỗi Holding** (ETH on-chain có 3 dòng cho Ethereum/Arbitrum/Base). Quy
 tắc:
 
-1. **Tính** ở grain `(symbol, source)` (sau P0.3 có thể mịn tới `(symbol, source, detail)`):
-   $Q = \sum q$, $V = \sum v$, $P = V / Q$ nếu $Q > 0$.
+1. **Tính** ở grain `(symbol, source_key)`, với `source_key` chính là khoá của `snapshot_sources`
+   (`binance_spot`, `binance_earn`, `binance_funding`, `onchain:<chain>/<wallet>`; dòng on-chain cũ
+   không có `detail` dùng `onchain`): $Q = \sum q$, $V = \sum v$, $P = V / Q$ nếu $Q > 0$.
+   On-chain được tách theo ví/chain (nhờ P0.3) để `data_gap` khớp đúng nguồn bị lỗi (F1.4); hai dòng
+   Earn `flexible`/`locked` cùng coin gộp làm một.
 2. **Cộng dồn** các effect lên grain `symbol` để hiển thị. Các effect là cộng tính nên phép cộng này
    chính xác.
 
@@ -368,22 +371,22 @@ pattern sheet của Settings: focus trap, Esc, vuốt xuống để đóng). Có
 
 ### 2.6 Checklist F1
 
-- [ ] **F1.1** `services/analytics/__init__.py` + loader `load_states(db, ids)` (SQL §2.3 bước 3–4) — **P1**
-  - AC: trả về state ở grain `(symbol, source)`. ETH on-chain 3 dòng gộp thành 1 key với $Q$ = tổng, $P = V/Q$.
-- [ ] **F1.2** Engine phân rã `attribute(states, method, group_by)` thuần, không I/O — **P1**
+- [x] **F1.1** `services/analytics/__init__.py` + loader `load_states(db, ids)` (SQL §2.3 bước 3–4) — **P1** — ✅ 2026-11-25 · (F1.att, chưa commit) · services/analytics/attribution.py, test_analytics.py::test_load_states_groups_rows_per_symbol_and_source_key
+  - AC: trả về state ở grain `(symbol, source_key)` (§2.2.2). Các dòng cùng key gộp thành 1 với $Q$ = tổng, $P = V/Q$ (ETH on-chain cũ không `detail`: 3 dòng → 1 key `onchain`).
+- [x] **F1.2** Engine phân rã `attribute(states, method, group_by)` thuần, không I/O — **P1** — ✅ 2026-11-25 · (F1.att, chưa commit) · services/analytics/attribution.py, test_analytics.py::test_attribution_identity_property, ::test_attribution_manual_case
   - AC1: property test (≥ 200 portfolio ngẫu nhiên) cho thấy $|\sum \text{buckets} - \Delta\text{NAV}| < 10^{-6}$.
   - AC2: test tay: $Q_0=2, P_0=100, Q_1=3, P_1=110$ ⇒ price = 20, quantity = 100, interaction = 10, ΔV = 130.
   - AC3: chuyển 1 ETH Binance → on-chain với giá hai nguồn lệch $0.50 cho price effect gộp của ETH = 0.
   - AC4: các trường hợp biên của §2.2.4 mỗi trường hợp có một test.
-- [ ] **F1.3** Hỗ trợ `method=chained|endpoint` — **P1**
+- [x] **F1.3** Hỗ trợ `method=chained|endpoint` — **P1** — ✅ 2026-11-25 · (F1.att, chưa commit) · test_analytics.py::test_chained_puts_a_mid_window_buy_in_price_endpoint_in_interaction
   - AC: kịch bản "mua BTC giữa cửa sổ rồi BTC tăng 5%": `chained` dồn lãi vào price, `endpoint` dồn vào interaction. Cả hai đều thoả bất biến.
-- [ ] **F1.4** Bucket `revaluation` và `data_gap` (cần P0.2) — **P1**
+- [x] **F1.4** Bucket `revaluation` và `data_gap` (cần P0.2) — **P1** — ✅ 2026-11-25 · (F1.att, chưa commit) · test_analytics.py::test_failed_wallet_source_goes_to_data_gap_not_price
   - AC: một snapshot có `onchain:arbitrum/main = error` không tạo price effect âm giả cho ETH.
-- [ ] **F1.5** Endpoint `GET /api/portfolio/attribution` + validate tham số — **P1**
+- [x] **F1.5** Endpoint `GET /api/portfolio/attribution` + validate tham số — **P1** — ✅ 2026-11-25 · (F1.att, chưa commit) · web_api.py, test_analytics.py::test_attribution_endpoint_schema, ::test_attribution_endpoint_rejects_bad_parameters, ::test_attribution_endpoint_is_behind_the_token
   - AC: schema §2.4; `window=999d` → 422; không gọi mạng (test bằng fetcher raise); nằm sau token.
 - [ ] **F1.6** Sinh câu `summary` tiếng Việt (top 2 price + income + flow) — **P2**
   - AC: không bao giờ nói "không có nạp/rút" khi F2 chưa bật. Khi đó câu là "chưa theo dõi nạp/rút".
-- [ ] **F1.7** UI bottom sheet: diverging bar + waterfall bucket + 3 trạng thái — **P1**
+- [~] **F1.7** UI bottom sheet: diverging bar + waterfall bucket + 3 trạng thái — **P1** — 🔧 claude/script-preparation-docs-944f7e · 2026-11-25: đã có **card** "Why it moved" (24H/7D/30D, dòng bucket, diverging bar top kéo tăng/giảm, banner `degraded`/`identity_error`, `insufficient_history`; chạm chip 24h cuộn tới card). Còn thiếu: bottom sheet, waterfall.
   - AC: chạm chip 24h mở sheet; bàn phím (Enter/Esc) dùng được; privacy blur đúng; màn 360px không tràn ngang.
 - [ ] **F1.8** v2: tách quantity thành flow/transfer/income/trade_residual (cần F2.6, F2.8) — **P2**
   - AC: rút 1 ETH ra ví ngoài trong cửa sổ cho `flow ≈ −1 × P_ETH`, `trade_residual ≈ 0`.
@@ -1107,14 +1110,14 @@ Trên snapshot mới nhất, tài sản có giá, $w_i = V_i / V$ theo `symbol` 
 | P0.5 | Cron 1h/lần | P0 | P0 | `[x] DONE` | crontab | — | 2026-11-25 |
 | P0.6 | Web token + bind LAN + unit systemd | P0 | P0 | `[ ] TODO` | env, `deploy/crypto-web.service` | — | |
 | P0.7 | Multicall3 ERC-20 | P0 | P0 | `[ ] TODO` | `clients/onchain.py` | — | |
-| P0.8 | Backfill 5 năm (60 snapshots) | P0 | P0 | `[ ] TODO` | `services/backfill.py` | — | |
-| F1.1 | Loader state `(symbol, source)` | F1 | P1 | `[ ] TODO` | `services/analytics/attribution.py` | — | |
-| F1.2 | Engine phân rã thuần + bất biến | F1 | P1 | `[ ] TODO` | `services/analytics/attribution.py` | F1.1 | |
-| F1.3 | `chained` / `endpoint` | F1 | P1 | `[ ] TODO` | `services/analytics/attribution.py` | F1.2 | |
-| F1.4 | Bucket `revaluation`, `data_gap` | F1 | P1 | `[ ] TODO` | `services/analytics/attribution.py` | F1.2, P0.2 | |
-| F1.5 | `GET /api/portfolio/attribution` | F1 | P1 | `[ ] TODO` | `web_api.py` | F1.3 | |
+| P0.8 | Backfill 5 năm (60 snapshots) | P0 | P0 | `[x] DONE` | `services/backfill.py` | — | | 2026-11-25 |
+| F1.1 | Loader state `(symbol, source)` | F1 | P1 | `[x] DONE` | `services/analytics/attribution.py` | — | 2026-11-25 |
+| F1.2 | Engine phân rã thuần + bất biến | F1 | P1 | `[x] DONE` | `services/analytics/attribution.py` | F1.1 | 2026-11-25 |
+| F1.3 | `chained` / `endpoint` | F1 | P1 | `[x] DONE` | `services/analytics/attribution.py` | F1.2 | 2026-11-25 |
+| F1.4 | Bucket `revaluation`, `data_gap` | F1 | P1 | `[x] DONE` | `services/analytics/attribution.py` | F1.2, P0.2 | 2026-11-25 |
+| F1.5 | `GET /api/portfolio/attribution` | F1 | P1 | `[x] DONE` | `web_api.py` | F1.3 | 2026-11-25 |
 | F1.6 | Câu `summary` tiếng Việt | F1 | P2 | `[ ] TODO` | `services/analytics/attribution.py` | F1.5 | |
-| F1.7 | UI sheet "Vì sao biến động?" | F1 | P1 | `[ ] TODO` | `static/app.js`, `static/index.html`, `static/style.css` | F1.5 | |
+| F1.7 | UI sheet "Vì sao biến động?" | F1 | P1 | `[~] IN PROGRESS` | `static/app.js`, `static/index.html`, `static/style.css` | F1.5 | |
 | F1.8 | v2: flow/transfer/income/trade | F1 | P2 | `[ ] TODO` | `services/analytics/attribution.py` | F2.6, F2.8 | |
 | F1.9 | CLI `main.py why` | F1 | P3 | `[ ] TODO` | `main.py` | F1.5 | |
 | F2.1 | Migration v4 `cash_flows`, `sync_state` | F2 | P1 | `[x] DONE` | `services/db.py` | P0.1 | | 2026-11-25 |
@@ -1218,3 +1221,4 @@ P0.7 ─► P0.5
 | Ngày | Thay đổi | Người |
 |---|---|---|
 | 2026-11-25 | Tạo tài liệu: P0 (7 task), F1 (9), F2 (14), F3 (26). Tổng 56 task, tất cả TODO. | Claude (Opus 5.5) cho Jean |
+| 2026-11-25 | F1.att: F1.1–F1.5 DONE, F1.7 IN PROGRESS (card thay cho sheet). Grain §2.2.2 đổi thành `(symbol, source_key)` (on-chain tách theo ví) để `data_gap` khớp nguồn lỗi; AC F1.1 sửa theo. Payload §2.4 thêm `insufficient_history`, `gainers`/`losers` (chi tiết của top); `summary` (F1.6) chưa có. | Claude (Opus 5.5) |

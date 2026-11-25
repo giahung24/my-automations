@@ -491,3 +491,35 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* -- why it moved (attribution card) ------------------------------------------ */
+.why:focus { outline: none; }
+.why:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
+.why-pills { grid-template-columns: repeat(3, auto); flex: none; }
+.why-pills .pill { height: 40px; }
+.pnl-chip.is-link { cursor: pointer; border: 0; font: inherit; }
+.pnl-chip.is-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (hover: hover) { .pnl-chip.is-link:hover { filter: brightness(1.15); } }
+
+.why-buckets { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; font-weight: 600; }
+.why-buckets li { display: inline-flex; align-items: baseline; gap: 6px; }
+
+/* One row per coin: icon, name, a bar diverging from a centre axis, the signed amount. */
+.why-list { display: flex; flex-direction: column; }
+.why-row {
+  display: grid; align-items: center; gap: 10px;
+  grid-template-columns: 28px minmax(52px, 1fr) minmax(48px, 1.1fr) auto;
+  padding: 8px 16px;
+}
+.why-row + .why-row { border-top: 1px solid var(--line); }
+.coin.coin-sm { width: 28px; height: 28px; font-size: 9px; }
+.why-bar { position: relative; display: block; height: 8px; border-radius: 4px; background: var(--surface-2); }
+.why-bar::before { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--line-strong); }
+.why-bar > i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.why-bar > i.up, .why-bar > i.flat { left: 50%; background: var(--up); }
+.why-bar > i.down { right: 50%; background: var(--down); }
+/* a move driven by holdings (deposit, trade, interest) rather than by the market is striped */
+.why-bar > i.qty {
+  background-image: repeating-linear-gradient(135deg, rgba(11, 14, 20, 0.45) 0 3px, transparent 3px 6px);
+}
+.why-row .pnl .icon { vertical-align: -1px; }

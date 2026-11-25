@@ -133,11 +133,13 @@
             <div class="mt-2 flex min-h-[26px] items-center gap-x-2 overflow-hidden whitespace-nowrap text-[13px]">
               <template v-if="loading"><div class="skeleton h-5 w-40"></div></template>
               <template v-else-if="heroChange">
-                <span class="pnl-chip num" :class="heroChange.trend">
+                <component :is="heroChange.explainable ? 'button' : 'span'" class="pnl-chip num" :class="[heroChange.trend, { 'is-link': heroChange.explainable }]"
+                           :type="heroChange.explainable ? 'button' : null" @click="heroChange.explainable && showWhy()"
+                           :title="heroChange.explainable ? 'Why it moved' : null">
                   <svg class="icon icon-xs"><use :href="heroChange.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
                   <span class="priv priv-soft">{{ fmt.signedMoney(heroChange.usd) }}</span>
                   <span v-if="heroChange.pct !== null">({{ fmt.signedPct(heroChange.pct) }})</span>
-                </span>
+                </component>
                 <span class="truncate font-semibold text-ink-3">{{ heroChange.label }}</span>
               </template>
               <span v-else-if="portfolio.origin !== 'empty'" class="truncate font-semibold text-ink-3">
@@ -204,6 +206,85 @@
             </ul>
           </div>
         </div>
+
+        <!-- Why it moved: NAV change split into market price vs holdings change, per coin -->
+        <section v-if="!loading && portfolio.configured && portfolio.origin !== 'empty'" ref="whyCard" tabindex="-1"
+                 class="card why mt-4" aria-labelledby="why-title" :aria-busy="why.loading">
+          <div class="flex items-center justify-between gap-2 pl-5 pr-2 pt-2">
+            <h2 id="why-title" class="text-[15px] font-extrabold tracking-tight">Why it moved</h2>
+            <div class="pills why-pills" role="tablist" aria-label="Explain the change over">
+              <button v-for="w in whyWindows" :key="w.id" type="button" class="pill" role="tab"
+                      :aria-selected="why.window === w.id" @click="setWhyWindow(w.id)">
+                <span>{{ w.label }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="why.loading && !why.data && !why.error" class="space-y-3 px-5 pb-5 pt-1">
+            <div class="skeleton h-5 w-48"></div>
+            <div v-for="n in 3" :key="n" class="skeleton h-4 w-full"></div>
+          </div>
+
+          <template v-else>
+            <template v-if="whyReady">
+              <p class="px-5 text-[13px] font-semibold text-ink-3 num">
+                <span class="pnl" :class="whyTrend">
+                  <span class="priv priv-soft">{{ fmt.signedMoney(why.data.delta_usd) }}</span>
+                  <span v-if="why.data.delta_pct !== null"> ({{ fmt.signedPct(why.data.delta_pct) }})</span>
+                </span>
+                over {{ whySpan }} · {{ why.data.snapshots }} snapshots
+              </p>
+
+              <ul class="why-buckets mt-3 px-5" aria-label="Where the change came from">
+                <li v-for="bucket in whyBuckets" :key="bucket.id" :title="bucket.hint">
+                  <span class="text-ink-3">{{ bucket.label }}</span>
+                  <span class="pnl num font-extrabold" :class="bucket.trend">
+                    <span class="priv priv-soft">{{ fmt.signedMoney(bucket.value) }}</span>
+                  </span>
+                </li>
+              </ul>
+
+              <div v-if="why.data.degraded_pairs" class="notice mx-4 mt-3" role="status">
+                <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                <span>{{ why.data.degraded_pairs }} {{ why.data.degraded_pairs === 1 ? 'snapshot pair has' : 'snapshot pairs have' }}
+                  a failed source; <span class="priv priv-soft num">{{ fmt.signedMoney(why.data.buckets.data_gap) }}</span>
+                  is counted as missing data, not as a price move.</span>
+              </div>
+              <div v-if="why.data.identity_error" class="notice error mx-4 mt-3" role="alert">
+                <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                <span>The stored totals and the per-coin rows disagree, so this breakdown is incomplete
+                  (off by <span class="priv priv-soft num">{{ fmt.money(Math.abs(why.data.identity_error.difference_usd)) }}</span>).</span>
+              </div>
+
+              <ul v-if="whyRows.length" class="why-list mt-3" aria-label="Coins that pulled the total up or down">
+                <li v-for="r in whyRows" :key="r.key" class="why-row" :title="r.breakdown">
+                  <span class="coin coin-sm" :style="{ '--hue': fmt.hue(r.key) }" aria-hidden="true">
+                    <img v-if="coinIcon(r.key)" :src="coinIcon(r.key)" alt="" @error="iconFailed[r.key] = true">
+                    <span v-else>{{ fmt.badge(r.key) }}</span>
+                  </span>
+                  <span class="min-w-0">
+                    <span class="block truncate text-[14px] font-extrabold tracking-tight">{{ r.key }}</span>
+                    <span class="block truncate text-[12px] font-semibold text-ink-3 num">{{ r.note }}</span>
+                  </span>
+                  <span class="why-bar" aria-hidden="true">
+                    <i :class="[r.trend, { qty: !r.byPrice }]" :style="{ width: r.width + '%' }"></i>
+                  </span>
+                  <span class="pnl num whitespace-nowrap text-right text-[14px] font-extrabold" :class="r.trend">
+                    <svg class="icon icon-xs"><use :href="r.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
+                    <span class="priv priv-soft">{{ fmt.signedMoney(r.total) }}</span>
+                    <span class="sr-only">{{ r.breakdown }}</span>
+                  </span>
+                </li>
+              </ul>
+              <p v-if="whyOthers" class="px-5 pt-1 text-[12px] font-semibold text-ink-3">
+                + {{ whyOthers.count }} other {{ whyOthers.count === 1 ? 'asset' : 'assets' }}
+                <span class="priv priv-soft num">{{ fmt.signedMoney(whyOthers.total) }}</span>
+              </p>
+            </template>
+            <p v-if="whyMessage" class="px-5 pt-1 text-[13px] font-semibold text-ink-3">{{ whyMessage }}</p>
+            <div class="h-4"></div>
+          </template>
+        </section>
 
         <!-- First run -->
         <section v-if="!loading && !portfolio.configured" class="card mt-4 p-5">
