@@ -8,6 +8,10 @@ The schema is versioned with `PRAGMA user_version` and upgraded by `migrate()` e
 a `Database` is opened: the pending steps of `MIGRATIONS` run in a single transaction (all or
 nothing), and an existing database is copied to `<file>.bak_v<old>_<YYYYmmdd_HHMMSS>` first.
 To change the schema, append a step to `MIGRATIONS`; never edit a step that has shipped.
+
+The file runs in WAL mode (`PRAGMA journal_mode=WAL`, set once by `Database.__init__` and stored
+in the file itself), so the API gateway's `mode=ro` connections read the last committed snapshot
+while the collector is writing, instead of failing with `database is locked`.
 """
 from __future__ import annotations
 
@@ -82,6 +86,10 @@ MIGRATIONS: list[str] = [
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
+
+# Readers (the `mode=ro` API gateway) never block on, or are blocked by, the collector's writes.
+# Persistent: once set, every later connection to the file - from any process - uses it.
+JOURNAL_MODE = "wal"
 
 # How a snapshot was taken (snapshots.trigger).
 TRIGGER_CRON = "cron"        # `main.py record`
@@ -160,6 +168,7 @@ class Database:
     def _init_schema(self) -> None:
         before = schema_version(self.path)
         after = migrate(self.path)
+        enable_wal(self.path)
         if before < SOURCES_SCHEMA_VERSION <= after:
             # the snapshots taken before v2 have no status; mark their obvious holes once
             inferred = self.backfill_inferred_errors()
@@ -329,6 +338,34 @@ def schema_version(path: str | Path) -> int:
         return _user_version(connection)
     finally:
         connection.close()
+
+
+def journal_mode(path: str | Path) -> str:
+    """Current journal mode of the database at `path` (`wal`, `delete`, ...), lower case."""
+    connection = sqlite3.connect(path, timeout=30)
+    try:
+        return str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        connection.close()
+
+
+def enable_wal(path: str | Path) -> str:
+    """Switch the database at `path` to WAL; returns the journal mode actually in effect.
+
+    A no-op when the file is already in WAL. The switch needs a moment of exclusive access, so
+    it waits (busy timeout) for other connections rather than failing. SQLite silently keeps
+    the old mode where WAL is impossible (in-memory database, some network filesystems); that
+    is logged, because readers would then be locked out during writes again.
+    """
+    connection = sqlite3.connect(path, timeout=30)
+    try:
+        mode = str(connection.execute(f"PRAGMA journal_mode = {JOURNAL_MODE}").fetchone()[0]).lower()
+    finally:
+        connection.close()
+    if mode != JOURNAL_MODE:
+        log.warning("%s: could not enable WAL (journal mode stays %r); readers may hit "
+                    "'database is locked' while a snapshot is written", path, mode)
+    return mode
 
 
 def migrate(path: str | Path, migrations: Sequence[str] | None = None) -> int:

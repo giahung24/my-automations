@@ -199,7 +199,12 @@ class SlidingWindowLimiter:
 # --------------------------------------------------------------------------- data access
 def connect_readonly(db_path: Path) -> sqlite3.Connection:
     """Open SQLite strictly read-only. Raises sqlite3.OperationalError if the file is missing
-    (mode=ro never creates it)."""
+    (mode=ro never creates it).
+
+    The collector keeps the file in WAL mode (services/db.py), so this reader sees the last
+    committed snapshot while a write is in progress rather than `database is locked`. A WAL
+    reader needs the `-shm` index next to the file: SQLite creates it if missing, which is
+    why the systemd unit lists the project directory in ReadWritePaths."""
     connection = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only = ON")

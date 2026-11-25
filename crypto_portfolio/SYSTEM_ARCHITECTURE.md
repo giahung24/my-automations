@@ -209,7 +209,7 @@ CREATE INDEX idx_assets_symbol   ON snapshot_assets(symbol);
 | Tài sản chưa định giá | Lưu với `price_usd=0`. Snapshot mới nhất có 28/50 dòng giá 0 [đã kiểm chứng], chủ yếu là token on-chain không rõ. |
 | Nguồn lỗi | **Không lưu** `errors`. Nguồn lỗi được ghi thành `0` trong cột `*_usd` nên không phân biệt được với "thật sự bằng 0". |
 | Timestamp | Chuỗi ISO cùng format, nên so sánh chuỗi trong SQLite cho đúng thứ tự thời gian. |
-| Kết nối | Mỗi thao tác mở/đóng một kết nối, `timeout=30`, `PRAGMA foreign_keys=ON`, journal mode mặc định (rollback, **không WAL**). |
+| Kết nối | Mỗi thao tác mở/đóng một kết nối, `timeout=30`, `PRAGMA foreign_keys=ON`, `PRAGMA journal_mode=WAL` (P0.4, bật một lần trong `Database.__init__`, lưu trong file). |
 | Migration | **Không có** cơ chế migration (`CREATE TABLE IF NOT EXISTS`). README: "xoá file để làm lại". |
 | Khối lượng | 16 snapshots, 818 dòng asset, từ 2026-11-22 đến 2026-11-25 [đã kiểm chứng]. |
 
@@ -499,7 +499,7 @@ số. Còn T1 dù lộ cũng không cho phép di chuyển tiền (với điều 
 | A6 | Phân tích theo ví / chain | `snapshot_assets` **mất `detail`** (chain/wallet, flexible/locked) | Không làm được on-chain flow detection theo ví từ lịch sử |
 | A7 | Định giá đầy đủ | 28/50 dòng của snapshot mới nhất có giá 0 (token lạ hoặc spam) | Nhiễu danh sách, nhưng giá trị bằng 0 nên không ảnh hưởng tổng |
 | A8 | Schema tiến hoá được | Không có migration (`PRAGMA user_version` chưa dùng) | Bắt buộc phải có trước khi thêm `cash_flows` |
-| A9 | Đồng thời ghi/đọc | Journal mode rollback, gateway có `timeout=5` | Có thể 503 ngắn khi đang ghi. Khuyến nghị bật WAL. |
+| A9 | Đồng thời ghi/đọc | ~~Journal mode rollback, gateway có `timeout=5`~~ Đã xử lý ở P0.4: WAL | Gateway `mode=ro` đọc snapshot đã commit trong lúc collector ghi, không còn `database is locked`. |
 
 ---
 
