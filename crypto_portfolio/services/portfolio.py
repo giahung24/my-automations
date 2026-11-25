@@ -48,7 +48,6 @@ def aggregate(holdings: list[Holding], min_value: float = 0.0) -> Portfolio:
             portfolio.totals[holding.source] += holding.value_usd
 
     total = portfolio.total_usd
-    kept, dust_value, dust_count = [], 0.0, 0
     for row in grouped.values():
         # the same symbol can arrive from several sources at slightly different prices
         # (a CEX ticker vs a DEX quote); the average over the *priced* quantity keeps the
@@ -56,15 +55,11 @@ def aggregate(holdings: list[Holding], min_value: float = 0.0) -> Portfolio:
         quantity = priced.get(row.symbol, 0.0)
         row.price_usd = (row.value_usd / quantity) if quantity > 0 else 0.0
         row.pct = (row.value_usd / total * 100) if total > 0 else 0.0
-        if row.value_usd >= min_value:
-            kept.append(row)
-        else:
-            dust_value += row.value_usd
-            dust_count += 1
+    kept, dust = split_dust(grouped.values(), min_value, value=lambda r: r.value_usd)
 
     portfolio.rows = sorted(kept, key=lambda r: (-r.value_usd, r.symbol))
-    portfolio.dust_value_usd = dust_value
-    portfolio.dust_assets = dust_count
+    portfolio.dust_value_usd = dust["value_usd"]
+    portfolio.dust_assets = dust["assets"]
     return portfolio
 
 
@@ -195,106 +190,56 @@ def to_dict(portfolio: Portfolio) -> dict:
     }
 
 
-def wallet_groups(holdings: list[Holding], wallet_labels=(), manual_assets=(),
-                  min_value: float = 0.0) -> list[dict]:
-    """Self-custody holdings grouped by *physical* wallet, for display only.
+def split_dust(rows, min_value: float, value=lambda row: row["value_usd"]) -> tuple[list, dict]:
+    """The one dust rule of every list: a row worth less than `min_value` is not shown.
 
-    An on-chain holding (`detail = <chain>/<label>`) belongs to the wallet `<label>`, whatever the
-    chain: one card per device, not per (chain, address). A manual asset joins the card of the
-    wallet its `linked_wallet` names (the BTC on the Ledger whose EVM address is tracked);
-    without one it gets a card of its own, even when its label happens to equal a wallet label -
-    only an explicit link merges. Every row keeps its `source`, so on-chain balances read by RPC
-    and balances declared by hand stay distinguishable; nothing here feeds PnL, TWR or snapshots.
-
-    On-chain rows worth less than `min_value` are folded into the card's `dust`; manual rows are
-    always shown (a declared coin nobody could price must stay visible).
+    Returns the rows kept (order preserved) and `{"assets": n, "value_usd": total}` for the
+    rest, unrounded. The Coins lists apply it per symbol, the Wallets views per row inside a
+    wallet, so "N balances under $1" means the same thing on every tab and in every view.
     """
-    configured = list(wallet_labels)
-    by_label = {asset.label: asset for asset in manual_assets}
-    groups: dict[tuple[str, str], dict] = {}
-    rows: dict[tuple[str, str], dict[tuple, dict]] = {}
-
-    def group(kind: str, label: str) -> dict:
-        key = (kind, label)
-        if key not in groups:
-            groups[key] = {
-                "id": f"{kind}:{label}", "label": label, "type": kind,
-                "configured": kind == "wallet" and label in configured,
-                "manual_kind": None, "linked_manual": [], "chains": [],
-                "value_usd": 0.0, "onchain_value_usd": 0.0, "manual_value_usd": 0.0,
-                "holdings": [], "dust": {"assets": 0, "value_usd": 0.0},
-            }
-            rows[key] = {}
-        return groups[key]
-
-    for holding in holdings:
-        if holding.quantity <= 0 or holding.source not in (ONCHAIN, MANUAL):
-            continue
-        if holding.source == ONCHAIN:
-            chain, _, label = holding.detail.partition("/")
-            if not label:  # pre-v2 row without a wallet: nothing to group it by
-                chain, label = "", holding.detail or "On-chain"
-            card = group("wallet", label)
-            if chain and chain not in card["chains"]:
-                card["chains"].append(chain)
-            row_key = (ONCHAIN, holding.symbol, chain)
-            extra = {"chain": chain or None, "manual_label": None, "manual_kind": None}
-            card["onchain_value_usd"] += holding.value_usd
+    kept, dust = [], {"assets": 0, "value_usd": 0.0}
+    for row in rows:
+        worth = value(row)
+        if worth >= min_value:
+            kept.append(row)
         else:
-            asset = by_label.get(holding.detail)
-            if asset is not None and asset.linked_wallet:
-                card = group("wallet", asset.linked_wallet)
-                if asset.label not in card["linked_manual"]:
-                    card["linked_manual"].append(asset.label)
-            else:
-                card = group("manual", holding.detail or "Manual")
-                card["manual_kind"] = asset.kind if asset is not None else None
-            row_key = (MANUAL, holding.symbol, holding.detail)
-            extra = {"chain": None, "manual_label": holding.detail or None,
-                     "manual_kind": asset.kind if asset is not None else None}
-            card["manual_value_usd"] += holding.value_usd
-        card["value_usd"] += holding.value_usd
-        row = rows[(card["type"], card["label"])].setdefault(row_key, {
-            "symbol": holding.symbol, "source": holding.source, **extra,
-            "quantity": 0.0, "value_usd": 0.0,
-        })
-        row["quantity"] += holding.quantity
-        row["value_usd"] += holding.value_usd
+            dust["assets"] += 1
+            dust["value_usd"] += worth
+    return kept, dust
 
-    out = []
-    for key, card in groups.items():
-        shown = []
-        for row in rows[key].values():
-            row["price_usd"] = row["value_usd"] / row["quantity"] if row["quantity"] > 0 else 0.0
-            if row["source"] == ONCHAIN and row["value_usd"] < min_value:
-                card["dust"]["assets"] += 1
-                card["dust"]["value_usd"] += row["value_usd"]
-                continue
-            row["value_usd"] = round(row["value_usd"], 2)
-            shown.append(row)
-        # on-chain first inside the same value, so the card reads "what RPC sees, then what you declared"
-        card["holdings"] = sorted(shown, key=lambda r: (-r["value_usd"], r["source"] != ONCHAIN, r["symbol"]))
-        for field_name in ("value_usd", "onchain_value_usd", "manual_value_usd"):
-            card[field_name] = round(card[field_name], 2)
-        card["dust"]["value_usd"] = round(card["dust"]["value_usd"], 2)
-        out.append(card)
-    return sorted(out, key=lambda c: (-c["value_usd"], c["label"].casefold()))
+
+def _rounded(dust: dict) -> dict:
+    return {"assets": dust["assets"], "value_usd": round(dust["value_usd"], 2)}
+
+
+def tab_dust(holdings: list[Holding], sources, min_value: float) -> dict:
+    """What a tab's Coins list folds away: symbols worth less than `min_value` *in `sources`*.
+
+    Compared at the cent, as the list shows it, so a coin is either listed or counted here.
+    """
+    values: dict[str, float] = {}
+    for holding in holdings:
+        if holding.quantity > 0 and holding.source in sources:
+            values[holding.symbol] = values.get(holding.symbol, 0.0) + holding.value_usd
+    _, dust = split_dust(values.values(), min_value, value=lambda v: round(v, 2))
+    return _rounded(dust)
 
 
 def _pct(value: float, total: float) -> float:
     return round(value / total * 100, 4) if total > 0 else 0.0
 
 
-def source_wallets(holdings: list[Holding], wallet_labels=(), manual_assets=(),
-                   binance_total: float = 0.0, onchain_total: float = 0.0) -> dict:
-    """The Binance and On-chain tabs seen by wallet instead of by coin, for display only.
+def _priced(row: dict) -> dict:
+    row["price_usd"] = row["value_usd"] / row["quantity"] if row["quantity"] > 0 else 0.0
+    return row
 
-    `binance`: one row per account (Spot, Earn, Funding); Earn stays one row whatever the
-    product, with its Flexible/Locked split kept for the detail. `onchain`: one row per wallet
-    label, every chain summed. Built on `wallet_groups` (min_value 0, so dust is counted), so a
-    manual asset whose `linked_wallet` names the wallet rides along in `linked_manual` - a
-    separate list: its value is not in `value_usd`, and `pct` is the share of the tab's own total
-    (`binance_total` / `onchain_total`), never of the whole portfolio.
+
+def binance_wallets(holdings: list[Holding], min_value: float = 0.0) -> list[dict]:
+    """The Binance tab seen by account: one row per account (Spot, Earn, Funding).
+
+    Earn stays one row whatever the product, its Flexible/Locked `split` kept for the detail.
+    `value_usd`, `split` and `pct` (share of the Binance total) count every balance; `assets`
+    lists the rows worth `min_value` or more and the rest is summed in `dust`.
     """
     accounts: dict[str, dict] = {}
     for holding in holdings:
@@ -311,48 +256,117 @@ def source_wallets(holdings: list[Holding], wallet_labels=(), manual_assets=(),
         row["value_usd"] += holding.value_usd
         account["value_usd"] += holding.value_usd
 
-    binance = []
+    total = sum(account["value_usd"] for account in accounts.values())
+    out = []
     for account in accounts.values():
-        rows = list(account.pop("rows").values())
-        for row in rows:
-            row["price_usd"] = row["value_usd"] / row["quantity"] if row["quantity"] > 0 else 0.0
-            row["value_usd"] = round(row["value_usd"], 2)
+        rows = sorted((_priced(row) for row in account.pop("rows").values()),
+                      key=lambda r: (-r["value_usd"], r["symbol"], r["product"] or ""))
         if account["id"] == "binance_earn":
             split: dict[str, float] = {}
             for row in rows:
                 key = row["product"] or "other"
                 split[key] = split.get(key, 0.0) + row["value_usd"]
             account["split"] = {key: round(value, 2) for key, value in split.items()}
-        account["assets"] = sorted(rows, key=lambda r: (-r["value_usd"], r["symbol"], r["product"] or ""))
+        shown, dust = split_dust(rows, min_value)
+        for row in shown:
+            row["value_usd"] = round(row["value_usd"], 2)
+        account["assets"] = shown
+        account["dust"] = _rounded(dust)
         account["asset_count"] = len({row["symbol"] for row in rows})
-        account["pct"] = _pct(account["value_usd"], binance_total)
+        account["pct"] = _pct(account["value_usd"], total)
         account["value_usd"] = round(account["value_usd"], 2)
-        binance.append(account)
+        out.append(account)
+    return sorted(out, key=lambda w: (-w["value_usd"], w["label"].casefold()))
 
-    onchain = []
-    for card in wallet_groups(holdings, wallet_labels, manual_assets, min_value=0.0):
-        if card["type"] != "wallet":  # an unlinked manual asset has no on-chain wallet to sit in
+
+def personal_wallets(holdings: list[Holding], wallet_labels=(), manual_assets=(),
+                     min_value: float = 0.0) -> list[dict]:
+    """The Personal tab seen by wallet: every self-custody balance (on-chain + manual), one row
+    per *physical* wallet. Display only: nothing here feeds PnL, TWR or snapshots.
+
+    An on-chain holding (`detail = <chain>/<label>`) belongs to the wallet `<label>`, whatever the
+    chain: one row per device, not per (chain, address). A manual asset joins the wallet its
+    `linked_wallet` names (the BTC on the Ledger whose EVM address is tracked) and is listed in
+    its `manual` rows, apart from the on-chain `assets`, so a declared balance never passes for
+    an RPC read. Without a link it is a row of its own (`type = "manual"`), even when its label
+    equals a wallet label - only an explicit link merges.
+
+    `value_usd` is the wallet's whole worth (on-chain + linked manual, split in
+    `onchain_value_usd` / `manual_value_usd`), `pct` its share of the Personal total. Rows worth
+    less than `min_value`, on-chain or manual, are summed in `dust` (`split_dust`).
+    """
+    configured = set(wallet_labels)
+    by_label = {asset.label: asset for asset in manual_assets}
+    wallets: dict[str, dict] = {}
+    rows: dict[str, dict[tuple, dict]] = {}
+
+    def wallet(kind: str, label: str) -> dict:
+        key = f"{kind}:{label}"
+        if key not in wallets:
+            wallets[key] = {
+                "id": key, "label": label, "type": kind,
+                "configured": kind == "wallet" and label in configured,
+                "manual_kind": None, "linked_manual": [], "chains": {},
+                "value_usd": 0.0, "onchain_value_usd": 0.0, "manual_value_usd": 0.0,
+            }
+            rows[key] = {}
+        return wallets[key]
+
+    for holding in holdings:
+        if holding.quantity <= 0 or holding.source not in (ONCHAIN, MANUAL):
             continue
-        chains: dict[str, float] = {}
-        assets, linked = [], []
-        for row in card["holdings"]:
-            if row["source"] == ONCHAIN:
-                chain = row["chain"] or ""
-                chains[chain] = chains.get(chain, 0.0) + row["value_usd"]
-                assets.append({"symbol": row["symbol"], "chain": row["chain"], "quantity": row["quantity"],
-                               "value_usd": row["value_usd"], "price_usd": row["price_usd"]})
+        if holding.source == ONCHAIN:
+            chain, _, label = holding.detail.partition("/")
+            if not label:  # pre-v2 row without a wallet: nothing to group it by
+                chain, label = "", holding.detail or "On-chain"
+            card = wallet("wallet", label)
+            if chain:
+                card["chains"][chain] = card["chains"].get(chain, 0.0) + holding.value_usd
+            row_key = (ONCHAIN, holding.symbol, chain)
+            fields = {"chain": chain or None}
+            card["onchain_value_usd"] += holding.value_usd
+        else:
+            asset = by_label.get(holding.detail)
+            if asset is not None and asset.linked_wallet:
+                card = wallet("wallet", asset.linked_wallet)
+                if asset.label not in card["linked_manual"]:
+                    card["linked_manual"].append(asset.label)
             else:
-                linked.append({"symbol": row["symbol"], "label": row["manual_label"], "kind": row["manual_kind"],
-                               "quantity": row["quantity"], "value_usd": row["value_usd"],
-                               "price_usd": row["price_usd"]})
-        onchain.append({
-            "id": card["label"], "label": card["label"],
-            "value_usd": card["onchain_value_usd"], "pct": _pct(card["onchain_value_usd"], onchain_total),
-            "manual_value_usd": card["manual_value_usd"],
-            "chains": {chain: round(value, 2) for chain, value in chains.items()},
-            "asset_count": len({a["symbol"] for a in assets}),
-            "assets": assets, "linked_manual": linked,
+                card = wallet("manual", holding.detail or "Manual")
+                card["manual_kind"] = asset.kind if asset is not None else None
+            row_key = (MANUAL, holding.symbol, holding.detail)
+            fields = {"label": holding.detail or None, "kind": asset.kind if asset is not None else None}
+            card["manual_value_usd"] += holding.value_usd
+        card["value_usd"] += holding.value_usd
+        row = rows[card["id"]].setdefault(row_key, {
+            "source": holding.source, "symbol": holding.symbol, **fields, "quantity": 0.0, "value_usd": 0.0,
         })
+        row["quantity"] += holding.quantity
+        row["value_usd"] += holding.value_usd
 
-    by_value = lambda w: (-w["value_usd"], w["label"].casefold())
-    return {"binance": sorted(binance, key=by_value), "onchain": sorted(onchain, key=by_value)}
+    total = sum(card["value_usd"] for card in wallets.values())
+    out = []
+    for key, card in wallets.items():
+        every = sorted((_priced(row) for row in rows[key].values()),
+                       key=lambda r: (-r["value_usd"], r["symbol"], r.get("chain") or r.get("label") or ""))
+        shown, dust = split_dust(every, min_value)
+        for row in shown:
+            row["value_usd"] = round(row["value_usd"], 2)
+        card["assets"] = [{k: v for k, v in row.items() if k != "source"} for row in shown if row["source"] == ONCHAIN]
+        card["manual"] = [{k: v for k, v in row.items() if k != "source"} for row in shown if row["source"] == MANUAL]
+        card["dust"] = _rounded(dust)
+        card["asset_count"] = len({row["symbol"] for row in every})
+        card["chains"] = {chain: round(value, 2) for chain, value in card["chains"].items()}
+        card["pct"] = _pct(card["value_usd"], total)
+        for field_name in ("value_usd", "onchain_value_usd", "manual_value_usd"):
+            card[field_name] = round(card[field_name], 2)
+        out.append(card)
+    return sorted(out, key=lambda c: (-c["value_usd"], c["label"].casefold()))
+
+
+def source_wallets(holdings: list[Holding], wallet_labels=(), manual_assets=(), min_value: float = 0.0) -> dict:
+    """The "Wallets" side of the Coins | Wallets switch, for each tab that has one."""
+    return {
+        "binance": binance_wallets(holdings, min_value),
+        "personal": personal_wallets(holdings, wallet_labels, manual_assets, min_value),
+    }

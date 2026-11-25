@@ -148,8 +148,10 @@ def test_portfolio_empty_when_nothing_configured_or_recorded(tmp_path):
     assert data["total_usd"] == 0
     assert data["assets"] == []
     assert data["change_24h"] is None
-    assert data["groups"] == {"all": 0, "binance": 0, "onchain": 0, "manual": 0, "others": 0}  # manual: M6.2
-    assert data["wallet_groups"] == []
+    assert data["groups"] == {"all": 0, "binance": 0, "personal": 0}
+    assert "wallet_groups" not in data                  # the Others tab is gone: Personal replaces it
+    assert data["wallets"] == {"binance": [], "personal": []}
+    assert data["tab_dust"]["personal"] == {"assets": 0, "value_usd": 0}
 
 
 def test_portfolio_reads_latest_snapshot_without_fetching(tmp_path):
@@ -174,7 +176,12 @@ def test_portfolio_reads_latest_snapshot_without_fetching(tmp_path):
     eth = data["assets"][1]
     assert eth["onchain_value_usd"] == pytest.approx(6000)
     assert data["groups"]["binance"] == pytest.approx(36250.1, abs=0.01)
-    assert data["groups"]["onchain"] == pytest.approx(6000)
+    assert data["groups"]["personal"] == pytest.approx(6000)   # on-chain ETH, no manual asset
+    assert eth["personal_value_usd"] == pytest.approx(6000)
+    # each tab's Coins view folds its own dust: the 0.1 dust coin sits on Binance
+    assert data["tab_dust"]["all"] == data["dust"]
+    assert data["tab_dust"]["binance"] == {"assets": 1, "value_usd": 0.1}
+    assert data["tab_dust"]["personal"] == {"assets": 0, "value_usd": 0}
     assert data["source_labels"]["binance_earn"] == "Binance Earn"
 
 
@@ -718,10 +725,13 @@ def test_history_rejects_bad_interval(tmp_path):
     assert client.get("/api/portfolio/history", params={"tz_offset": 9999}).status_code == 422
 
 
-# -- per-tab "Wallets" switch (Binance / On-chain seen by account / wallet) --------------------
+# -- Coins | Wallets switch: Binance accounts, Personal wallets, one dust rule -----------------
 from models import BINANCE_FUNDING, MANUAL  # noqa: E402
-from services.portfolio import source_wallets  # noqa: E402
+from services.portfolio import (  # noqa: E402
+    binance_wallets, personal_wallets, source_wallets, split_dust, tab_dust,
+)
 
+SWITCH_LABELS = ["My Ledgy", "New Trust", "My Sol"]
 SWITCH_WALLETS = {
     "evm": [
         {"address": EVM_A, "label": "My Ledgy", "chains": ["ethereum", "bsc", "base"]},
@@ -747,30 +757,44 @@ def switch_holdings() -> list[Holding]:
         Holding("USDC", ONCHAIN, 50.0, 1.0, detail="base/My Ledgy"),
         Holding("SHIB", ONCHAIN, 10.0, 0.00001, detail="ethereum/My Ledgy"),       # dust
         Holding("ETH", ONCHAIN, 0.1, 3000.0, detail="ethereum/New Trust"),
-        Holding("BTC", MANUAL, 0.0254, 60000.0, detail="My Ledgy"),
-        Holding("ETH", MANUAL, 1.0, 3000.0, detail="Validator"),
+        Holding("BTC", MANUAL, 0.0254, 60000.0, detail="My Ledgy"),                 # linked to My Ledgy
+        Holding("ETH", MANUAL, 1.0, 3000.0, detail="Validator"),                    # unlinked
     ]
 
 
 def _switch_manual():
     from config import parse_manual_assets
-    assets, errors = parse_manual_assets([SWITCH_LEDGER_BTC, SWITCH_VALIDATOR], ["My Ledgy", "New Trust", "My Sol"])
+    assets, errors = parse_manual_assets([SWITCH_LEDGER_BTC, SWITCH_VALIDATOR], SWITCH_LABELS)
     assert not errors
     return assets
 
 
-def _switch_wallets():
-    holdings = switch_holdings()
-    binance = sum(h.value_usd for h in holdings if h.source.startswith("binance_"))
-    onchain = sum(h.value_usd for h in holdings if h.source == ONCHAIN)
-    return source_wallets(holdings, ["My Ledgy", "New Trust", "My Sol"], _switch_manual(),
-                          binance_total=binance, onchain_total=onchain), binance, onchain
+def _personal(min_value=1.0, holdings=None):
+    return personal_wallets(switch_holdings() if holdings is None else holdings, SWITCH_LABELS,
+                            _switch_manual(), min_value)
 
 
-def test_source_wallets_binance_one_row_per_account_with_earn_merged():
-    wallets, binance_total, _ = _switch_wallets()
-    rows = {w["id"]: w for w in wallets["binance"]}
-    assert [w["id"] for w in wallets["binance"]] == ["binance_earn", "binance_spot", "binance_funding"]  # by value
+def test_split_dust_keeps_order_and_sums_the_rest():
+    rows = [{"value_usd": 5.0}, {"value_usd": 0.4}, {"value_usd": 1.0}, {"value_usd": 0.0}]
+    kept, dust = split_dust(rows, 1.0)
+    assert kept == [{"value_usd": 5.0}, {"value_usd": 1.0}]             # the threshold itself is kept
+    assert dust == {"assets": 2, "value_usd": pytest.approx(0.4)}
+    assert split_dust(rows, 0.0) == (rows, {"assets": 0, "value_usd": 0.0})
+
+
+def test_tab_dust_counts_per_symbol_within_the_tab_sources():
+    holdings = switch_holdings() + [Holding("ARB", ONCHAIN, 1.0, 0.3, detail="arbitrum/My Ledgy"),
+                                    Holding("ARB", MANUAL, 1.0, 0.3, detail="Validator")]
+    assert tab_dust(holdings, ("binance_spot", "binance_earn", "binance_funding"), 1.0) == {
+        "assets": 1, "value_usd": 0.1}                                  # PEPE
+    # ARB: 0.3 on-chain + 0.3 manual = 0.6, one symbol under $1 in Personal, plus SHIB
+    assert tab_dust(holdings, (ONCHAIN, MANUAL), 1.0) == {"assets": 2, "value_usd": 0.6}
+
+
+def test_binance_wallets_one_row_per_account_with_earn_merged():
+    rows_list = binance_wallets(switch_holdings(), min_value=1.0)
+    rows = {w["id"]: w for w in rows_list}
+    assert [w["id"] for w in rows_list] == ["binance_earn", "binance_spot", "binance_funding"]  # by value
     earn = rows["binance_earn"]
     assert earn["label"] == "Binance Earn"
     assert earn["value_usd"] == pytest.approx(600 + 1200 + 200)
@@ -780,90 +804,107 @@ def test_source_wallets_binance_one_row_per_account_with_earn_merged():
                                                                        ("USDC", "flexible")}
     assert "split" not in rows["binance_spot"]
     assert rows["binance_spot"]["assets"][0]["product"] is None
-    assert rows["binance_funding"]["value_usd"] == pytest.approx(0.1)   # dust kept
-    # pct of the Binance total, not of the whole portfolio
-    assert sum(w["pct"] for w in wallets["binance"]) == pytest.approx(100.0, abs=0.01)
-    assert rows["binance_spot"]["pct"] == pytest.approx(700 / binance_total * 100, abs=1e-3)
+    # pct of the Binance total (dust included), not of the whole portfolio
+    total = 700 + 2000 + 0.1
+    assert sum(w["pct"] for w in rows_list) == pytest.approx(100.0, abs=0.01)
+    assert rows["binance_spot"]["pct"] == pytest.approx(700 / total * 100, abs=1e-3)
 
 
-def test_source_wallets_onchain_one_row_per_label_with_chains_summed():
-    wallets, _, onchain_total = _switch_wallets()
-    assert [w["label"] for w in wallets["onchain"]] == ["My Ledgy", "New Trust"]   # no empty "My Sol"
-    ledger = wallets["onchain"][0]
-    assert ledger["id"] == "My Ledgy"
-    assert ledger["value_usd"] == pytest.approx(3000 + 300 + 50 + 0.0001, abs=0.01)
-    assert ledger["chains"] == {"ethereum": pytest.approx(3000.0), "bsc": pytest.approx(300.0),
-                                "base": pytest.approx(50.0)}
-    assert {a["symbol"] for a in ledger["assets"]} == {"ETH", "BNB", "USDC", "SHIB"}   # dust included
-    assert all(a["chain"] for a in ledger["assets"])
-    assert ledger["asset_count"] == 4
-    assert sum(w["pct"] for w in wallets["onchain"]) == pytest.approx(100.0, abs=0.01)
-    assert ledger["pct"] == pytest.approx(ledger["value_usd"] / onchain_total * 100, abs=1e-3)
+def test_binance_wallets_fold_small_rows_into_dust():
+    funding = {w["id"]: w for w in binance_wallets(switch_holdings(), min_value=1.0)}["binance_funding"]
+    assert funding["value_usd"] == pytest.approx(0.1)                   # still worth something, still listed
+    assert funding["assets"] == [] and funding["asset_count"] == 1
+    assert funding["dust"] == {"assets": 1, "value_usd": 0.1}
+    # min_value 0: nothing folded
+    funding = {w["id"]: w for w in binance_wallets(switch_holdings(), min_value=0.0)}["binance_funding"]
+    assert [a["symbol"] for a in funding["assets"]] == ["PEPE"] and funding["dust"]["assets"] == 0
 
 
-def test_source_wallets_onchain_carries_linked_manual_apart_from_onchain_value():
-    wallets, _, _ = _switch_wallets()
-    ledger = wallets["onchain"][0]
-    assert ledger["linked_manual"] == [{
-        "symbol": "BTC", "label": "My Ledgy", "kind": "cold_wallet", "quantity": pytest.approx(0.0254),
-        "value_usd": pytest.approx(1524.0), "price_usd": pytest.approx(60000.0),
-    }]
+def test_personal_wallets_cover_onchain_and_unlinked_manual():
+    wallets = _personal()
+    assert [(w["id"], w["type"]) for w in wallets] == [
+        ("wallet:My Ledgy", "wallet"), ("manual:Validator", "manual"), ("wallet:New Trust", "wallet"),
+    ]                                                                   # by value; no empty "My Sol"
+    total = 3000 + 300 + 50 + 0.0001 + 1524 + 300 + 3000
+    assert sum(w["pct"] for w in wallets) == pytest.approx(100.0, abs=0.01)
+    validator = wallets[1]
+    assert validator["manual_kind"] == "staking" and not validator["configured"]
+    assert validator["assets"] == [] and validator["linked_manual"] == []
+    assert validator["manual"] == [{"symbol": "ETH", "label": "Validator", "kind": "staking",
+                                    "quantity": pytest.approx(1.0), "value_usd": 3000.0,
+                                    "price_usd": pytest.approx(3000.0)}]
+    assert validator["pct"] == pytest.approx(3000 / total * 100, abs=1e-3)
+
+
+def test_personal_wallet_merges_linked_manual_into_its_value_and_lists_it_apart():
+    ledger = _personal()[0]
+    assert ledger["label"] == "My Ledgy" and ledger["configured"]
+    assert ledger["linked_manual"] == ["My Ledgy"]
+    assert ledger["onchain_value_usd"] == pytest.approx(3350.0, abs=0.01)
     assert ledger["manual_value_usd"] == pytest.approx(1524.0)
-    assert "BTC" not in {a["symbol"] for a in ledger["assets"]}         # never passes for an RPC read
-    assert wallets["onchain"][1]["linked_manual"] == []
-    # an unlinked manual asset belongs to the Others tab only
-    assert "Validator" not in {w["label"] for w in wallets["onchain"]}
-    assert all(m["label"] != "Validator" for w in wallets["onchain"] for m in w["linked_manual"])
+    assert ledger["value_usd"] == pytest.approx(3350.0 + 1524.0, abs=0.01)  # the device's whole worth
+    assert ledger["chains"] == {"ethereum": pytest.approx(3000.0), "bsc": pytest.approx(300.0),
+                                "base": pytest.approx(50.0)}             # on-chain only
+    assert [a["symbol"] for a in ledger["assets"]] == ["ETH", "BNB", "USDC"]   # by value, on-chain only
+    assert all(a["chain"] for a in ledger["assets"])
+    assert [m["symbol"] for m in ledger["manual"]] == ["BTC"]           # never passes for an RPC read
+    assert ledger["manual"][0]["kind"] == "cold_wallet"
+    assert ledger["asset_count"] == 5                                   # ETH BNB USDC SHIB BTC
 
 
-def test_source_wallets_reuse_wallet_groups_matching():
-    """Same linked_wallet match as the Others tab: what joins a card there joins the row here."""
-    from services.portfolio import wallet_groups
+def test_personal_wallet_detail_folds_dust_like_the_coins_view():
+    ledger = _personal(min_value=1.0)[0]
+    assert "SHIB" not in {a["symbol"] for a in ledger["assets"]}
+    assert ledger["dust"] == {"assets": 1, "value_usd": 0.0}
+    # value, chains and pct still count the folded balance
+    assert ledger["chains"]["ethereum"] == pytest.approx(3000.0, abs=0.01)
+    everything = _personal(min_value=0.0)[0]
+    assert "SHIB" in {a["symbol"] for a in everything["assets"]} and everything["dust"]["assets"] == 0
+    assert everything["value_usd"] == ledger["value_usd"] and everything["pct"] == ledger["pct"]
+
+
+def test_personal_wallet_dust_also_folds_manual_rows():
+    """One rule for every row: a manual coin worth less than the filter is folded too."""
+    holdings = switch_holdings() + [Holding("DOGE", MANUAL, 2.0, 0.2, detail="Validator"),
+                                    Holding("XYZ", MANUAL, 5.0, 0.0, detail="Validator")]  # unpriced
+    validator = next(w for w in _personal(holdings=holdings) if w["id"] == "manual:Validator")
+    assert [m["symbol"] for m in validator["manual"]] == ["ETH"]
+    assert validator["dust"] == {"assets": 2, "value_usd": 0.4}
+
+
+def test_source_wallets_bundles_both_tabs():
     holdings, manual = switch_holdings(), _switch_manual()
-    others = {g["label"]: g for g in wallet_groups(holdings, ["My Ledgy", "New Trust", "My Sol"], manual)
-              if g["type"] == "wallet"}
-    rows = source_wallets(holdings, ["My Ledgy", "New Trust", "My Sol"], manual)["onchain"]
-    for row in rows:
-        assert [m["label"] for m in row["linked_manual"]] == others[row["label"]]["linked_manual"]
+    assert source_wallets(holdings, SWITCH_LABELS, manual, 1.0) == {
+        "binance": binance_wallets(holdings, 1.0),
+        "personal": personal_wallets(holdings, SWITCH_LABELS, manual, 1.0),
+    }
+    assert source_wallets([]) == {"binance": [], "personal": []}
 
 
-def test_source_wallets_linked_wallet_without_onchain_balance_still_listed():
-    from config import parse_manual_assets
-    assets, _ = parse_manual_assets([{**SWITCH_LEDGER_BTC, "label": "Sol cold", "linked_wallet": "My Sol"}], ["My Sol"])
-    holdings = [Holding("BTC", MANUAL, 0.0254, 60000.0, detail="Sol cold")]
-    row = source_wallets(holdings, ["My Sol"], assets)["onchain"][0]
-    assert row["label"] == "My Sol" and row["value_usd"] == 0 and row["pct"] == 0
-    assert row["chains"] == {} and row["assets"] == [] and row["linked_manual"][0]["symbol"] == "BTC"
-
-
-def test_source_wallets_empty():
-    assert source_wallets([]) == {"binance": [], "onchain": []}
-
-
-def test_api_portfolio_sends_per_tab_wallets(tmp_path):
+def test_api_portfolio_sends_the_personal_tab(tmp_path):
     client = make_client(tmp_path, sections={"wallets": SWITCH_WALLETS,
                                              "manual_assets": [SWITCH_LEDGER_BTC, SWITCH_VALIDATOR]},
                          fetcher=fake_fetcher(switch_holdings()), min_value=1.0)
     data = client.post("/api/portfolio/refresh").json()
     groups, wallets = data["groups"], data["wallets"]
+    assert set(groups) == {"all", "binance", "personal"}
+    assert set(wallets) == {"binance", "personal"}
+    assert "wallet_groups" not in data
+    # Personal = on-chain + manual, and every view of it adds up to that total
+    assert groups["personal"] == pytest.approx(data["sources"]["onchain"] + data["sources"]["manual"], abs=0.02)
+    assert sum(w["value_usd"] for w in wallets["personal"]) == pytest.approx(groups["personal"], abs=0.05)
     assert sum(w["value_usd"] for w in wallets["binance"]) == pytest.approx(groups["binance"], abs=0.05)
-    assert sum(w["value_usd"] for w in wallets["onchain"]) == pytest.approx(groups["onchain"], abs=0.05)
-    ledger = next(w for w in wallets["onchain"] if w["label"] == "My Ledgy")
-    assert ledger["pct"] == pytest.approx(ledger["value_usd"] / groups["onchain"] * 100, abs=0.01)
-    assert [m["symbol"] for m in ledger["linked_manual"]] == ["BTC"]
-    # Others tab untouched: still there, keyed "others", and Wallet cards still merge the BTC
-    assert groups["others"] == pytest.approx(groups["onchain"] + groups["manual"], abs=0.02)
-    assert "wallets" not in groups
-    card = next(g for g in data["wallet_groups"] if g["label"] == "My Ledgy")
-    assert {r["source"] for r in card["holdings"]} == {ONCHAIN, MANUAL}
-    # On-chain coin view stays pure on-chain: the manual BTC is not an on-chain quantity
+    ledger = next(w for w in wallets["personal"] if w["label"] == "My Ledgy")
+    assert ledger["pct"] == pytest.approx(ledger["value_usd"] / groups["personal"] * 100, abs=0.01)
+    assert [m["symbol"] for m in ledger["manual"]] == ["BTC"] and ledger["dust"]["assets"] == 1
+    assert any(w["id"] == "manual:Validator" for w in wallets["personal"])
+    # Coins view: on-chain and manual merged per symbol (the manual BTC is now in Personal)
     btc = next(a for a in data["assets"] if a["symbol"] == "BTC")
+    assert btc["personal_quantity"] == pytest.approx(0.0254) and btc["personal_value_usd"] == pytest.approx(1524.0)
+    eth = next(a for a in data["assets"] if a["symbol"] == "ETH")
+    assert eth["personal_quantity"] == pytest.approx(1.0 + 0.1 + 1.0)   # 2 wallets + the validator
+    assert data["tab_dust"]["personal"] == {"assets": 1, "value_usd": 0.0}   # SHIB
+    assert data["tab_dust"]["binance"] == {"assets": 1, "value_usd": 0.1}    # PEPE
+    # display only: the data layer still keeps on-chain and manual apart
     assert btc["onchain_quantity"] == 0 and btc["manual_quantity"] == pytest.approx(0.0254)
-    # display only: the data layer still keeps the manual value apart
     assert data["sources"]["manual"] == pytest.approx(0.0254 * 60000 + 3000, abs=0.01)
-
-
-def test_api_empty_portfolio_has_empty_wallets(tmp_path):
-    data = make_client(tmp_path).get("/api/portfolio").json()
-    assert data["wallets"] == {"binance": [], "onchain": []}
-    assert data["groups"]["others"] == 0

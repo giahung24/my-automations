@@ -37,16 +37,17 @@
   const TABS = [
     { id: 'all', label: 'All', hint: 'Every source' },
     { id: 'binance', label: 'Binance', hint: 'Spot + Simple Earn + Funding' },
-    { id: 'onchain', label: 'On-chain', hint: 'Every configured wallet and chain' },
-    { id: 'others', label: 'Others', hint: 'Self-custody by physical wallet: on-chain + manual coins together' },
+    { id: 'personal', label: 'Personal', hint: 'Everything off the exchange: on-chain wallets, cold wallets, staking, manual assets' },
   ];
   const SOURCE_ORDER = ['binance_spot', 'binance_earn', 'binance_funding', 'onchain', 'manual'];
   const BINANCE_SOURCES = ['binance_spot', 'binance_earn', 'binance_funding'];
   // Sources each asset-list tab shows. A location is filtered by the source it was read from
   // (`locations_by_source`), never guessed from its spelling: a manual label has no `chain/`.
-  const TAB_SOURCES = { binance: BINANCE_SOURCES, onchain: ['onchain'], all: SOURCE_ORDER };
-  // Tabs whose list can be read by coin or by wallet (Binance account / on-chain wallet label).
-  const VIEW_SWITCH_TABS = ['binance', 'onchain'];
+  const TAB_SOURCES = { binance: BINANCE_SOURCES, personal: ['onchain', 'manual'], all: SOURCE_ORDER };
+  // Tabs whose list can be read by coin or by wallet (Binance account / physical wallet).
+  const VIEW_SWITCH_TABS = ['binance', 'personal'];
+  // Tab ids that no longer exist, and the tab that replaced them (a stored choice survives)
+  const RETIRED_TABS = { onchain: 'personal', others: 'personal', wallets: 'personal' };
   const ASSET_VIEWS = [{ id: 'coins', label: 'Coins' }, { id: 'wallets', label: 'Wallets' }];
   const EARN_PRODUCTS = { flexible: 'Flexible', locked: 'Locked' };
   const CHAIN_LABELS = {
@@ -268,7 +269,7 @@
 
   const emptyPortfolio = () => ({
     timestamp: '', total_usd: 0, origin: 'empty', configured: true, assets: [], errors: [],
-    groups: { all: 0, binance: 0, onchain: 0, others: 0 }, wallet_groups: [], wallets: { binance: [], onchain: [] },
+    groups: { all: 0, binance: 0, personal: 0 }, wallets: { binance: [], personal: [] }, tab_dust: {},
     source_labels: {}, change_24h: null,
     dust: { assets: 0, value_usd: 0 }, min_value: 1,
   });
@@ -283,8 +284,7 @@
       const points = ref([]);
       const historyLoaded = ref(false);
       const rangeId = ref(RANGES.some((r) => r.id === storage.get(STORE.range)) ? storage.get(STORE.range) : '1M');
-      // 'wallets' was the Others tab's id before it was renamed: keep that choice
-      const storedTab = storage.get(STORE.tab) === 'wallets' ? 'others' : storage.get(STORE.tab);
+      const storedTab = RETIRED_TABS[storage.get(STORE.tab)] || storage.get(STORE.tab);
       const tabId = ref(TABS.some((t) => t.id === storedTab) ? storedTab : 'all');
       const assetView = ref(storage.get(STORE.assetView) === 'wallets' ? 'wallets' : 'coins');
       const privacy = ref(storage.get(STORE.privacy, '0') === '1');
@@ -407,8 +407,8 @@
           ...data,
           assets: Array.isArray(data.assets) ? data.assets : [],
           errors: Array.isArray(data.errors) ? data.errors : [],
-          wallet_groups: Array.isArray(data.wallet_groups) ? data.wallet_groups : [],
           wallets: { ...base.wallets, ...(data.wallets || {}) },
+          tab_dust: data.tab_dust || base.tab_dust,
           groups: { ...base.groups, ...(data.groups || {}) },
           dust: data.dust || base.dust,
         };
@@ -595,7 +595,7 @@
         const labels = p.source_labels || {};
         const minValue = num(p.min_value);
         const sources = TAB_SOURCES[tab] || SOURCE_ORDER;
-        if (tab === 'others' || walletView.value) return [];   // those render walletGroups / visibleWallets
+        if (walletView.value) return [];   // the Wallets view renders visibleWallets
 
         return p.assets
           .map((asset) => {
@@ -606,9 +606,9 @@
               quantity = num(asset.binance_quantity);
               value = num(asset.binance_value_usd);
               pct = groupTotal > 0 ? (value / groupTotal) * 100 : 0;
-            } else if (tab === 'onchain') {
-              quantity = num(asset.onchain_quantity);
-              value = num(asset.onchain_value_usd);
+            } else if (tab === 'personal') {
+              quantity = num(asset.personal_quantity);
+              value = num(asset.personal_value_usd);
               pct = groupTotal > 0 ? (value / groupTotal) * 100 : 0;
             }
             const breakdown = sources
@@ -628,56 +628,55 @@
           .sort((a, b) => b.value - a.value || a.symbol.localeCompare(b.symbol));
       });
 
-      // Wallets tab: one card per physical wallet. A manual asset linked to a configured wallet
-      // (`linked_wallet`) sits in that wallet's card next to its on-chain coins; each row keeps
-      // its source, so declared balances never pass for RPC reads.
-      const walletGroups = computed(() => (portfolio.value.wallet_groups || [])
-        .filter((g) => (g.holdings || []).length || num(g.dust && g.dust.assets)));
-      // Binance / On-chain tabs, "Wallets" view: one row per Binance account or per on-chain wallet
-      // label (chains summed), `pct` of the tab's own total. An on-chain wallet also lists the
-      // manual assets linked to it (same match as the Others tab, done server-side), apart from
-      // its on-chain coins and outside its value: the Coins view stays pure on-chain.
+      // Coins view: the tab's small balances, folded into one line (server-side `split_dust`)
+      const tabDust = computed(() => (portfolio.value.tab_dust || {})[tabId.value] || portfolio.value.dust);
+      // Binance / Personal tabs, "Wallets" view: one row per Binance account or per physical
+      // wallet, `pct` of the tab's own total. A Personal wallet lists its on-chain coins, then
+      // the manual assets linked to it (tagged Manual); an unlinked manual asset is a row of its
+      // own. Rows under the dust filter arrive already folded into each wallet's `dust`.
       const hasViewSwitch = computed(() => VIEW_SWITCH_TABS.includes(tabId.value));
       const walletView = computed(() => hasViewSwitch.value && assetView.value === 'wallets');
       const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+      function walletSub(w) {
+        if (tabId.value === 'binance') return plural(num(w.asset_count), 'asset');
+        if (w.type === 'manual') return `Manual · ${manualKindLabel(w.manual_kind)}`;
+        const chains = Object.keys(w.chains || {});
+        return chains.length ? plural(chains.length, 'chain') : 'No on-chain balance';
+      }
       const visibleWallets = computed(() => {
         if (!walletView.value) return [];
         const tab = tabId.value;
         return ((portfolio.value.wallets || {})[tab] || [])
           .map((w) => {
-            const linked = (w.linked_manual || []).map((m) => ({
+            const linked = (w.manual || []).map((m) => ({
               key: `manual:${m.label}:${m.symbol}`, symbol: m.symbol, quantity: num(m.quantity),
-              value: num(m.value_usd), price: num(m.price_usd), where: `Manual · ${m.label}`, manual: true,
+              value: num(m.value_usd), price: num(m.price_usd),
             }));
             const rows = (w.assets || []).map((a) => ({
               key: `${a.product || a.chain || ''}:${a.symbol}`, symbol: a.symbol, quantity: num(a.quantity),
-              value: num(a.value_usd), price: num(a.price_usd), manual: false,
-              where: tab === 'onchain' ? (CHAIN_LABELS[a.chain] || a.chain || 'On-chain') : (EARN_PRODUCTS[a.product] || a.product || ''),
+              value: num(a.value_usd), price: num(a.price_usd),
+              where: tab === 'binance' ? (EARN_PRODUCTS[a.product] || a.product || '') : (CHAIN_LABELS[a.chain] || a.chain || 'On-chain'),
             }));
             const chains = Object.keys(w.chains || {});
-            const sub = tab === 'onchain'
-              ? (chains.length ? plural(chains.length, 'chain') : 'No on-chain balance')
-              : plural(num(w.asset_count), 'asset');
             const split = Object.entries(w.split || {})
               .map(([product, value]) => ({ label: EARN_PRODUCTS[product] || product, value: num(value) }));
+            const dust = w.dust || { assets: 0, value_usd: 0 };
             return {
-              key: `w:${w.id}`, id: w.id, label: w.label, value: num(w.value_usd), pct: num(w.pct), sub,
+              key: `w:${w.id}`, id: w.id, label: w.label, value: num(w.value_usd), pct: num(w.pct), sub: walletSub(w),
               chains: chains.map((c) => ({ label: CHAIN_LABELS[c] || c || 'On-chain', value: num(w.chains[c]) })),
-              split, rows, linked,
+              split, rows, linked, dust,
+              // an on-chain wallet holding assets declared by hand: "+ manual" badge, own section
+              hasLinked: w.type === 'wallet' && (w.linked_manual || []).length > 0,
               manualValue: num(w.manual_value_usd),
             };
           })
-          .filter((w) => w.value > 0 || w.linked.length);
+          .filter((w) => w.value > 0 || w.rows.length || w.linked.length || num(w.dust.assets));
       });
       function setAssetView(id) {
         assetView.value = id;
         storage.set(STORE.assetView, id);
         expanded.value = null;
       }
-
-      const walletRowWhere = (row) => (row.source === 'onchain'
-        ? (CHAIN_LABELS[row.chain] || row.chain || 'On-chain')
-        : `Manual · ${manualKindLabel(row.manual_kind)}`);
 
       // Width of the value column: wide enough for the longest balance or price in the list, so
       // money is never cut off. Tabular Manrope digits are ~9.3px at 15px/800, ~7.8px at 13px/600.
@@ -693,16 +692,14 @@
       const emptyTitle = computed(() => {
         if (portfolio.value.origin === 'empty') return 'No balances fetched yet';
         if (tabId.value === 'binance') return walletView.value ? 'No Binance account to show' : 'No Binance balances to show';
-        if (tabId.value === 'onchain') return walletView.value ? 'No on-chain wallet to show' : 'No on-chain balances to show';
-        if (tabId.value === 'others') return 'No self-custody balances to show';
+        if (tabId.value === 'personal') return walletView.value ? 'No personal wallet to show' : 'No personal balances to show';
         return 'No balances above the dust filter';
       });
       const emptyHint = computed(() => {
         const min = fmt.money(portfolio.value.min_value);
         if (portfolio.value.origin === 'empty') return 'Fetch balances to take your first snapshot.';
         if (tabId.value === 'binance') return walletView.value ? 'Binance is not connected, or every account is empty.' : `Binance is not connected, or nothing there is worth ${min} or more.`;
-        if (tabId.value === 'onchain') return walletView.value ? 'No wallet is configured, or every wallet is empty.' : `No wallet is configured, or nothing on-chain is worth ${min} or more.`;
-        if (tabId.value === 'others') return 'Add a wallet address or a manual asset (cold wallet, staking) in Settings.';
+        if (tabId.value === 'personal') return walletView.value ? 'Add a wallet address or a manual asset (cold wallet, staking) in Settings.' : `No wallet or manual asset is configured, or nothing there is worth ${min} or more.`;
         return `Every asset is worth less than ${min}. They still count in the total.`;
       });
 
@@ -2148,7 +2145,7 @@
       return {
         fmt, ranges: RANGES, tabs: TABS,
         loading, refreshing, portfolio, points, rangeId, tabId, privacy, scrub, expanded, showErrors,
-        assetViews: ASSET_VIEWS, assetView, hasViewSwitch, walletView, visibleWallets, setAssetView,
+        assetViews: ASSET_VIEWS, assetView, hasViewSwitch, walletView, visibleWallets, setAssetView, tabDust,
         iconFailed, toast, scrolled, locked, unlockToken, unlockError, unlocking,
         heroParts, heroChange, heroTrend, scrubLabel, rangeChange, rangeLabel, chartMessage, updatedAgo,
         visibleAssets, valueCol, emptyTitle, emptyHint,
@@ -2172,10 +2169,21 @@
         openSettings, closeSettings, onSheetKeydown, saveSettings, testBinance, clearBinance,
         draft, draftError, draftKind, armedDelete, chainColor, chainShort, chainAllowed,
         toggleChain, newWallet, editWallet, cancelDraft, applyDraft, deleteWallet, testWallet,
-        manualKinds: MANUAL_KINDS, walletOptions, walletGroups, walletRowWhere, manualDraft, armedManual, manualKindLabel, manualSummary, manualAge,
+        manualKinds: MANUAL_KINDS, walletOptions, manualDraft, armedManual, manualKindLabel, manualSummary, manualAge,
         newManual, editManual, cancelManual, addHolding, removeHolding, applyManual, deleteManual,
       };
     },
+  });
+
+  // The one "N balances under $1 hidden" line, shared by every tab's Coins list and by each
+  // wallet's detail in the Wallets view: same rule (server-side `split_dust`), same words.
+  app.component('dust-note', {
+    props: { dust: { type: Object, default: null }, min: { type: Number, default: 0 } },
+    setup: () => ({ fmt }),
+    template: `<p v-if="dust && dust.assets" class="text-[12px] text-ink-3">
+      {{ dust.assets }} {{ dust.assets === 1 ? 'balance' : 'balances' }} under {{ fmt.money(min) }} hidden
+      (<span class="priv priv-soft num">{{ fmt.money(dust.value_usd) }}</span>, counted in the total).
+    </p>`,
   });
 
   app.mount('#app');

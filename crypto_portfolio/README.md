@@ -74,8 +74,10 @@ clients, aggregation and SQLite history:
 
 - net worth with a privacy toggle that blurs every balance, plus the 24h change;
 - a touch-scrubbable history chart (24H / 7D / 1M / 1Y / 5Y / ALL) built from the snapshots;
-- All / Binance / On-chain tabs over the per-asset list (quantity, price, value, share), and
-  a tap on an asset shows the per-source and per-wallet breakdown;
+- All / Binance / Personal tabs over the per-asset list (quantity, price, value, share), and
+  a tap on an asset shows the per-source and per-wallet breakdown. Personal is everything off
+  the exchange (on-chain wallets, cold wallets, staking, manual assets); Binance and Personal
+  have a Coins | Wallets switch, and balances under the dust filter fold into one line;
 - a settings sheet for the Binance key (with a permissions check) and the wallet list (with
   a per-chain balance check), saved to `config.yaml`.
 

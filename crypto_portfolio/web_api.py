@@ -74,7 +74,7 @@ from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.manual import after_snapshot, last_changes
-from services.portfolio import fetch_portfolio, portfolio_from_db, source_wallets, to_dict, wallet_groups
+from services.portfolio import fetch_portfolio, portfolio_from_db, source_wallets, tab_dust, to_dict
 from services.resample import TooManyBuckets, resample
 
 STATIC_DIR = ROOT / "static"
@@ -287,6 +287,9 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
         asset["manual_quantity"] = by_qty.get(MANUAL, 0.0)
         asset["manual_value_usd"] = round(by_value.get(MANUAL, 0.0), 2)
         asset["manual_labels"] = manual_labels.get(asset["symbol"], [])
+        # the Personal tab's Coins view: on-chain and manual read as one self-custody balance
+        asset["personal_quantity"] = sum(by_qty.get(s, 0.0) for s in SELF_CUSTODY_SOURCES)
+        asset["personal_value_usd"] = round(sum(by_value.get(s, 0.0) for s in SELF_CUSTODY_SOURCES), 2)
         asset.setdefault("locations_by_source", {})
 
     totals = portfolio.totals
@@ -298,21 +301,22 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
         snapshot_id=snapshot_id,
         configured=config.has_sources,
         min_value=config.min_value,
+        # one total per asset-list tab; Personal = every self-custody balance (on-chain + manual)
         groups={
             "all": round(portfolio.total_usd, 2),
             "binance": round(cex, 2),
-            "onchain": round(totals.get(ONCHAIN, 0.0), 2),
-            "manual": round(totals.get(MANUAL, 0.0), 2),
-            # the Others tab: self-custody (on-chain + manual) grouped by physical wallet
-            "others": round(self_custody, 2),
+            "personal": round(self_custody, 2),
         },
-        # display-only grouping; PnL, TWR and snapshot_sources keep on-chain and manual apart
-        wallet_groups=wallet_groups(portfolio.holdings, config.wallet_labels, config.manual,
-                                    config.min_value),
-        # the Binance / On-chain tabs' "Wallets" switch: per account / per wallet label, with
-        # `pct` of that tab's total; an on-chain wallet carries its linked manual assets apart
-        wallets=source_wallets(portfolio.holdings, config.wallet_labels, config.manual,
-                               binance_total=cex, onchain_total=totals.get(ONCHAIN, 0.0)),
+        # what each tab's Coins view folds into its "N balances under $1" line
+        tab_dust={
+            "all": data["dust"],
+            "binance": tab_dust(portfolio.holdings, BINANCE_SOURCES, config.min_value),
+            "personal": tab_dust(portfolio.holdings, SELF_CUSTODY_SOURCES, config.min_value),
+        },
+        # the Wallets side of the Coins | Wallets switch: per Binance account / per physical
+        # wallet, `pct` of that tab's total, small rows folded into `dust`. Display only: PnL,
+        # TWR and snapshot_sources keep on-chain and manual apart.
+        wallets=source_wallets(portfolio.holdings, config.wallet_labels, config.manual, config.min_value),
         # Exchange vs your own keys; a manual asset (cold wallet, validator) is self-custody.
         custody={
             "cex_usd": round(cex, 2),

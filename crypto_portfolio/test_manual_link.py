@@ -28,7 +28,7 @@ from config import ManualAsset, ManualHolding, load_config, parse_manual_assets,
 from models import BINANCE_EARN, BINANCE_SPOT, MANUAL, ONCHAIN, Holding, holding_sources
 from services.db import Database
 from services.manual import fetch_manual
-from services.portfolio import aggregate, to_dict, wallet_groups
+from services.portfolio import aggregate, personal_wallets, to_dict
 from test_api import EVM_A, EVM_B, SOL_A, fake_fetcher, make_client
 
 ROOT = Path(__file__).resolve().parent
@@ -245,75 +245,69 @@ def _assets(*entries) -> list[ManualAsset]:
     return parse_manual_assets(list(entries), ["My Ledgy", "New Trust", "My Sol"])[0]
 
 
-def test_wallet_groups_merge_a_linked_manual_asset_into_its_wallet_card():
-    groups = wallet_groups(jean_holdings(), ["My Ledgy", "New Trust", "My Sol"], _assets(LEDGER_BTC), min_value=1.0)
-    ledger = next(g for g in groups if g["label"] == "My Ledgy")
+def test_personal_wallets_merge_a_linked_manual_asset_into_its_wallet():
+    wallets = personal_wallets(jean_holdings(), ["My Ledgy", "New Trust", "My Sol"], _assets(LEDGER_BTC), min_value=1.0)
+    ledger = next(w for w in wallets if w["label"] == "My Ledgy")
     assert ledger["type"] == "wallet" and ledger["id"] == "wallet:My Ledgy" and ledger["configured"]
     assert ledger["linked_manual"] == ["My Ledgy"]
-    assert ledger["chains"] == ["ethereum", "base"]
-    rows = {(r["source"], r["symbol"], r["chain"]) for r in ledger["holdings"]}
-    assert rows == {(ONCHAIN, "ETH", "ethereum"), (ONCHAIN, "USDC", "base"), (MANUAL, "BTC", None)}
-    btc = next(r for r in ledger["holdings"] if r["symbol"] == "BTC")
-    assert btc["manual_label"] == "My Ledgy" and btc["manual_kind"] == "cold_wallet"
+    assert list(ledger["chains"]) == ["ethereum", "base"]
+    assert {(a["symbol"], a["chain"]) for a in ledger["assets"]} == {("ETH", "ethereum"), ("USDC", "base")}
+    btc = ledger["manual"][0]
+    assert btc["symbol"] == "BTC" and btc["label"] == "My Ledgy" and btc["kind"] == "cold_wallet"
     assert btc["quantity"] == pytest.approx(0.0254)
-    # totals stay split by source inside the card
+    # totals stay split by source inside the wallet
     assert ledger["onchain_value_usd"] == pytest.approx(1.5 * 3000 + 40 + 10 * 0.00001, abs=0.01)
     assert ledger["manual_value_usd"] == pytest.approx(0.0254 * 60000, abs=0.01)
     assert ledger["value_usd"] == pytest.approx(ledger["onchain_value_usd"] + ledger["manual_value_usd"], abs=0.01)
     assert ledger["dust"] == {"assets": 1, "value_usd": 0.0}
-    # no standalone card for the linked asset, no Binance row anywhere
-    assert [g["id"] for g in groups] == ["wallet:My Ledgy", "wallet:New Trust"]
-    assert all(r["source"] in (ONCHAIN, MANUAL) for g in groups for r in g["holdings"])
+    # no standalone row for the linked asset, no Binance row anywhere
+    assert [w["id"] for w in wallets] == ["wallet:My Ledgy", "wallet:New Trust"]
 
 
-def test_wallet_groups_same_name_without_link_stays_separate():
+def test_personal_wallets_same_name_without_link_stays_separate():
     unlinked = {**LEDGER_BTC, "linked_wallet": None}
-    groups = wallet_groups(jean_holdings(), ["My Ledgy"], _assets(unlinked))
-    ids = [g["id"] for g in groups]
+    wallets = personal_wallets(jean_holdings(), ["My Ledgy"], _assets(unlinked))
+    ids = [w["id"] for w in wallets]
     assert "wallet:My Ledgy" in ids and "manual:My Ledgy" in ids
-    manual = next(g for g in groups if g["id"] == "manual:My Ledgy")
+    manual = next(w for w in wallets if w["id"] == "manual:My Ledgy")
     assert manual["type"] == "manual" and manual["manual_kind"] == "cold_wallet" and not manual["configured"]
-    assert [r["symbol"] for r in manual["holdings"]] == ["BTC"]
-    wallet = next(g for g in groups if g["id"] == "wallet:My Ledgy")
-    assert MANUAL not in {r["source"] for r in wallet["holdings"]}
+    assert [m["symbol"] for m in manual["manual"]] == ["BTC"] and manual["assets"] == []
+    wallet = next(w for w in wallets if w["id"] == "wallet:My Ledgy")
+    assert wallet["manual"] == [] and wallet["linked_manual"] == []
 
 
-def test_wallet_groups_link_without_onchain_holdings_still_shows_the_wallet_card():
+def test_personal_wallets_link_without_onchain_holdings_still_lists_the_wallet():
     holdings = [Holding("BTC", MANUAL, 1.0, 100.0, detail="Cold")]
     asset = _assets({"label": "Cold", "linked_wallet": "My Sol", "holdings": [{"symbol": "BTC", "quantity": 1}]})
-    groups = wallet_groups(holdings, ["My Sol"], asset)
-    assert [(g["id"], g["linked_manual"]) for g in groups] == [("wallet:My Sol", ["Cold"])]
+    wallets = personal_wallets(holdings, ["My Sol"], asset)
+    assert [(w["id"], w["linked_manual"]) for w in wallets] == [("wallet:My Sol", ["Cold"])]
+    assert wallets[0]["chains"] == {} and wallets[0]["assets"] == [] and wallets[0]["pct"] == 100.0
 
 
-def test_wallet_groups_keep_unpriced_manual_rows_visible():
-    holdings = [Holding("XYZ", MANUAL, 5.0, 0.0, detail="Validator")]
-    groups = wallet_groups(holdings, [], _assets({"label": "Validator", "kind": "staking"}), min_value=1.0)
-    assert groups[0]["holdings"][0]["symbol"] == "XYZ" and groups[0]["dust"]["assets"] == 0
-
-
-def test_wallet_groups_two_manual_assets_on_one_wallet_and_sorting():
+def test_personal_wallets_two_manual_assets_on_one_wallet_and_sorting():
     holdings = jean_holdings() + [Holding("DOT", MANUAL, 10.0, 5.0, detail="Ledger stake")]
     assets = _assets(LEDGER_BTC, {"label": "Ledger stake", "kind": "staking", "linked_wallet": "My Ledgy",
                                   "holdings": [{"symbol": "DOT", "quantity": 10}]})
-    ledger = wallet_groups(holdings, ["My Ledgy"], assets)[0]
+    ledger = personal_wallets(holdings, ["My Ledgy"], assets)[0]
     assert ledger["linked_manual"] == ["My Ledgy", "Ledger stake"]
-    values = [r["value_usd"] for r in ledger["holdings"]]
-    assert values == sorted(values, reverse=True)
+    for rows in (ledger["assets"], ledger["manual"]):
+        values = [r["value_usd"] for r in rows]
+        assert values == sorted(values, reverse=True)
 
 
-def test_wallet_groups_ignore_old_rows_without_wallet_detail():
-    groups = wallet_groups([Holding("ETH", ONCHAIN, 1.0, 10.0, detail="")], [], [])
-    assert groups[0]["label"] == "On-chain" and groups[0]["chains"] == []
+def test_personal_wallets_ignore_old_rows_without_wallet_detail():
+    wallets = personal_wallets([Holding("ETH", ONCHAIN, 1.0, 10.0, detail="")], [], [])
+    assert wallets[0]["label"] == "On-chain" and wallets[0]["chains"] == {}
 
 
 # == Part B: API =================================================================================
-def test_api_portfolio_sends_wallet_groups_and_an_others_total(tmp_path):
+def test_api_portfolio_sends_personal_wallets_and_total(tmp_path):
     client = make_client(tmp_path, sections={"wallets": WALLETS, "manual_assets": [LEDGER_BTC]},
                          fetcher=fake_fetcher(jean_holdings()))
     data = client.post("/api/portfolio/refresh").json()
-    ledger = next(g for g in data["wallet_groups"] if g["label"] == "My Ledgy")
-    assert {r["source"] for r in ledger["holdings"]} == {ONCHAIN, MANUAL}
-    assert data["groups"]["others"] == pytest.approx(data["groups"]["onchain"] + data["groups"]["manual"], abs=0.02)
+    ledger = next(w for w in data["wallets"]["personal"] if w["label"] == "My Ledgy")
+    assert [m["symbol"] for m in ledger["manual"]] == ["BTC"] and ledger["assets"]
+    assert data["groups"]["personal"] == pytest.approx(data["sources"]["onchain"] + data["sources"]["manual"], abs=0.02)
     # data layer untouched: per-source totals still split
     assert data["sources"]["manual"] == pytest.approx(0.0254 * 60000, abs=0.01)
 
@@ -382,14 +376,24 @@ def test_save_settings_standalone_asset_has_no_link(tmp_path):
     assert "linked_wallet" not in saved["manual_assets"][0]
 
 
-def test_index_has_kind_and_linked_wallet_dropdowns_and_wallets_view(tmp_path):
+def test_index_has_kind_and_linked_wallet_dropdowns_and_personal_tab(tmp_path):
     client = make_client(tmp_path)
     html = client.get("/").text
     assert '<select id="manual-kind" v-model="manualDraft.kind">' in html
     assert '<select id="manual-link" v-model="manualDraft.linked_wallet"' in html
     assert "— None / standalone name —" in html
     assert 'v-for="w in walletOptions"' in html
-    assert 'v-for="group in walletGroups"' in html
+    # one Personal tab with its Coins | Wallets switch; the Others cards are gone
+    assert 'v-for="w in visibleWallets"' in html
+    assert "walletGroups" not in html and "tabId === 'others'" not in html
+    assert '<dust-note :dust="w.dust"' in html                 # every wallet detail folds its dust
+    assert '<dust-note v-if="!loading && !walletView" :dust="tabDust"' in html   # same line as Coins
     js = client.get("/static/app.js").text
+    assert "{ id: 'personal', label: 'Personal'" in js
+    assert "id: 'onchain', label: 'On-chain', hint" not in js and "id: 'others'" not in js
+    assert "VIEW_SWITCH_TABS = ['binance', 'personal']" in js
+    assert "personal: ['onchain', 'manual']" in js
+    assert "RETIRED_TABS = { onchain: 'personal', others: 'personal', wallets: 'personal' }" in js
+    assert "app.component('dust-note'" in js
     assert "{ id: 'wallets', label: 'Wallets'" in js
     assert "linked_wallet: a.linked_wallet || null" in js   # sent back on save

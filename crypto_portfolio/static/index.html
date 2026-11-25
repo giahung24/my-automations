@@ -240,7 +240,7 @@
         <!-- Source filter + asset breakdown -->
         <section v-else class="mt-5" aria-labelledby="assets-title">
           <h2 id="assets-title" class="sr-only">Assets</h2>
-          <div class="segmented segmented-4" role="tablist" aria-label="Filter by source">
+          <div class="segmented segmented-3" role="tablist" aria-label="Filter by source">
             <button v-for="tab in tabs" :key="tab.id" type="button" class="segment" role="tab"
                     :aria-selected="tabId === tab.id" @click="tabId = tab.id" :title="tab.hint">
               <span class="seg-label">{{ tab.label }}</span>
@@ -248,10 +248,10 @@
             </button>
           </div>
 
-          <div v-if="tabId !== 'others'" class="asset-cols asset-head mt-4 text-[12px] font-bold text-ink-3"
+          <div class="asset-cols asset-head mt-4 text-[12px] font-bold text-ink-3"
                :class="{ 'asset-head-switch': hasViewSwitch }" :style="{ '--value-col': valueCol }">
             <span class="flex min-w-0 flex-1 items-center gap-2.5">
-              <!-- Binance / On-chain only: read the tab by coin, or by account / wallet -->
+              <!-- Binance / Personal only: read the tab by coin, or by account / wallet -->
               <span v-if="hasViewSwitch" class="view-switch" role="tablist" aria-label="Group the list by">
                 <button v-for="view in assetViews" :key="view.id" type="button" role="tab"
                         :aria-selected="assetView === view.id" @click="setAssetView(view.id)">{{ view.label }}</button>
@@ -269,59 +269,10 @@
             </div>
           </div>
 
-          <!-- Others: one card per physical wallet; a manual asset linked to a configured wallet
-               (linked_wallet) is listed with that wallet's on-chain coins, each row tagged by source -->
-          <div v-else-if="tabId === 'others' && walletGroups.length" class="mt-4 space-y-3">
-            <section v-for="group in walletGroups" :key="group.id" class="card wallet-group" :aria-label="group.label">
-              <header class="wallet-group-head">
-                <span class="min-w-0 flex-1">
-                  <span class="flex min-w-0 items-center gap-2">
-                    <span class="truncate text-[15px] font-extrabold tracking-tight">{{ group.label }}</span>
-                    <span v-if="group.type === 'manual'" class="kind-badge" :class="'kind-' + group.manual_kind">{{ manualKindLabel(group.manual_kind) }}</span>
-                  </span>
-                  <span class="block truncate text-[12px] font-semibold text-ink-3">
-                    <template v-if="group.type === 'wallet'">
-                      {{ group.chains.length ? group.chains.map((c) => walletRowWhere({ source: 'onchain', chain: c })).join(' · ') : 'On-chain' }}<template v-if="group.linked_manual.length"> + manual<template v-if="group.linked_manual.some((l) => l !== group.label)">: {{ group.linked_manual.join(', ') }}</template></template>
-                    </template>
-                    <template v-else>Declared by hand, not read on-chain</template>
-                  </span>
-                </span>
-                <span class="value-col num" style="--value-col: auto">
-                  <span class="block whitespace-nowrap text-[15px] font-extrabold priv">{{ fmt.money(group.value_usd) }}</span>
-                  <span v-if="group.type === 'wallet' && group.manual_value_usd > 0" class="block whitespace-nowrap text-[12px] font-semibold text-ink-3">
-                    <span class="priv priv-soft">{{ fmt.money(group.manual_value_usd) }}</span> manual
-                  </span>
-                </span>
-              </header>
-              <ul class="wallet-group-rows">
-                <li v-for="row in group.holdings" :key="row.source + ':' + row.symbol + ':' + (row.chain || row.manual_label)" class="wallet-group-row">
-                  <span class="coin coin-sm" :style="{ '--hue': fmt.hue(row.symbol) }" aria-hidden="true">
-                    <img v-if="coinIcon(row.symbol)" :src="coinIcon(row.symbol)" alt="" @error="iconFailed[row.symbol] = true">
-                    <span v-else>{{ fmt.badge(row.symbol) }}</span>
-                  </span>
-                  <span class="min-w-0 flex-1">
-                    <span class="flex min-w-0 items-center gap-2">
-                      <span class="truncate text-[14px] font-extrabold">{{ row.symbol }}</span>
-                      <span class="src-badge" :class="'src-' + row.source">{{ walletRowWhere(row) }}</span>
-                    </span>
-                    <span class="block truncate text-[12px] font-semibold text-ink-3 num priv priv-soft">{{ fmt.qty(row.quantity) }}</span>
-                  </span>
-                  <span class="num text-right">
-                    <span class="block whitespace-nowrap text-[14px] font-extrabold priv">{{ fmt.money(row.value_usd) }}</span>
-                    <span class="block whitespace-nowrap text-[12px] font-semibold text-ink-3">{{ fmt.price(row.price_usd) }}</span>
-                  </span>
-                </li>
-              </ul>
-              <p v-if="group.dust && group.dust.assets" class="px-4 pb-3 text-[12px] text-ink-3">
-                + {{ group.dust.assets }} small {{ group.dust.assets === 1 ? 'balance' : 'balances' }}
-                (<span class="priv priv-soft num">{{ fmt.money(group.dust.value_usd) }}</span>)
-              </p>
-            </section>
-          </div>
-
-          <!-- Binance / On-chain, Wallets view: one row per Binance account or on-chain wallet label.
-               An on-chain wallet's linked manual assets are listed apart, tagged Manual, and stay
-               out of its value and share (the tab total is on-chain only). -->
+          <!-- Binance / Personal, Wallets view: one row per Binance account or physical wallet.
+               A Personal wallet's linked manual assets count in its value and are listed apart,
+               tagged Manual; an unlinked manual asset (staking, other cold wallet) is its own row.
+               Small balances in a wallet fold into one dust line, as in the Coins view. -->
           <ul v-else-if="walletView && visibleWallets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
             <li v-for="w in visibleWallets" :key="w.key">
               <button type="button" class="asset-row" @click="toggleAsset(w.key)" :aria-expanded="expanded === w.key">
@@ -338,8 +289,8 @@
                 </span>
                 <span class="value-col num">
                   <span class="block whitespace-nowrap text-[15px] font-extrabold priv">{{ fmt.money(w.value) }}</span>
-                  <span v-if="w.linked.length" class="src-badge src-manual mt-1"
-                        :title="'Plus ' + fmt.money(w.manualValue) + ' declared by hand, not in the On-chain total'">+ manual</span>
+                  <span v-if="w.hasLinked" class="src-badge src-manual mt-1"
+                        :title="'Includes ' + fmt.money(w.manualValue) + ' declared by hand, not read on-chain'">+ manual</span>
                 </span>
               </button>
               <transition name="expand">
@@ -360,10 +311,9 @@
                     </template>
                   </dl>
                   <template v-if="w.linked.length">
-                    <p class="mb-2 text-[12px] font-semibold text-ink-3" :class="w.rows.length ? 'mt-3' : 'mt-0'">
+                    <p v-if="w.hasLinked" class="mb-2 text-[12px] font-semibold text-ink-3" :class="w.rows.length ? 'mt-3' : 'mt-0'">
                       Declared by hand on this device
-                      (<span class="priv priv-soft num">{{ fmt.money(w.manualValue) }}</span>), not read on-chain
-                      and not counted in the On-chain total.
+                      (<span class="priv priv-soft num">{{ fmt.money(w.manualValue) }}</span>), not read on-chain.
                     </p>
                     <dl class="num">
                       <template v-for="row in w.linked" :key="row.key">
@@ -376,12 +326,14 @@
                       </template>
                     </dl>
                   </template>
+                  <dust-note :dust="w.dust" :min="portfolio.min_value"
+                             :class="{ 'mt-3': w.rows.length || w.linked.length }"></dust-note>
                 </div>
               </transition>
             </li>
           </ul>
 
-          <ul v-else-if="tabId !== 'others' && !walletView && visibleAssets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
+          <ul v-else-if="!walletView && visibleAssets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
             <li v-for="asset in visibleAssets" :key="asset.symbol">
               <button type="button" class="asset-row" @click="toggleAsset(asset.symbol)"
                       :aria-expanded="expanded === asset.symbol">
@@ -428,11 +380,7 @@
             </button>
           </div>
 
-          <p v-if="!loading && tabId !== 'others' && !walletView && portfolio.dust && portfolio.dust.assets" class="mt-3 px-1 text-[12px] text-ink-3">
-            {{ portfolio.dust.assets }} {{ portfolio.dust.assets === 1 ? 'balance' : 'balances' }} under
-            {{ fmt.money(portfolio.min_value) }} hidden
-            (<span class="priv priv-soft num">{{ fmt.money(portfolio.dust.value_usd) }}</span>, counted in the total).
-          </p>
+          <dust-note v-if="!loading && !walletView" :dust="tabDust" :min="portfolio.min_value" class="mt-3 px-1"></dust-note>
         </section>
         </div>
 
