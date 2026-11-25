@@ -5,7 +5,7 @@
  * Vendored libraries, fonts, icons: cache first (their content only changes with the path).
  * Bump VERSION to drop every old cache.
  */
-const VERSION = 'portfolio-v2';
+const VERSION = 'portfolio-v3';
 const SHELL = [
   '/',
   '/static/style.css',

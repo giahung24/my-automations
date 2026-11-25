@@ -286,6 +286,60 @@
           </template>
         </section>
 
+        <!-- Insights: TWR, base 100 vs BTC/ETH, max drawdown + underwater, volatility -->
+        <section v-if="!loading && portfolio.configured && portfolio.origin !== 'empty'"
+                 class="card insights mt-4" aria-labelledby="insights-title" :aria-busy="insights.loading">
+          <div class="flex items-center justify-between gap-2 pl-5 pr-2 pt-2">
+            <h2 id="insights-title" class="text-[15px] font-extrabold tracking-tight">Insights</h2>
+            <div class="pills insight-pills" role="tablist" aria-label="Insights period">
+              <button v-for="p in insightPeriods" :key="p.id" type="button" class="pill" role="tab"
+                      :aria-selected="insights.period === p.id" @click="setInsightPeriod(p.id)">
+                <span>{{ p.label }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="insights.loading && !insights.data && !insights.error" class="space-y-3 px-5 pb-5 pt-1">
+            <div class="skeleton h-5 w-48"></div>
+            <div v-for="n in 3" :key="n" class="skeleton h-4 w-full"></div>
+          </div>
+
+          <template v-else>
+            <template v-if="insightsReady">
+              <p class="px-5 text-[12px] font-semibold text-ink-3 num">
+                {{ insights.data.start }} → {{ insights.data.end }} · {{ insights.data.n_obs }} daily returns
+              </p>
+              <div v-if="!insights.data.flow_adjusted" class="notice mx-4 mt-2" role="status">
+                <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                <span>Deposits and withdrawals are not synced yet, so returns still include them.</span>
+              </div>
+
+              <ul class="insight-tiles mt-3 px-4" aria-label="Performance and risk metrics">
+                <li v-for="t in insightTiles" :key="t.id" class="insight-tile" :class="{ insufficient: !t.sufficient }" :title="t.hint">
+                  <span class="block text-[12px] font-semibold text-ink-3">{{ t.label }}</span>
+                  <span class="pnl num block text-[18px] font-extrabold" :class="t.trend">{{ t.text }}</span>
+                  <span class="block truncate text-[11px] font-semibold text-ink-3 num">{{ t.note }}</span>
+                </li>
+              </ul>
+
+              <h3 class="insight-sub px-5 mt-4">Base 100 vs BTC &amp; ETH</h3>
+              <div class="insight-legend px-5" aria-hidden="true">
+                <span><i :style="{ background: benchColors.portfolio }"></i>You (TWR)</span>
+                <span><i :style="{ background: benchColors.BTC }"></i>BTC</span>
+                <span><i :style="{ background: benchColors.ETH }"></i>ETH</span>
+              </div>
+              <div ref="benchEl" class="insight-chart" role="img"
+                   aria-label="Portfolio time-weighted index against BTC and ETH, all starting at 100"></div>
+
+              <h3 class="insight-sub px-5 mt-4">Underwater (drawdown from peak)</h3>
+              <div ref="underwaterEl" class="insight-chart insight-chart-sm" role="img"
+                   :aria-label="'Drawdown from the high-water mark; maximum ' + (insights.data.drawdown.max_drawdown_pct ?? 0) + '%'"></div>
+            </template>
+            <p v-if="insightMessage" class="px-5 pt-1 text-[13px] font-semibold text-ink-3">{{ insightMessage }}</p>
+            <div class="h-4"></div>
+          </template>
+        </section>
+
         <!-- First run -->
         <section v-if="!loading && !portfolio.configured" class="card mt-4 p-5">
           <span class="grid size-11 place-items-center rounded-2xl bg-surface-3 text-up"><svg class="icon"><use href="#i-wallet"/></svg></span>

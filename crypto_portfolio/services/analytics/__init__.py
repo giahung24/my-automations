@@ -18,6 +18,18 @@ from services.analytics.attribution import (
     window_snapshot_ids,
 )
 from services.analytics.pnl import Flow, PnlResult, flow_adjusted_pnl, pnl_report, window_pnl
+from services.analytics.quant import (
+    Close,
+    Observation,
+    annualized_volatility,
+    daily_closes,
+    daily_returns,
+    drawdown,
+    quant_report,
+    rebase,
+    time_weighted_return,
+    twr_index,
+)
 
 __all__ = [
     "BUCKETS",
@@ -37,4 +49,14 @@ __all__ = [
     "flow_adjusted_pnl",
     "pnl_report",
     "window_pnl",
+    "Close",
+    "Observation",
+    "annualized_volatility",
+    "daily_closes",
+    "daily_returns",
+    "drawdown",
+    "quant_report",
+    "rebase",
+    "time_weighted_return",
+    "twr_index",
 ]

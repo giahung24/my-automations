@@ -56,6 +56,7 @@ from models import (
 )
 from services.analytics.attribution import MAX_WINDOW_HOURS, attribution_report
 from services.analytics.pnl import pnl_report
+from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.portfolio import fetch_portfolio, portfolio_from_db, to_dict
 
@@ -435,6 +436,23 @@ def create_app(
         `flow_adjusted: false` means no deposit/withdrawal history was synced yet.
         """
         return pnl_report(Database(config().db_path))
+
+    @app.get("/api/analytics/quant")
+    def analytics_quant(
+        period: str = Query("all", pattern=r"^(?:\d{1,4}d|\d{1,2}y|all)$",
+                            description="Look-back period: 7d, 30d, 90d, 1y or all"),
+        include_backfilled: bool = Query(False, description="Also use the monthly backfilled checkpoints"),
+    ):
+        """TWR, Base-100 vs BTC/ETH, Max Drawdown + underwater series, annualised volatility.
+
+        Built from the daily closes in SQLite (ROADMAP_LEDGER §4.1-§4.4); never touches the network.
+        Every metric comes with `n_obs` and `sufficient`.
+        """
+        try:
+            return quant_report(Database(config().db_path), period=period,
+                                include_backfilled=include_backfilled)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     # -- settings ------------------------------------------------------------------
     def settings_payload(cfg: Config) -> dict:

@@ -523,3 +523,15 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
   background-image: repeating-linear-gradient(135deg, rgba(11, 14, 20, 0.45) 0 3px, transparent 3px 6px);
 }
 .why-row .pnl .icon { vertical-align: -1px; }
+
+/* Insights card (F3.quant): metric tiles, base-100 benchmark chart, underwater chart */
+.insight-pills { grid-template-columns: repeat(4, auto); flex: none; }
+.insight-pills .pill { height: 40px; }
+.insight-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.insight-tile { min-width: 0; padding: 10px 12px; border-radius: 14px; background: var(--surface-2, rgba(255, 255, 255, 0.03)); }
+.insight-tile.insufficient { opacity: 0.55; filter: grayscale(1); }
+.insight-sub { font-size: 13px; font-weight: 800; letter-spacing: -0.01em; }
+.insight-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; font-size: 11px; font-weight: 600; color: #8590A0; }
+.insight-legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+.insight-chart { height: 180px; margin: 6px 8px 0; min-width: 0; }
+.insight-chart-sm { height: 120px; }

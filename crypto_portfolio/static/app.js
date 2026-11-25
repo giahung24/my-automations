@@ -5,6 +5,7 @@
  *   POST /api/portfolio/refresh   live fetch from Binance + chains, records a snapshot
  *   GET  /api/portfolio/history   snapshot totals for the chart
  *   GET  /api/portfolio/attribution  why the total moved: price vs quantity effect per coin
+ *   GET  /api/analytics/quant     Insights: TWR, base 100 vs BTC/ETH, max drawdown, volatility
  *   GET/POST /api/settings (+ test-binance, test-wallet) for the settings sheet
  */
 (function () {
@@ -46,7 +47,8 @@
   const BINANCE_KEY_LENGTH = 64;   // HMAC API keys and secrets are both 64 letters and digits
   const SCRUB_HOLD_MS = 130;       // a finger resting this long on the chart starts scrubbing
   const SCRUB_SLOP_PX = 8;         // ...or one that moved this far sideways first
-  const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab', why: 'portfolio.why' };
+  const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab', why: 'portfolio.why',
+    insights: 'portfolio.insights' };
   // Windows of the "Why it moved" card (GET /api/portfolio/attribution?window=...).
   const WHY_WINDOWS = [
     { id: '24h', label: '24H' },
@@ -54,6 +56,14 @@
     { id: '30d', label: '30D' },
   ];
   const WHY_TOP = 4;  // coins listed on each side (pulling up / pulling down)
+  // Periods of the Insights card (GET /api/analytics/quant?period=...).
+  const INSIGHT_PERIODS = [
+    { id: '30d', label: '30D' },
+    { id: '90d', label: '90D' },
+    { id: '1y', label: '1Y' },
+    { id: 'all', label: 'ALL' },
+  ];
+  const BENCH_COLORS = { portfolio: '#22E58B', BTC: '#F7931A', ETH: '#8AB4FF' };
 
   // -- formatting --------------------------------------------------------------
   const usd2 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -228,6 +238,17 @@
       });
       const whyCard = ref(null);
       let whySeq = 0;
+
+      // Insights card: TWR, base 100 vs BTC/ETH, max drawdown + underwater, volatility
+      const insights = reactive({
+        period: INSIGHT_PERIODS.some((p) => p.id === storage.get(STORE.insights)) ? storage.get(STORE.insights) : 'all',
+        data: null, loading: false, error: '',
+      });
+      const benchEl = ref(null);
+      const underwaterEl = ref(null);
+      let insightSeq = 0;
+      let benchChart = null;
+      let underwaterChart = null;
 
       // access token
       const locked = ref(false);
@@ -522,6 +543,144 @@
         }
       }
 
+      async function loadInsights() {
+        const seq = ++insightSeq;
+        insights.loading = true;
+        try {
+          const data = await api(`/api/analytics/quant?period=${insights.period}`);
+          if (seq !== insightSeq) return;
+          insights.data = data;
+          insights.error = '';
+        } catch (error) {
+          if (seq !== insightSeq) return;
+          handleError(error, { silent: true });
+          insights.data = null;
+          insights.error = error.status === 401 ? '' : 'Could not load insights: ' + error.message;
+        } finally {
+          if (seq === insightSeq) insights.loading = false;
+        }
+        await nextTick();
+        drawInsightCharts();
+      }
+
+      function setInsightPeriod(id) {
+        if (insights.period === id) return;
+        insights.period = id;
+        storage.set(STORE.insights, id);
+        loadInsights();
+      }
+
+      const insightsReady = computed(() => !!(insights.data && insights.data.available));
+      const insightMessage = computed(() => {
+        if (insights.error) return insights.error;
+        if (insights.data && !insights.data.available) {
+          return 'Insights need daily closes on at least two days. Come back tomorrow.';
+        }
+        return '';
+      });
+      // One tile per metric; each carries its own "not enough data" state.
+      const insightTiles = computed(() => {
+        if (!insightsReady.value) return [];
+        const d = insights.data;
+        const vol = d.volatility || {};
+        const dd = d.drawdown || {};
+        const twr = d.twr || {};
+        const tiles = [
+          {
+            id: 'twr', label: 'Time-weighted return', value: twr.twr_pct, signed: true,
+            note: twr.annualized_pct !== undefined ? `${fmt.signedPct(twr.annualized_pct)} / year` : `${d.span_days}d · deposits removed`,
+            hint: 'Growth of $100 invested, with deposits and withdrawals taken out',
+            sufficient: d.n_obs >= 1,
+          },
+          {
+            id: 'mdd', label: 'Max drawdown', value: dd.max_drawdown_pct, signed: false, down: true,
+            note: dd.peak ? (dd.recovered ? `${dd.peak} → recovered ${dd.recovery}` : `since ${dd.peak} · not recovered`) : 'no drawdown',
+            hint: 'Worst fall from a high-water mark of the TWR index',
+            sufficient: d.n_obs >= 1,
+          },
+          {
+            id: 'vol', label: 'Volatility (annual)', value: vol.annualized_pct, signed: false,
+            note: vol.sufficient ? `${vol.n_obs} daily returns` : `need ${Math.max(0, d.min_observations - (vol.n_obs || 0))} more days of data`,
+            hint: 'Standard deviation of daily returns × √365',
+            sufficient: !!vol.sufficient && vol.annualized_pct !== null,
+          },
+        ];
+        for (const symbol of ['BTC', 'ETH']) {
+          const b = (d.benchmarks || {})[symbol];
+          if (!b) continue;
+          tiles.push({
+            id: symbol, label: `vs ${symbol}`, value: b.available ? b.excess_pct : null, signed: true,
+            note: b.available ? `${symbol} ${fmt.signedPct(b.return_pct)} · you ${fmt.signedPct(b.portfolio_return_pct)}` : `no ${symbol} price recorded`,
+            hint: `Portfolio TWR minus ${symbol} return over the same days`,
+            sufficient: !!b.available,
+          });
+        }
+        return tiles.map((t) => ({
+          ...t,
+          text: t.value === null || t.value === undefined ? '—' : (t.signed ? fmt.signedPct(t.value) : num(t.value).toFixed(2) + '%'),
+          trend: t.value === null || t.value === undefined ? 'flat' : (t.down ? (num(t.value) < 0 ? 'down' : 'flat') : trendOf(num(t.value))),
+        }));
+      });
+
+      function insightChartOptions() {
+        return {
+          autoSize: true,
+          layout: {
+            background: { type: LWC.ColorType.Solid, color: 'transparent' },
+            textColor: '#8590A0', fontFamily: 'Manrope, system-ui, sans-serif', fontSize: 11,
+            attributionLogo: false,
+          },
+          grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(233, 237, 242, 0.05)' } },
+          rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.08 } },
+          timeScale: { borderVisible: false, fixLeftEdge: true, fixRightEdge: true },
+          crosshair: { mode: LWC.CrosshairMode.Magnet },
+          handleScroll: false,
+          handleScale: false,
+        };
+      }
+
+      function destroyInsightCharts() {
+        if (benchChart) benchChart.remove();
+        if (underwaterChart) underwaterChart.remove();
+        benchChart = null;
+        underwaterChart = null;
+      }
+
+      function drawInsightCharts() {
+        destroyInsightCharts();
+        if (!LWC || !insightsReady.value) return;
+        const d = insights.data;
+        const dates = (d.chart && d.chart.dates) || [];
+        if (benchEl.value && dates.length >= 2) {
+          benchChart = LWC.createChart(benchEl.value, insightChartOptions());
+          for (const key of ['portfolio', 'BTC', 'ETH']) {
+            const values = d.chart[key];
+            if (!values) continue;
+            const data = dates.map((time, i) => ({ time, value: values[i] })).filter((p) => p.value !== null && p.value !== undefined);
+            if (data.length < 2) continue;
+            const line = benchChart.addSeries(LWC.LineSeries, {
+              color: BENCH_COLORS[key], lineWidth: key === 'portfolio' ? 3 : 2,
+              priceLineVisible: false, lastValueVisible: true, title: key === 'portfolio' ? 'You' : key,
+            });
+            line.setData(data);
+          }
+          benchChart.timeScale().fitContent();
+        }
+        const uw = (d.drawdown && d.drawdown.underwater) || [];
+        if (underwaterEl.value && uw.length >= 2) {
+          underwaterChart = LWC.createChart(underwaterEl.value, insightChartOptions());
+          const base = underwaterChart.addSeries(LWC.BaselineSeries, {
+            baseValue: { type: 'price', price: 0 },
+            topLineColor: 'rgba(163, 173, 186, 0.6)', topFillColor1: 'rgba(0,0,0,0)', topFillColor2: 'rgba(0,0,0,0)',
+            bottomLineColor: COLORS.down, bottomFillColor1: hexToRgba(COLORS.down, 0.05), bottomFillColor2: hexToRgba(COLORS.down, 0.32),
+            priceLineVisible: false, lastValueVisible: true,
+            priceFormat: { type: 'custom', formatter: (v) => v.toFixed(2) + '%', minMove: 0.01 },
+          });
+          base.setData(uw.map((p) => ({ time: p.date, value: p.drawdown_pct })));
+          underwaterChart.timeScale().fitContent();
+        }
+      }
+
       function setWhyWindow(id) {
         if (why.window === id) return;
         why.window = id;
@@ -546,6 +705,7 @@
           portfolio.value = normalise(await api('/api/portfolio/refresh', { method: 'POST' }));
           await loadHistory({ force: true });
           loadAttribution();
+          loadInsights();
           if (!silent) {
             const failed = portfolio.value.errors.length;
             showToast(failed ? `Updated, but ${failed} ${failed === 1 ? 'source' : 'sources'} failed` : 'Balances updated',
@@ -576,7 +736,7 @@
         await nextTick();
         ensureChart();
         await loadHistory();
-        if (portfolio.value.origin !== 'empty') loadAttribution();
+        if (portfolio.value.origin !== 'empty') { loadAttribution(); loadInsights(); }
         const p = portfolio.value;
         if (p.configured && (p.origin === 'empty' || ageMinutes() > STALE_MINUTES)) refresh({ silent: true });
       }
@@ -1126,7 +1286,7 @@
       // Bindings on the mount element are ignored by Vue, so privacy lives on <body>.
       watch(privacy, (on) => document.body.classList.toggle('privacy', on), { immediate: true });
       watch(tabId, (id) => { storage.set(STORE.tab, id); expanded.value = null; });
-      watch(locked, (isLocked) => { if (isLocked) destroyChart(); });
+      watch(locked, (isLocked) => { if (isLocked) { destroyChart(); destroyInsightCharts(); } });
 
       const onBlur = () => onChartRelease();
       const noop = () => {};
@@ -1148,6 +1308,7 @@
         document.removeEventListener('visibilitychange', onVisible);
         clearInterval(tickTimer);
         destroyChart();
+        destroyInsightCharts();
       });
 
       return {
@@ -1158,6 +1319,8 @@
         visibleAssets, valueCol, emptyTitle, emptyHint,
         whyWindows: WHY_WINDOWS, why, whyCard, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
         setWhyWindow, showWhy,
+        insightPeriods: INSIGHT_PERIODS, insights, insightsReady, insightMessage, insightTiles, benchEl, underwaterEl,
+        setInsightPeriod, benchColors: BENCH_COLORS,
         chartWrap, chartEl, sheet, sheetClose, draftEl,
         refresh, setRange, togglePrivacy, toggleAsset, coinIcon, onChartDown, onChartMove, onChartRelease, onChartLeave, unlock,
         settingsOpen, settings, form, showKey, showSecret, saving, saveError, binanceTest, dirty,
