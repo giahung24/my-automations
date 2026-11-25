@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0B0E14">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Read-only Binance and on-chain crypto portfolio tracker.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Portfolio">
+  <meta name="application-name" content="Portfolio">
+  <meta name="format-detection" content="telephone=no">
+  <title>Portfolio</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <link rel="preload" href="/static/fonts/manrope-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/tailwindcss-browser.js"></script>
+  <style type="text/tailwindcss">
+    @theme inline {
+      --color-bg: var(--bg);
+      --color-surface: var(--surface);
+      --color-surface-2: var(--surface-2);
+      --color-surface-3: var(--surface-3);
+      --color-line: var(--line);
+      --color-ink: var(--ink);
+      --color-ink-2: var(--ink-2);
+      --color-ink-3: var(--ink-3);
+      --color-up: var(--up);
+      --color-down: var(--down);
+      --color-warn: var(--warn);
+      --font-sans: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <!-- One stroke icon set (1.85px, round caps), referenced with <use>. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M10.73 5.08a10.74 10.74 0 0 1 11.2 6.57 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-1.44 2.49"/><path d="M14.08 14.16a3 3 0 0 1-4.24-4.24"/><path d="M17.48 17.5a10.75 10.75 0 0 1-15.42-5.15 1 1 0 0 1 0-.7 10.75 10.75 0 0 1 4.45-5.14"/><path d="m2 2 20 20"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4M21 2l-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-pie" viewBox="0 0 24 24"><path d="M21 12c.55 0 1-.45.95-1A10 10 0 0 0 13 2.05c-.55-.05-1 .4-1 .95v8a1 1 0 0 0 1 1z"/><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></symbol>
+  </svg>
+
+  <div id="app" v-cloak>
+
+    <!-- Unlock screen: shown when the server has an access token and this device has none. -->
+    <div v-if="locked" class="lock">
+      <form class="card w-full max-w-sm p-6" @submit.prevent="unlock">
+        <div class="mb-5 flex items-center gap-3">
+          <span class="grid size-11 place-items-center rounded-2xl bg-surface-3 text-ink"><svg class="icon"><use href="#i-lock"/></svg></span>
+          <div>
+            <h1 class="text-lg font-extrabold tracking-tight">Portfolio is locked</h1>
+            <p class="hint">Enter the access token set on the server.</p>
+          </div>
+        </div>
+        <label class="label" for="token">Access token</label>
+        <div class="field mb-2" :class="{ 'is-invalid': unlockError }">
+          <input id="token" v-model="unlockToken" type="password" autocomplete="current-password"
+                 autocapitalize="off" spellcheck="false" placeholder="PORTFOLIO_WEB_TOKEN" required
+                 enterkeyhint="go" :aria-invalid="unlockError ? 'true' : null" :aria-describedby="unlockError ? 'token-error' : null">
+        </div>
+        <p v-if="unlockError" id="token-error" class="field-msg error mb-3" role="alert">
+          <svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ unlockError }}</span>
+        </p>
+        <button class="btn btn-primary btn-block mt-3" type="submit" :disabled="unlocking || !unlockToken">
+          {{ unlocking ? 'Checking…' : 'Unlock' }}
+        </button>
+      </form>
+    </div>
+
+    <template v-else>
+      <header class="topbar sticky top-0 z-30" :class="{ 'is-scrolled': scrolled }">
+        <div class="mx-auto flex h-14 max-w-[560px] items-center justify-between pl-4 pr-2">
+          <div class="flex items-center gap-2.5">
+            <img src="/static/icons/icon.svg" alt="" class="size-7 rounded-[9px]">
+            <span class="text-[16px] font-extrabold tracking-tight">{{ activeTab === 'analytics' ? 'Analytics' : 'Portfolio' }}</span>
+          </div>
+          <div class="flex items-center">
+            <button class="icon-btn" type="button" @click="refresh()" :disabled="refreshing || !portfolio.configured"
+                    :aria-label="refreshing ? 'Refreshing balances' : 'Refresh balances'">
+              <svg class="icon" :class="{ spin: refreshing }"><use href="#i-refresh"/></svg>
+            </button>
+            <button class="icon-btn" type="button" @click="openSettings" aria-label="Settings">
+              <svg class="icon"><use href="#i-settings"/></svg>
+            </button>
+          </div>
+        </div>
+        <!-- One period for the whole Analytics tab, pinned with the title -->
+        <div v-show="activeTab === 'analytics' && !loading && portfolio.configured && portfolio.origin !== 'empty'" class="mx-auto max-w-[560px] px-3 pb-1.5">
+          <div class="pills period-pills" role="tablist" aria-label="Analytics period">
+            <button v-for="p in periods" :key="p.id" type="button" class="pill" role="tab"
+                    :aria-selected="periodId === p.id" @click="setPeriod(p.id)">
+              <span>{{ p.id }}</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="app-main mx-auto max-w-[560px] px-4 pt-2">
+
+        <!-- ============ Portfolio: the one-second glance ============ -->
+        <div v-show="activeTab === 'portfolio'" id="panel-portfolio" role="tabpanel" aria-labelledby="tab-portfolio">
+
+        <!-- Hero: total, 24h move, chart, timeframes -->
+        <section class="card hero" :class="'trend-' + heroTrend" aria-labelledby="networth-label">
+          <div class="px-5 pt-5">
+            <div class="flex h-6 items-center gap-1.5">
+              <h1 id="networth-label" class="text-[13px] font-bold text-ink-2">
+                <span v-if="scrub">{{ scrubLabel }}</span>
+                <span v-else>Net worth</span>
+              </h1>
+              <button type="button" class="eye-btn"
+                      @click="togglePrivacy" :aria-pressed="privacy"
+                      :aria-label="privacy ? 'Show balances' : 'Hide balances'">
+                <svg class="icon icon-sm"><use :href="privacy ? '#i-eye-off' : '#i-eye'"/></svg>
+              </button>
+            </div>
+
+            <div class="hero-figure mt-1 flex min-h-[48px] items-center">
+              <div v-if="loading" class="skeleton h-11 w-56"></div>
+              <p v-else class="hero-value num priv" :style="{ '--chars': heroParts.chars }" :aria-live="scrub ? 'off' : 'polite'">
+                {{ heroParts.whole }}<span class="cents">{{ heroParts.cents }}</span>
+              </p>
+            </div>
+
+            <div class="mt-2 flex min-h-[26px] items-center gap-x-2 overflow-hidden whitespace-nowrap text-[13px]">
+              <template v-if="loading"><div class="skeleton h-5 w-40"></div></template>
+              <template v-else-if="heroChange">
+                <component :is="heroChange.explainable ? 'button' : 'span'" class="pnl-chip num" :class="[heroChange.trend, { 'is-link': heroChange.explainable }]"
+                           :type="heroChange.explainable ? 'button' : null" @click="heroChange.explainable && openPeek()"
+                           :aria-haspopup="heroChange.explainable ? 'dialog' : null"
+                           :aria-label="heroChange.explainable ? 'Why it moved: ' + fmt.signedMoney(heroChange.usd) + (heroChange.pct !== null ? ' (' + fmt.signedPct(heroChange.pct) + ')' : '') : null">
+                  <svg class="icon icon-xs"><use :href="heroChange.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
+                  <span class="priv priv-soft">{{ fmt.signedMoney(heroChange.usd) }}</span>
+                  <span v-if="heroChange.pct !== null">({{ fmt.signedPct(heroChange.pct) }})</span>
+                  <svg v-if="heroChange.explainable" class="icon icon-xs chip-more" aria-hidden="true"><use href="#i-chevron-right"/></svg>
+                </component>
+                <span class="truncate font-semibold text-ink-3">{{ heroChange.label }}</span>
+              </template>
+              <span v-else-if="portfolio.origin !== 'empty'" class="truncate font-semibold text-ink-3">
+                No earlier snapshot to compare yet
+              </span>
+            </div>
+          </div>
+
+          <div class="chart-wrap mt-3" ref="chartWrap" :class="{ 'is-scrubbing': scrub }"
+               @pointerdown="onChartDown" @pointermove="onChartMove"
+               @pointerup="onChartRelease" @pointercancel="onChartRelease" @pointerleave="onChartLeave"
+               @lostpointercapture="onChartRelease" @contextmenu.prevent>
+            <div class="chart" ref="chartEl" aria-hidden="true"></div>
+            <div v-if="scrub" class="chart-tip num" :style="{ left: scrub.tipX + 'px' }">
+              <div class="text-[11px] font-bold text-ink-3">{{ scrub.when }}</div>
+              <div class="priv priv-soft text-[13px] font-extrabold">{{ fmt.money(scrub.value) }}</div>
+            </div>
+            <div v-if="chartMessage" class="chart-empty">
+              <svg class="ghost" viewBox="0 0 400 96" preserveAspectRatio="none" aria-hidden="true">
+                <path d="M0 70 C40 66 60 52 100 56 S160 74 200 58 S270 28 310 36 S370 50 400 30" fill="none"
+                      stroke="#323B47" stroke-width="2" stroke-dasharray="4 6"/>
+              </svg>
+              <p class="relative max-w-[280px] font-semibold">{{ chartMessage }}</p>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between px-3 pb-2">
+            <div class="pills w-full" role="tablist" aria-label="Chart timeframe">
+              <button v-for="range in ranges" :key="range.id" type="button" class="pill" role="tab"
+                      :aria-selected="rangeId === range.id" @click="setRange(range.id)">
+                <span>{{ range.id }}</span>
+              </button>
+            </div>
+          </div>
+          <p v-if="rangeChange" class="-mt-1 px-5 pb-4 text-[12px] font-semibold text-ink-3 num" :class="{ invisible: scrub }">
+            {{ rangeLabel }}:
+            <span class="pnl" :class="rangeChange.trend">
+              <span class="priv priv-soft">{{ fmt.signedMoney(rangeChange.usd) }}</span>
+              <span v-if="rangeChange.pct !== null">({{ fmt.signedPct(rangeChange.pct) }})</span>
+            </span>
+          </p>
+        </section>
+
+        <p class="mt-3 flex flex-wrap items-center gap-x-2 px-1 text-[12px] font-semibold text-ink-3" v-if="!loading && portfolio.origin !== 'empty'">
+          <span class="inline-flex items-center gap-1.5">
+            <span class="size-1.5 rounded-full" :class="portfolio.origin === 'live' ? 'bg-up' : 'bg-ink-3'"></span>
+            {{ portfolio.origin === 'live' ? 'Live' : 'Last snapshot' }}
+          </span>
+          <span aria-hidden="true">·</span>
+          <time :datetime="portfolio.timestamp" :title="fmt.fullDate(portfolio.timestamp)">updated {{ updatedAgo }}</time>
+        </p>
+
+        <!-- Partial failures: the total is still shown, but never silently incomplete -->
+        <div v-if="portfolio.errors && portfolio.errors.length" class="notice mt-3" role="status">
+          <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+          <div class="min-w-0 flex-1">
+            <button type="button" class="hit flex w-full items-center justify-between gap-2 text-left font-bold" style="--hit: -12px -14px"
+                    @click="showErrors = !showErrors" :aria-expanded="showErrors">
+              <span>{{ portfolio.errors.length }} {{ portfolio.errors.length === 1 ? 'source' : 'sources' }} failed, so the total may be incomplete</span>
+              <svg class="icon icon-sm transition-transform" :class="{ 'rotate-180': showErrors }"><use href="#i-chevron"/></svg>
+            </button>
+            <ul v-if="showErrors" class="mt-2 space-y-1 break-words text-[12px] opacity-90">
+              <li v-for="(error, i) in portfolio.errors" :key="i">{{ error }}</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- First run -->
+        <section v-if="!loading && !portfolio.configured" class="card mt-4 p-5">
+          <span class="grid size-11 place-items-center rounded-2xl bg-surface-3 text-up"><svg class="icon"><use href="#i-wallet"/></svg></span>
+          <h2 class="mt-4 text-[18px] font-extrabold tracking-tight">Connect your first source</h2>
+          <p class="mt-1 text-ink-2">Add a read-only Binance API key or a public wallet address. Nothing is ever signed, traded or moved.</p>
+          <button type="button" class="btn btn-primary mt-5 w-full" @click="openSettings">Open settings</button>
+        </section>
+
+        <!-- Source filter + asset breakdown -->
+        <section v-else class="mt-5" aria-labelledby="assets-title">
+          <h2 id="assets-title" class="sr-only">Assets</h2>
+          <div class="segmented" role="tablist" aria-label="Filter by source">
+            <button v-for="tab in tabs" :key="tab.id" type="button" class="segment" role="tab"
+                    :aria-selected="tabId === tab.id" @click="tabId = tab.id" :title="tab.hint">
+              <span class="seg-label">{{ tab.label }}</span>
+              <span class="seg-total num priv priv-soft">{{ loading ? '—' : fmt.compactMoney(portfolio.groups[tab.id] || 0) }}</span>
+            </button>
+          </div>
+
+          <div class="asset-cols asset-head mt-4 text-[12px] font-bold text-ink-3" :style="{ '--value-col': valueCol }">
+            <span class="min-w-0 flex-1">{{ visibleAssets.length }} {{ visibleAssets.length === 1 ? 'asset' : 'assets' }}</span>
+            <span class="share">Share</span><span class="value-col">Value</span>
+          </div>
+
+          <div v-if="loading" class="card mt-2">
+            <div v-for="n in 4" :key="n" class="flex items-center gap-3 px-4 py-3.5" :class="{ 'border-t border-line': n > 1 }">
+              <div class="skeleton size-[38px] rounded-full"></div>
+              <div class="flex-1 space-y-2"><div class="skeleton h-3.5 w-16"></div><div class="skeleton h-3 w-24"></div></div>
+              <div class="space-y-2"><div class="skeleton ml-auto h-3.5 w-20"></div><div class="skeleton ml-auto h-3 w-14"></div></div>
+            </div>
+          </div>
+
+          <ul v-else-if="visibleAssets.length" class="card asset-list asset-cols mt-2" :style="{ '--value-col': valueCol }">
+            <li v-for="asset in visibleAssets" :key="asset.symbol">
+              <button type="button" class="asset-row" @click="toggleAsset(asset.symbol)"
+                      :aria-expanded="expanded === asset.symbol">
+                <span class="coin" :style="{ '--hue': fmt.hue(asset.symbol) }" aria-hidden="true">
+                  <img v-if="coinIcon(asset.symbol)" :src="coinIcon(asset.symbol)" alt="" @error="iconFailed[asset.symbol] = true">
+                  <span v-else>{{ fmt.badge(asset.symbol) }}</span>
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[15px] font-extrabold tracking-tight">{{ asset.symbol }}</span>
+                  <span class="block truncate text-[13px] font-semibold text-ink-3 num priv priv-soft">{{ fmt.qty(asset.quantity) }}</span>
+                </span>
+                <span class="share num">
+                  <span class="block text-[13px] font-bold text-ink-2">{{ fmt.pct(asset.pct) }}</span>
+                  <span class="share-bar"><i :style="{ width: Math.min(100, Math.max(asset.pct, 1.5)) + '%' }"></i></span>
+                </span>
+                <span class="value-col num">
+                  <span class="block whitespace-nowrap text-[15px] font-extrabold priv">{{ fmt.money(asset.value) }}</span>
+                  <span class="block whitespace-nowrap text-[13px] font-semibold text-ink-3">{{ fmt.price(asset.price) }}</span>
+                </span>
+              </button>
+              <transition name="expand">
+                <div v-if="expanded === asset.symbol" class="asset-detail">
+                  <dl class="num">
+                    <template v-for="row in asset.breakdown" :key="row.source">
+                      <dt>{{ row.label }}</dt>
+                      <dd class="priv priv-soft text-ink-2">{{ fmt.qty(row.quantity) }}</dd>
+                      <dd class="priv priv-soft font-bold">{{ fmt.money(row.value) }}</dd>
+                    </template>
+                  </dl>
+                  <p v-if="asset.locations.length" class="mt-2 break-words text-[12px] text-ink-3">
+                    {{ asset.locations.join(' · ') }}
+                  </p>
+                </div>
+              </transition>
+            </li>
+          </ul>
+
+          <div v-else class="card mt-2 px-5 py-8 text-center">
+            <p class="font-bold">{{ emptyTitle }}</p>
+            <p class="mt-1 text-[13px] text-ink-3">{{ emptyHint }}</p>
+            <button v-if="portfolio.origin === 'empty'" type="button" class="btn btn-secondary mt-4"
+                    @click="refresh()" :disabled="refreshing">
+              {{ refreshing ? 'Fetching balances…' : 'Fetch balances now' }}
+            </button>
+          </div>
+
+          <p v-if="!loading && portfolio.dust && portfolio.dust.assets" class="mt-3 px-1 text-[12px] text-ink-3">
+            {{ portfolio.dust.assets }} {{ portfolio.dust.assets === 1 ? 'balance' : 'balances' }} under
+            {{ fmt.money(portfolio.min_value) }} hidden
+            (<span class="priv priv-soft num">{{ fmt.money(portfolio.dust.value_usd) }}</span>, counted in the total).
+          </p>
+        </section>
+        </div>
+
+        <!-- ============ Analytics: why it moved, performance, risk ============ -->
+        <div v-show="activeTab === 'analytics'" id="panel-analytics" role="tabpanel" aria-labelledby="tab-analytics">
+
+          <template v-if="!loading && portfolio.configured && portfolio.origin !== 'empty'">
+            <!-- 1. Attribution: what made the total move over the period -->
+            <section class="card mt-2" aria-labelledby="why-title" :aria-busy="why.loading">
+              <div class="px-5 pt-4">
+                <h2 id="why-title" class="section-title">Why it moved</h2>
+                <p class="section-sub">Market prices versus changes in what you hold</p>
+              </div>
+
+              <div v-if="why.loading && !why.data && !why.error" class="space-y-3 px-5 pb-5 pt-3">
+                <div class="skeleton h-8 w-44"></div>
+                <div class="grid grid-cols-2 gap-2"><div class="skeleton h-16"></div><div class="skeleton h-16"></div></div>
+                <div v-for="n in 3" :key="n" class="skeleton h-4 w-full"></div>
+              </div>
+
+              <template v-else>
+                <template v-if="whyReady">
+                  <div class="px-5 pt-3">
+                    <p class="delta-figure num pnl" :class="whyTrend">
+                      <span class="priv">{{ fmt.signedMoney(why.data.delta_usd) }}</span>
+                      <span v-if="why.data.delta_pct !== null" class="delta-pct">{{ fmt.signedPct(why.data.delta_pct) }}</span>
+                    </p>
+                    <p class="mt-0.5 text-[12px] font-semibold text-ink-3 num">
+                      over {{ whySpan }} · {{ why.data.snapshots }} snapshots
+                      <template v-if="analyticsPeriod.whyNote"> · {{ analyticsPeriod.whyNote }}</template>
+                    </p>
+                  </div>
+
+                  <ul class="bucket-tiles mt-3 px-4" aria-label="Where the change came from">
+                    <li v-for="bucket in whyBuckets" :key="bucket.id" class="bucket-tile" :class="'bucket-' + bucket.id" :title="bucket.hint">
+                      <span class="block text-[12px] font-semibold text-ink-3">{{ bucket.label }}</span>
+                      <span class="pnl num block text-[16px] font-extrabold" :class="bucket.trend">
+                        <span class="priv priv-soft">{{ fmt.signedMoney(bucket.value) }}</span>
+                      </span>
+                    </li>
+                  </ul>
+
+                  <div v-if="why.data.degraded_pairs" class="notice mx-4 mt-3" role="status">
+                    <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                    <span>{{ why.data.degraded_pairs }} {{ why.data.degraded_pairs === 1 ? 'snapshot pair has' : 'snapshot pairs have' }}
+                      a failed source; <span class="priv priv-soft num">{{ fmt.signedMoney(why.data.buckets.data_gap) }}</span>
+                      is counted as missing data, not as a price move.</span>
+                  </div>
+                  <div v-if="why.data.identity_error" class="notice error mx-4 mt-3" role="alert">
+                    <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                    <span>The stored totals and the per-coin rows disagree, so this breakdown is incomplete
+                      (off by <span class="priv priv-soft num">{{ fmt.money(Math.abs(why.data.identity_error.difference_usd)) }}</span>).</span>
+                  </div>
+
+                  <h3 v-if="whyRows.length" class="block-sub mt-4 px-5">Biggest movers</h3>
+                  <ul v-if="whyRows.length" class="why-list mt-1" aria-label="Coins that pulled the total up or down">
+                    <li v-for="r in whyRows" :key="r.key" class="why-row" :title="r.breakdown">
+                      <span class="coin coin-sm" :style="{ '--hue': fmt.hue(r.key) }" aria-hidden="true">
+                        <img v-if="coinIcon(r.key)" :src="coinIcon(r.key)" alt="" @error="iconFailed[r.key] = true">
+                        <span v-else>{{ fmt.badge(r.key) }}</span>
+                      </span>
+                      <span class="min-w-0">
+                        <span class="block truncate text-[14px] font-extrabold tracking-tight">{{ r.key }}</span>
+                        <span class="block truncate text-[12px] font-semibold text-ink-3 num">{{ r.note }}</span>
+                      </span>
+                      <span class="why-bar" aria-hidden="true">
+                        <i :class="[r.trend, { qty: !r.byPrice }]" :style="{ width: r.width + '%' }"></i>
+                      </span>
+                      <span class="pnl num whitespace-nowrap text-right text-[14px] font-extrabold" :class="r.trend">
+                        <svg class="icon icon-xs"><use :href="r.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
+                        <span class="priv priv-soft">{{ fmt.signedMoney(r.total) }}</span>
+                        <span class="sr-only">{{ r.breakdown }}</span>
+                      </span>
+                    </li>
+                  </ul>
+                  <p v-if="whyOthers" class="px-5 pt-1 text-[12px] font-semibold text-ink-3">
+                    + {{ whyOthers.count }} other {{ whyOthers.count === 1 ? 'asset' : 'assets' }}
+                    <span class="priv priv-soft num">{{ fmt.signedMoney(whyOthers.total) }}</span>
+                  </p>
+                  <p v-if="whyRows.length" class="legend-note px-5 pt-2">Striped bar: moved by a change in holdings rather than by price.</p>
+                </template>
+                <p v-if="whyMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ whyMessage }}</p>
+                <div class="h-4"></div>
+              </template>
+            </section>
+
+            <!-- 2. Performance & benchmark -->
+            <section class="card mt-4" aria-labelledby="perf-title" :aria-busy="insights.loading">
+              <div class="px-5 pt-4">
+                <h2 id="perf-title" class="section-title">Performance</h2>
+                <p v-if="insightsReady" class="section-sub num">
+                  {{ insights.data.start }} → {{ insights.data.end }} · {{ insights.data.n_obs }} daily {{ insights.data.n_obs === 1 ? 'return' : 'returns' }}
+                </p>
+              </div>
+
+              <div v-if="insights.loading && !insights.data && !insights.error" class="space-y-3 px-5 pb-5 pt-3">
+                <div class="grid grid-cols-3 gap-2"><div class="skeleton h-16"></div><div class="skeleton h-16"></div><div class="skeleton h-16"></div></div>
+                <div class="skeleton h-40 w-full"></div>
+              </div>
+
+              <template v-else>
+                <template v-if="insightsReady">
+                  <div v-if="analyticsPeriod.quantNote" class="notice info mx-4 mt-3" role="status">
+                    <svg class="icon icon-sm"><use href="#i-info"/></svg>
+                    <span>{{ analyticsPeriod.quantNote }}</span>
+                  </div>
+                  <div v-if="!insights.data.flow_adjusted" class="notice mx-4 mt-3" role="status">
+                    <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                    <span>Deposits and withdrawals are not synced yet, so returns still include them.</span>
+                  </div>
+
+                  <ul class="insight-tiles mt-3 px-4" aria-label="Performance and risk metrics">
+                    <li v-for="t in insightTiles" :key="t.id" class="insight-tile" :class="{ insufficient: !t.sufficient }" :title="t.hint">
+                      <span class="block text-[11px] font-semibold leading-tight text-ink-3">{{ t.label }}</span>
+                      <span class="pnl num mt-0.5 block text-[17px] font-extrabold" :class="t.trend">{{ t.text }}</span>
+                      <span class="block text-[11px] font-semibold leading-tight text-ink-3 num">{{ t.note }}</span>
+                    </li>
+                  </ul>
+
+                  <h3 class="block-sub mt-5 px-5">You vs BTC vs ETH <span class="font-semibold text-ink-3">· base 100</span></h3>
+                  <ul class="insight-legend px-5" aria-label="Return over the period">
+                    <li v-for="l in benchLegend" :key="l.key">
+                      <i :style="{ background: l.color }" aria-hidden="true"></i>{{ l.label }}
+                      <span class="num font-extrabold text-ink-2">{{ l.text }}</span>
+                    </li>
+                  </ul>
+                  <div ref="benchEl" class="insight-chart" role="img"
+                       aria-label="Portfolio time-weighted index against BTC and ETH, all starting at 100"></div>
+                </template>
+                <p v-if="insightMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ insightMessage }}</p>
+                <div class="h-4"></div>
+              </template>
+            </section>
+
+            <!-- 3. Risk: how far below the high-water mark -->
+            <section v-if="insightsReady" class="card mt-4" aria-labelledby="risk-title">
+              <div class="px-5 pt-4">
+                <h2 id="risk-title" class="section-title">Risk</h2>
+                <p class="section-sub num">
+                  Drawdown from peak · worst
+                  <span class="pnl" :class="(insights.data.drawdown.max_drawdown_pct ?? 0) < 0 ? 'down' : 'flat'">{{ (insights.data.drawdown.max_drawdown_pct ?? 0).toFixed(2) }}%</span>
+                </p>
+              </div>
+              <div ref="underwaterEl" class="insight-chart insight-chart-sm" role="img"
+                   :aria-label="'Underwater chart: drawdown from the high-water mark; maximum ' + (insights.data.drawdown.max_drawdown_pct ?? 0) + '%'"></div>
+              <div class="h-4"></div>
+            </section>
+          </template>
+
+          <!-- Nothing to analyse yet -->
+          <section v-else-if="!loading" class="card mt-2 p-5">
+            <span class="grid size-11 place-items-center rounded-2xl bg-surface-3 text-up"><svg class="icon"><use href="#i-trend"/></svg></span>
+            <h2 class="mt-4 text-[18px] font-extrabold tracking-tight">Analytics need some history</h2>
+            <p class="mt-1 text-ink-2">
+              {{ portfolio.configured ? 'Each refresh, and each cron `record`, stores a snapshot. Attribution starts from the second one, performance from the second day.'
+                                      : 'Connect a source first: analytics are built from the snapshots of your balances.' }}
+            </p>
+            <button v-if="!portfolio.configured" type="button" class="btn btn-primary mt-5 w-full" @click="openSettings">Open settings</button>
+            <button v-else type="button" class="btn btn-secondary mt-5 w-full" @click="refresh()" :disabled="refreshing">
+              {{ refreshing ? 'Fetching balances…' : 'Take a snapshot now' }}
+            </button>
+          </section>
+          <div v-else class="space-y-3 pt-2">
+            <div class="skeleton h-48 w-full rounded-[22px]"></div>
+            <div class="skeleton h-64 w-full rounded-[22px]"></div>
+          </div>
+        </div>
+
+        <footer class="mt-10 px-1 text-[12px] leading-relaxed text-ink-3">
+          Read-only. Balances from Binance and public RPCs, prices from Binance and DefiLlama.
+          Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts™.
+        </footer>
+      </main>
+
+      <!-- Bottom tab bar -->
+      <nav class="tabbar fixed bottom-0 left-0 right-0 z-30 bg-[#161B22]/90 backdrop-blur-md border-t border-line" aria-label="Sections">
+        <div class="mx-auto grid max-w-[560px] grid-cols-2" role="tablist" aria-label="Sections" @keydown="onTabKeydown">
+          <button id="tab-portfolio" type="button" class="tabbar-btn" role="tab" aria-controls="panel-portfolio"
+                  :aria-selected="activeTab === 'portfolio'" :tabindex="activeTab === 'portfolio' ? 0 : -1" @click="setTab('portfolio')">
+            <span class="tabbar-ico"><svg class="icon"><use href="#i-pie"/></svg></span>
+            <span class="tabbar-label">Portfolio</span>
+          </button>
+          <button id="tab-analytics" type="button" class="tabbar-btn" role="tab" aria-controls="panel-analytics"
+                  :aria-selected="activeTab === 'analytics'" :tabindex="activeTab === 'analytics' ? 0 : -1" @click="setTab('analytics')">
+            <span class="tabbar-ico"><svg class="icon"><use href="#i-trend"/></svg></span>
+            <span class="tabbar-label">Analytics</span>
+          </button>
+        </div>
+      </nav>
+
+      <!-- Settings sheet -->
+      <transition name="sheet">
+        <div v-if="settingsOpen" class="sheet-backdrop" @click.self="closeSettings" @keydown="onSheetKeydown">
+          <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" ref="sheet">
+            <div class="sheet-grip" aria-hidden="true"></div>
+            <div class="flex items-center justify-between py-2 pl-5 pr-2">
+              <h2 id="settings-title" class="text-[19px] font-extrabold tracking-tight">Settings</h2>
+              <button type="button" class="icon-btn" @click="closeSettings" aria-label="Close settings" ref="sheetClose">
+                <svg class="icon"><use href="#i-x"/></svg>
+              </button>
+            </div>
+
+            <div class="sheet-body px-4 pb-6">
+              <div v-if="!settings" class="space-y-3 py-4">
+                <div class="skeleton h-40 w-full rounded-2xl"></div>
+                <div class="skeleton h-28 w-full rounded-2xl"></div>
+              </div>
+
+              <template v-else>
+                <!-- Binance -->
+                <section class="card p-4" aria-labelledby="binance-title">
+                  <div class="flex items-center gap-3">
+                    <span class="grid size-10 flex-none place-items-center rounded-xl bg-[#F0B90B]/12 text-[#F0B90B]"><svg class="icon"><use href="#i-key"/></svg></span>
+                    <div class="min-w-0 flex-1">
+                      <h3 id="binance-title" class="font-extrabold">Binance</h3>
+                      <p class="text-[12px] font-semibold text-ink-3">Spot, Simple Earn and Funding</p>
+                    </div>
+                    <button type="button" class="switch" role="switch" :aria-checked="form.binance.enabled"
+                            aria-label="Include Binance" @click="form.binance.enabled = !form.binance.enabled"></button>
+                  </div>
+
+                  <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span class="status" :class="binanceStatus.cls">{{ binanceStatus.text }}</span>
+                    <span v-if="settings.binance.env_override" class="status warn">Overridden by environment</span>
+                  </div>
+
+                  <div v-if="settings.binance.env_override" class="notice info mt-3">
+                    <svg class="icon icon-sm"><use href="#i-info"/></svg>
+                    <span>{{ envBinanceNames }} {{ envBinanceNames.includes(',') ? 'are' : 'is' }} set on the server (environment or .env) and win over what you save here.</span>
+                  </div>
+
+                  <div class="mt-4 space-y-3" :class="{ 'opacity-60': !form.binance.enabled }">
+                    <div>
+                      <label class="label" for="api-key">API key</label>
+                      <div class="field" :class="fieldClass(keyCheck)">
+                        <input id="api-key" class="mono" v-model.trim="form.binance.api_key" :type="showKey ? 'text' : 'password'"
+                               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next"
+                               :aria-invalid="keyCheck && keyCheck.tone === 'error' ? 'true' : null" :aria-describedby="keyCheck ? 'api-key-msg' : null"
+                               :placeholder="settings.binance.api_key_masked ? 'Saved: ' + settings.binance.api_key_masked : 'Paste the API key'">
+                        <button type="button" class="icon-btn" @click="showKey = !showKey" :aria-label="showKey ? 'Hide API key' : 'Show API key'" :aria-pressed="showKey">
+                          <svg class="icon icon-sm"><use :href="showKey ? '#i-eye-off' : '#i-eye'"/></svg>
+                        </button>
+                      </div>
+                      <p v-if="keyCheck" id="api-key-msg" class="field-msg" :class="keyCheck.tone" aria-live="polite">
+                        <svg class="icon icon-xs"><use :href="msgIcon(keyCheck)"/></svg><span>{{ keyCheck.text }}</span>
+                      </p>
+                    </div>
+                    <div>
+                      <label class="label" for="api-secret">Secret key</label>
+                      <div class="field" :class="fieldClass(secretCheck)">
+                        <input id="api-secret" class="mono" v-model.trim="form.binance.api_secret" :type="showSecret ? 'text' : 'password'"
+                               autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done"
+                               :aria-invalid="secretCheck && secretCheck.tone === 'error' ? 'true' : null" :aria-describedby="secretCheck ? 'api-secret-msg' : null"
+                               :placeholder="settings.binance.api_secret_masked ? 'Saved: ' + settings.binance.api_secret_masked : 'Paste the secret key'">
+                        <button type="button" class="icon-btn" @click="showSecret = !showSecret" :aria-label="showSecret ? 'Hide secret key' : 'Show secret key'" :aria-pressed="showSecret">
+                          <svg class="icon icon-sm"><use :href="showSecret ? '#i-eye-off' : '#i-eye'"/></svg>
+                        </button>
+                      </div>
+                      <p v-if="secretCheck" id="api-secret-msg" class="field-msg" :class="secretCheck.tone" aria-live="polite">
+                        <svg class="icon icon-xs"><use :href="msgIcon(secretCheck)"/></svg><span>{{ secretCheck.text }}</span>
+                      </p>
+                      <p class="hint mt-1.5" v-else-if="settings.binance.has_api_secret && !form.binance.clear && !keyCheck">Leave blank to keep the saved key and secret.</p>
+                    </div>
+                    <p class="hint">Create the key under Binance › API Management with <strong class="text-ink-2">Enable Reading</strong> only. Never enable trading or withdrawals.</p>
+
+                    <div class="flex flex-wrap items-center gap-2 pt-1">
+                      <button type="button" class="btn btn-secondary" @click="testBinance" :disabled="binanceTest.state === 'testing' || !canTestBinance">
+                        <svg class="icon icon-sm" :class="{ spin: binanceTest.state === 'testing' }"><use :href="binanceTest.state === 'testing' ? '#i-refresh' : '#i-zap'"/></svg>
+                        {{ binanceTest.state === 'testing' ? 'Testing…' : 'Test connection' }}
+                      </button>
+                      <button v-if="(settings.binance.has_api_key || settings.binance.has_api_secret) && !form.binance.clear"
+                              type="button" class="btn btn-danger" @click="clearBinance">Remove saved key</button>
+                      <span v-if="form.binance.clear" class="hint">Saved key will be removed. <button type="button" class="link-btn hit" style="--hit: -14px -10px" @click="form.binance.clear = false">Undo</button></span>
+                    </div>
+
+                    <div v-if="binanceTest.result" class="rounded-2xl bg-surface-2 p-3 text-[13px]" role="status">
+                      <p class="flex items-start gap-1.5 font-bold" :class="binanceTest.result.ok ? 'text-up' : 'text-down'">
+                        <svg class="icon icon-xs mt-[3px]"><use :href="binanceTest.result.ok ? '#i-check' : '#i-alert'"/></svg><span class="min-w-0 break-words">{{ binanceTest.result.message }}</span>
+                      </p>
+                      <div v-if="Object.keys(binanceTest.result.permissions || {}).length" class="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
+                        <span v-for="perm in permissionList" :key="perm.key" class="perm" :class="perm.cls">
+                          <svg class="icon icon-xs"><use :href="perm.on ? '#i-check' : '#i-x'"/></svg>{{ perm.label }}
+                        </span>
+                      </div>
+                      <ul v-if="binanceTest.result.warnings && binanceTest.result.warnings.length" class="mt-2 space-y-1 text-[12px] text-[#F2D59C]">
+                        <li v-for="(warning, i) in binanceTest.result.warnings" :key="i" class="flex gap-1.5">
+                          <svg class="icon icon-xs mt-0.5 text-warn"><use href="#i-alert"/></svg>{{ warning }}
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </section>
+
+                <!-- Wallets -->
+                <section class="card mt-4 p-4" aria-labelledby="wallets-title">
+                  <div class="flex items-center gap-3">
+                    <span class="grid size-10 flex-none place-items-center rounded-xl bg-up/10 text-up"><svg class="icon"><use href="#i-wallet"/></svg></span>
+                    <div class="min-w-0 flex-1">
+                      <h3 id="wallets-title" class="font-extrabold">On-chain wallets</h3>
+                      <p class="text-[12px] font-semibold text-ink-3">Public addresses only, never a seed phrase</p>
+                    </div>
+                  </div>
+
+                  <div v-if="settings.wallets_env_override" class="notice info mt-3">
+                    <svg class="icon icon-sm"><use href="#i-info"/></svg>
+                    <span>EVM_WALLETS or SOLANA_WALLETS is set on the server and replaces the list saved here.</span>
+                  </div>
+
+                  <ul class="mt-4 space-y-2" v-if="form.wallets.length">
+                    <li v-for="(wallet, index) in form.wallets" :key="wallet.address" class="wallet-card p-3">
+                      <div class="flex items-start gap-2">
+                        <div class="min-w-0 flex-1 pt-0.5">
+                          <p class="truncate font-extrabold">{{ wallet.name || fmt.shortAddress(wallet.address) }}</p>
+                          <p class="truncate font-mono text-[12px] text-ink-3" :title="wallet.address">{{ fmt.shortAddress(wallet.address, 8) }}</p>
+                        </div>
+                        <button type="button" class="icon-btn" @click="editWallet(index)" :aria-label="'Edit ' + (wallet.name || 'wallet')">
+                          <svg class="icon icon-sm"><use href="#i-pencil"/></svg>
+                        </button>
+                        <button type="button" class="btn btn-danger min-h-11" :class="{ 'is-armed': armedDelete === index }"
+                                @click="deleteWallet(index)" :aria-label="armedDelete === index ? 'Confirm delete' : 'Delete ' + (wallet.name || 'wallet')">
+                          <svg class="icon icon-sm"><use href="#i-trash"/></svg>
+                          <span v-if="armedDelete === index" class="text-[13px]">Delete?</span>
+                        </button>
+                      </div>
+                      <div class="mt-2 flex flex-wrap gap-1.5">
+                        <span v-for="chainId in wallet.chains" :key="chainId" class="chain-badge" :style="{ '--chain': chainColor(chainId) }">
+                          <span class="chain-dot"></span>{{ chainShort(chainId) }}
+                        </span>
+                      </div>
+                    </li>
+                  </ul>
+                  <p v-else-if="!draft" class="mt-4 text-[13px] text-ink-3">No wallets yet. Add an EVM (0x…) or Solana address to track it.</p>
+
+                  <!-- Wallet editor -->
+                  <div v-if="draft" class="mt-4 rounded-2xl border border-line bg-surface-2/60 p-3.5" ref="draftEl">
+                    <p class="mb-3 text-[14px] font-extrabold">{{ draft.index === -1 ? 'Add wallet' : 'Edit wallet' }}</p>
+                    <label class="label" for="wallet-name">Wallet name</label>
+                    <div class="field mb-3">
+                      <input id="wallet-name" v-model="draft.name" maxlength="40" placeholder="e.g. Ledger, Phantom" autocomplete="off"
+                             enterkeyhint="next" @keydown.enter.prevent="focusAddress">
+                    </div>
+                    <label class="label" for="wallet-address">Address</label>
+                    <div class="field" :class="fieldClass(addressCheck)">
+                      <input id="wallet-address" class="mono" v-model.trim="draft.address" placeholder="0x… or Solana address"
+                             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done"
+                             :aria-invalid="addressCheck.tone === 'error' ? 'true' : null" aria-describedby="wallet-address-msg"
+                             @blur="draft.touched = true" @keydown.enter.prevent="applyDraft">
+                    </div>
+                    <p id="wallet-address-msg" class="field-msg" :class="addressCheck.tone" aria-live="polite">
+                      <svg v-if="addressCheck.tone !== 'hint'" class="icon icon-xs"><use :href="msgIcon(addressCheck)"/></svg><span>{{ addressCheck.text }}</span>
+                    </p>
+
+                    <p class="label mt-3">Chains</p>
+                    <div class="flex flex-wrap gap-2" role="group" aria-label="Chains to scan">
+                      <button v-for="chain in settings.chains" :key="chain.id" type="button" class="chain-toggle"
+                              :style="{ '--chain': chainColor(chain.id) }"
+                              :aria-pressed="draft.chains.includes(chain.id)"
+                              :disabled="!chainAllowed(chain)" @click="toggleChain(chain.id)"
+                              :title="chain.name">
+                        <span class="chain-dot"></span>{{ chain.short }}
+                      </button>
+                    </div>
+
+                    <div class="mt-4 flex flex-wrap items-center gap-2">
+                      <button type="button" class="btn btn-secondary" @click="testWallet" :disabled="!draftKind || !draft.chains.length || draft.testing">
+                        <svg class="icon icon-sm" :class="{ spin: draft.testing }"><use :href="draft.testing ? '#i-refresh' : '#i-zap'"/></svg>
+                        {{ draft.testing ? 'Reading…' : 'Test address' }}
+                      </button>
+                    </div>
+                    <div v-if="draft.test" class="mt-3 rounded-xl bg-bg/60 p-3 text-[13px]" role="status">
+                      <p class="font-bold" :class="draft.test.ok ? 'text-up' : (draft.test.reachable ? 'text-warn' : 'text-down')">{{ draft.test.message }}</p>
+                      <ul class="mt-2 space-y-1.5 num">
+                        <li v-for="row in draft.test.results" :key="row.chain" class="flex items-center gap-2">
+                          <span class="chain-dot" :style="{ '--chain': chainColor(row.chain) }"></span>
+                          <span class="w-16 font-bold text-ink-2">{{ chainShort(row.chain) }}</span>
+                          <template v-if="row.ok">
+                            <span class="flex-1 truncate priv priv-soft">{{ fmt.qty(row.balance) }} {{ row.symbol }}</span>
+                            <span class="text-ink-3 priv priv-soft" v-if="row.value_usd !== null">{{ fmt.money(row.value_usd) }}</span>
+                          </template>
+                          <span v-else class="flex-1 truncate text-down" :title="row.error">{{ row.error }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                    <p v-if="draftError" class="field-msg error mt-3" role="alert">
+                      <svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ draftError }}</span>
+                    </p>
+
+                    <div class="mt-4 grid grid-cols-2 gap-2">
+                      <button type="button" class="btn btn-ghost" @click="cancelDraft">Cancel</button>
+                      <button type="button" class="btn btn-secondary" @click="applyDraft">
+                        <svg class="icon icon-sm"><use href="#i-check"/></svg>{{ draft.index === -1 ? 'Add to list' : 'Update' }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button v-if="!draft" type="button" class="btn btn-secondary mt-4 w-full" @click="newWallet">
+                    <svg class="icon icon-sm"><use href="#i-plus"/></svg>Add wallet
+                  </button>
+                </section>
+
+                <p class="mt-4 px-1 text-[12px] leading-relaxed text-ink-3">
+                  Saved to <span class="break-all font-mono">{{ settings.config_path }}</span> (owner-only permissions; the previous file is kept as <span class="font-mono">.bak</span>). Secrets are never sent back to this page.
+                </p>
+              </template>
+            </div>
+
+            <div class="sheet-foot">
+              <p v-if="saveError" class="field-msg error mb-2 mt-0" role="alert">
+                <svg class="icon icon-xs"><use href="#i-alert"/></svg><span class="min-w-0 break-words">{{ saveError }}</span>
+              </p>
+              <button type="button" class="btn btn-primary btn-block" @click="saveSettings" :disabled="!settings || saving || !dirty || !!draft || !!saveBlocker">
+                {{ saving ? 'Saving…' : (draft ? 'Finish the wallet first' : (saveBlocker || (dirty ? 'Save settings' : 'No changes'))) }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <!-- "Why it moved" peek: the 24h move at a glance, opened from the hero chip -->
+      <transition name="sheet">
+        <div v-if="peek.open" class="sheet-backdrop" @click.self="closePeek()" @keydown="onPeekKeydown">
+          <div class="sheet peek" role="dialog" aria-modal="true" aria-labelledby="peek-title" ref="peekSheet" :aria-busy="peek.loading">
+            <div class="sheet-grip" aria-hidden="true"></div>
+            <div class="flex items-center justify-between py-2 pl-5 pr-2">
+              <h2 id="peek-title" class="text-[19px] font-extrabold tracking-tight">Why it moved
+                <span class="font-bold text-ink-3">· {{ peekReady ? peekSpan : '24h' }}</span></h2>
+              <button type="button" class="icon-btn" @click="closePeek()" aria-label="Close" ref="peekClose">
+                <svg class="icon"><use href="#i-x"/></svg>
+              </button>
+            </div>
+
+            <div class="sheet-body px-4 pb-4">
+              <div v-if="peek.loading && !peek.data" class="space-y-3 px-1 py-2">
+                <div class="skeleton h-9 w-48"></div>
+                <div class="grid grid-cols-2 gap-2"><div class="skeleton h-16"></div><div class="skeleton h-16"></div></div>
+                <div v-for="n in 3" :key="n" class="skeleton h-10 w-full"></div>
+              </div>
+              <template v-else-if="peekReady">
+                <p class="delta-figure num pnl px-1" :class="peekTrend">
+                  <span class="priv">{{ fmt.signedMoney(peek.data.delta_usd) }}</span>
+                  <span v-if="peek.data.delta_pct !== null" class="delta-pct">{{ fmt.signedPct(peek.data.delta_pct) }}</span>
+                </p>
+                <ul class="bucket-tiles mt-3" aria-label="Where the change came from">
+                  <li v-for="bucket in peekBuckets" :key="bucket.id" class="bucket-tile" :class="'bucket-' + bucket.id" :title="bucket.hint">
+                    <span class="block text-[12px] font-semibold text-ink-3">{{ bucket.label }}</span>
+                    <span class="pnl num block text-[16px] font-extrabold" :class="bucket.trend">
+                      <span class="priv priv-soft">{{ fmt.signedMoney(bucket.value) }}</span>
+                    </span>
+                  </li>
+                </ul>
+                <h3 v-if="peekRows.length" class="block-sub mt-4 px-1">Biggest movers</h3>
+                <ul v-if="peekRows.length" class="why-list peek-list mt-1" aria-label="Coins that moved the total most">
+                  <li v-for="r in peekRows" :key="r.key" class="why-row" :title="r.breakdown">
+                    <span class="coin coin-sm" :style="{ '--hue': fmt.hue(r.key) }" aria-hidden="true">
+                      <img v-if="coinIcon(r.key)" :src="coinIcon(r.key)" alt="" @error="iconFailed[r.key] = true">
+                      <span v-else>{{ fmt.badge(r.key) }}</span>
+                    </span>
+                    <span class="min-w-0">
+                      <span class="block truncate text-[14px] font-extrabold tracking-tight">{{ r.key }}</span>
+                      <span class="block truncate text-[12px] font-semibold text-ink-3 num">{{ r.note }}</span>
+                    </span>
+                    <span class="why-bar" aria-hidden="true">
+                      <i :class="[r.trend, { qty: !r.byPrice }]" :style="{ width: r.width + '%' }"></i>
+                    </span>
+                    <span class="pnl num whitespace-nowrap text-right text-[14px] font-extrabold" :class="r.trend">
+                      <svg class="icon icon-xs"><use :href="r.trend === 'down' ? '#i-down' : '#i-up'"/></svg>
+                      <span class="priv priv-soft">{{ fmt.signedMoney(r.total) }}</span>
+                      <span class="sr-only">{{ r.breakdown }}</span>
+                    </span>
+                  </li>
+                </ul>
+              </template>
+              <p v-if="peekMessage" class="px-1 pt-2 text-[13px] font-semibold text-ink-3">{{ peekMessage }}</p>
+            </div>
+
+            <div class="sheet-foot">
+              <button type="button" class="btn btn-primary btn-block" @click="peekToAnalytics">
+                See full analysis <span aria-hidden="true">→</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+
+      <div class="toast-wrap" aria-live="polite">
+        <transition name="toast">
+          <div v-if="toast" class="toast" :class="toast.kind" :key="toast.id" role="status">
+            <svg class="icon icon-sm"><use :href="toast.kind === 'error' ? '#i-alert' : '#i-check'"/></svg>
+            <span>{{ toast.text }}</span>
+          </div>
+        </transition>
+      </div>
+    </template>
+  </div>
+
+  <script src="/static/vendor/vue.global.prod.js"></script>
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

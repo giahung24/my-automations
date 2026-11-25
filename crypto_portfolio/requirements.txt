@@ -1,0 +1,8 @@
+requests~=2.32
+PyYAML~=6.0
+python-dotenv~=1.0
+matplotlib~=3.9
+fastapi~=0.165
+uvicorn[standard]~=0.54
+httpx2~=2.16          # FastAPI TestClient transport (test_api.py)
+pytest~=8.3
