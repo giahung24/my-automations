@@ -8,6 +8,7 @@ pagination, dust filtering, zero balances, and chart generation with 0 and 1 sna
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -21,7 +22,17 @@ import main as cli
 from clients.binance import BinanceClient, BinanceError
 from clients.onchain import OnChainClient, RpcError, _decode_abi_string, _hex_to_int
 from models import BINANCE_EARN, BINANCE_FUNDING, BINANCE_SPOT, ONCHAIN, Holding
-from services.db import Database
+from services import db as db_module
+from services.db import (
+    MIGRATIONS,
+    SCHEMA,
+    SCHEMA_VERSION,
+    Database,
+    MigrationError,
+    migrate,
+    schema_version,
+    split_statements,
+)
 from services.portfolio import aggregate, to_dict
 from services.visualizer import bar, generate, sparkline, text_report
 
@@ -558,6 +569,214 @@ def test_db_schema_is_idempotent(tmp_path):
     path = tmp_path / "t.db"
     Database(path)
     assert Database(path).count() == 0  # re-opening must not fail on CREATE TABLE
+
+
+
+# -- schema migrations (PRAGMA user_version) -------------------------------------
+def make_v0_db(path, snapshots=16, assets_per_snapshot=3):
+    """A database as written before versioning: the original schema, user_version = 0."""
+    connection = sqlite3.connect(path)
+    connection.executescript(SCHEMA)
+    for i in range(snapshots):
+        cursor = connection.execute(
+            "INSERT INTO snapshots (timestamp, total_portfolio_usd, binance_spot_usd, binance_earn_usd,"
+            " binance_funding_usd, onchain_usd) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"2026-11-{1 + i:02d}T00:00:00+00:00", 1000.0 + i, 400.0 + i, 300.0, 100.0, 200.0),
+        )
+        connection.executemany(
+            "INSERT INTO snapshot_assets (snapshot_id, symbol, source, quantity, price_usd, value_usd)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [(cursor.lastrowid, f"T{j}", BINANCE_SPOT, 1.5 + j, 10.0 * (i + 1), 15.0 + j) for j in range(assets_per_snapshot)],
+        )
+    connection.commit()
+    connection.close()
+    assert schema_version(path) == 0
+    return path
+
+
+def dump_v0_rows(path):
+    """Every v0 column of every row, so a migration can be checked to have lost nothing."""
+    connection = sqlite3.connect(path)
+    try:
+        snapshots = connection.execute(
+            "SELECT id, timestamp, total_portfolio_usd, binance_spot_usd, binance_earn_usd,"
+            " binance_funding_usd, onchain_usd FROM snapshots ORDER BY id"
+        ).fetchall()
+        assets = connection.execute(
+            "SELECT id, snapshot_id, symbol, source, quantity, price_usd, value_usd"
+            " FROM snapshot_assets ORDER BY id"
+        ).fetchall()
+    finally:
+        connection.close()
+    return snapshots, assets
+
+
+def columns(path, table):
+    connection = sqlite3.connect(path)
+    try:
+        return [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+    finally:
+        connection.close()
+
+
+def tables(path):
+    connection = sqlite3.connect(path)
+    try:
+        return {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    finally:
+        connection.close()
+
+
+def backups(path):
+    return sorted(path.parent.glob(f"{path.name}.bak_v*"))
+
+
+def test_migrations_list_defines_v2():
+    assert SCHEMA_VERSION == len(MIGRATIONS) == 2
+
+
+def test_fresh_db_is_created_at_latest_version_without_backup(tmp_path):
+    path = tmp_path / "t.db"
+    database = Database(path)
+    assert database.schema_version() == SCHEMA_VERSION
+    assert {"snapshots", "snapshot_assets", "snapshot_sources"} <= tables(path)
+    assert {"detail", "price_id"} <= set(columns(path, "snapshot_assets"))
+    assert "trigger" in columns(path, "snapshots")
+    assert backups(path) == []  # nothing to back up in a brand-new file
+
+
+def test_upgrade_v0_to_latest_keeps_every_row(tmp_path):
+    path = make_v0_db(tmp_path / "portfolio_history.db")
+    before = dump_v0_rows(path)
+
+    database = Database(path)
+
+    assert database.schema_version() == SCHEMA_VERSION
+    assert dump_v0_rows(path) == before
+    assert database.count() == 16 and len(before[1]) == 48
+    # Old rows get the column defaults, and the read API still works on them.
+    connection = sqlite3.connect(path)
+    assert connection.execute("SELECT DISTINCT trigger FROM snapshots").fetchall() == [("unknown",)]
+    assert connection.execute("SELECT DISTINCT detail, price_id FROM snapshot_assets").fetchall() == [("", "")]
+    connection.close()
+    assert database.latest().total_portfolio_usd == 1015.0
+    assert len(database.latest_assets()) == 3
+
+
+def test_upgrade_v0_to_v1_then_v1_to_v2_keeps_every_row(tmp_path):
+    path = make_v0_db(tmp_path / "t.db")
+    before = dump_v0_rows(path)
+
+    assert migrate(path, MIGRATIONS[:1]) == 1
+    assert schema_version(path) == 1
+    assert dump_v0_rows(path) == before
+    assert "detail" not in columns(path, "snapshot_assets")  # v2 not applied yet
+    assert [b.name.split(".bak_")[1][:3] for b in backups(path)] == ["v0_"]
+
+    assert Database(path).schema_version() == 2
+    assert dump_v0_rows(path) == before
+    assert "snapshot_sources" in tables(path)
+    assert sorted(b.name.split(".bak_")[1][:3] for b in backups(path)) == ["v0_", "v1_"]
+
+
+def test_backup_is_a_full_copy_of_the_old_version(tmp_path):
+    path = make_v0_db(tmp_path / "portfolio_history.db")
+    before = dump_v0_rows(path)
+    Database(path)
+
+    (backup,) = backups(path)
+    assert backup.name.startswith("portfolio_history.db.bak_v0_")
+    assert len(backup.name.split("bak_v0_")[1]) == len("YYYYmmdd_HHMMSS")
+    assert schema_version(backup) == 0
+    assert dump_v0_rows(backup) == before
+    assert "snapshot_sources" not in tables(backup)
+
+
+def test_second_run_is_a_noop(tmp_path):
+    path = make_v0_db(tmp_path / "t.db")
+    Database(path)
+    after_first = dump_v0_rows(path), columns(path, "snapshots"), backups(path)
+
+    assert migrate(path) == SCHEMA_VERSION
+    Database(path)
+
+    assert schema_version(path) == SCHEMA_VERSION
+    assert (dump_v0_rows(path), columns(path, "snapshots"), backups(path)) == after_first
+
+
+def test_failed_migration_rolls_back_everything(tmp_path, monkeypatch):
+    path = make_v0_db(tmp_path / "t.db")
+    before = dump_v0_rows(path)
+    broken = MIGRATIONS + [
+        "ALTER TABLE snapshots ADD COLUMN half_done TEXT;\n"
+        "CREATE TABLE half_done_table (x INTEGER);\n"
+        "ALTER TABLE no_such_table ADD COLUMN boom TEXT;"
+    ]
+    monkeypatch.setattr(db_module, "MIGRATIONS", broken)
+
+    with pytest.raises(MigrationError, match="v3"):
+        Database(path)
+
+    # v1, v2 and the first half of v3 all ran in this attempt; none of it may survive.
+    assert schema_version(path) == 0
+    assert dump_v0_rows(path) == before
+    assert "half_done" not in columns(path, "snapshots")
+    assert "trigger" not in columns(path, "snapshots")
+    assert "detail" not in columns(path, "snapshot_assets")
+    assert tables(path) & {"half_done_table", "snapshot_sources"} == set()
+    assert len(backups(path)) == 1  # the backup was taken before the attempt
+
+    monkeypatch.setattr(db_module, "MIGRATIONS", MIGRATIONS)
+    assert Database(path).schema_version() == SCHEMA_VERSION  # fixing the step lets it go through
+    assert dump_v0_rows(path) == before
+
+
+def test_database_newer_than_code_is_refused(tmp_path):
+    path = tmp_path / "t.db"
+    Database(path)
+    connection = sqlite3.connect(path)
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    connection.close()
+    with pytest.raises(MigrationError, match="newer"):
+        Database(path)
+    assert schema_version(path) == SCHEMA_VERSION + 1
+
+
+def test_record_after_upgrade_uses_new_defaults(tmp_path):
+    path = make_v0_db(tmp_path / "t.db")
+    database = Database(path)
+    snapshot_id = database.record(aggregate(sample_holdings(), 0.0))
+    assert database.count() == 17
+    assert database.latest().id == snapshot_id
+    connection = sqlite3.connect(path)
+    assert connection.execute("SELECT trigger FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone() == ("unknown",)
+    connection.close()
+
+
+def test_gateway_reads_migrated_db_read_only(tmp_path):
+    import api_gateway
+
+    path = make_v0_db(tmp_path / "t.db")
+    Database(path)
+    row = api_gateway.read_latest_snapshot(path)
+    assert row["timestamp"] == "2026-11-16T00:00:00+00:00"
+    assert row["total_portfolio_usd"] == 1015.0
+
+
+def test_split_statements_respects_quotes_and_comments():
+    script = """
+    -- a comment; with a semicolon
+    CREATE TABLE t (a TEXT DEFAULT 'x;y');  -- trailing; comment
+    /* block; comment */ INSERT INTO t VALUES ('it''s;');
+    """
+    statements = split_statements(script)
+    assert len(statements) == 2
+    assert statements[0].endswith("DEFAULT 'x;y');")
+    assert "'it''s;'" in statements[1]
+    assert split_statements("") == []
+    assert len(split_statements(MIGRATIONS[1])) == 4
+    with pytest.raises(ValueError):
+        split_statements("CREATE TABLE t (a INTEGER)")
 
 
 # -- visualizer ----------------------------------------------------------------

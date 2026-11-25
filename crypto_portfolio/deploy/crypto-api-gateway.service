@@ -1,0 +1,23 @@
+# User unit for api_gateway.py (127.0.0.1:8090, behind cloudflared).
+# Install:  cp deploy/crypto-api-gateway.service ~/.config/systemd/user/
+#           systemctl --user daemon-reload && systemctl --user enable --now crypto-api-gateway
+[Unit]
+Description=Crypto portfolio read-only API gateway (api.tytony.link)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jean/projects/my-automations/crypto_portfolio
+ExecStart=/home/jean/projects/my-automations/crypto_portfolio/.venv/bin/python api_gateway.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/jean/projects/my-automations/crypto_portfolio
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=default.target
