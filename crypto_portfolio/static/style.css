@@ -582,3 +582,163 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 
 /* Peek sheet: rows run edge to edge of the sheet body */
 .peek-list .why-row { padding-left: 4px; padding-right: 4px; }
+
+/* -- tabs: a third one, Activity (M4) ----------------------------------------- */
+.tabbar-ico { position: relative; }
+.tab-badge {
+  position: absolute; top: -3px; left: calc(50% + 6px);
+  min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px;
+  display: grid; place-items: center;
+  background: var(--down); color: #fff; font-size: 10px; font-weight: 800; line-height: 1;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+@media (max-width: 340px) { .tabbar-label { font-size: 10.5px; } .tabbar-ico { width: 46px; } }
+
+/* -- shared bits --------------------------------------------------------------- */
+.btn-sm { min-height: 40px; padding: 0 12px; font-size: 13px; border-radius: 12px; }
+.btn-sm.btn-ghost { padding: 0 10px; }
+.segmented-2 { grid-template-columns: repeat(2, 1fr); }
+.segmented-2 .segment { min-height: 46px; }
+.field-prefix { padding-left: 14px; font-weight: 700; color: var(--ink-3); }
+.field .field-prefix + input { padding-left: 4px; }
+.coin.coin-xs { width: 22px; height: 22px; font-size: 8px; }
+.toast-wrap { flex-direction: column; align-items: center; gap: 8px; }
+
+/* -- Activity: period select, filter chips -------------------------------------- */
+.period-select {
+  position: relative; flex: none; display: inline-flex; align-items: center;
+  height: 40px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line-strong);
+  color: var(--ink); transition: border-color 0.2s ease;
+}
+.period-select:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(138, 180, 255, 0.16); }
+.period-select select {
+  appearance: none; -webkit-appearance: none; border: 0; background: transparent; outline: none;
+  height: 100%; padding: 0 32px 0 14px; font: inherit; font-size: 14px; font-weight: 800; color: inherit; cursor: pointer;
+}
+.period-select select option { background: var(--surface-2); color: var(--ink); }
+.period-select .icon { position: absolute; right: 11px; pointer-events: none; color: var(--ink-3); }
+
+.chip-rows { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+/* chips wrap rather than scroll: a chip cut off at the edge reads as missing */
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; padding: 2px 0; }
+.chip {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 0 12px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--line-strong); color: var(--ink-2);
+  font-size: 13px; font-weight: 700; white-space: nowrap;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+}
+.chip { position: relative; }
+.chip::before { content: ""; position: absolute; inset: -4px -2px; }   /* 44px-tall touch target */
+.chip-count {
+  min-width: 20px; height: 18px; padding: 0 6px; border-radius: 999px;
+  display: inline-grid; place-items: center;
+  background: var(--surface-3); color: var(--ink-3); font-size: 11px; font-weight: 800;
+}
+.chip:active { background: var(--surface-2); }
+@media (hover: hover) { .chip:hover { color: var(--ink); border-color: var(--ink-3); } }
+.chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.chip[aria-pressed="true"] .chip-count { background: rgba(11, 14, 20, 0.14); color: var(--bg); }
+.chip.is-empty:not([aria-pressed="true"]) { opacity: 0.45; }
+
+.review-banner {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 48px; padding: 10px 14px; border-radius: 16px;
+  background: rgba(245, 184, 75, 0.08); border: 1px solid rgba(245, 184, 75, 0.25);
+  color: #F2D59C; font-size: 13px; font-weight: 600;
+  transition: background-color 0.2s ease;
+}
+.review-banner .icon:first-child { color: var(--warn); }
+.review-banner:active { background: rgba(245, 184, 75, 0.14); }
+
+/* -- Activity: timeline ------------------------------------------------------------ */
+.day-head { padding: 0 4px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
+.flow-list { overflow: hidden; transition: opacity 0.2s ease; }
+.flow-list.is-dim { opacity: 0.55; }
+.flow-list > li + li { border-top: 1px solid var(--line); }
+.flow-list > li.needs-review { background: linear-gradient(90deg, rgba(245, 184, 75, 0.06), transparent 60%); }
+.flow-row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  min-height: 62px; padding: 10px 16px; border: 0; background: transparent; text-align: left;
+}
+button.flow-row { transition: background-color 0.15s ease; }
+button.flow-row:active { background: var(--surface-2); }
+@media (hover: hover) { button.flow-row:hover { background: rgba(28, 34, 43, 0.6); } }
+.flow-ico {
+  flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
+  background: var(--surface-3); color: var(--ink-2);
+}
+.flow-ico.k-deposit { background: rgba(34, 229, 139, 0.12); color: var(--up); }
+.flow-ico.k-withdrawal, .flow-ico.k-fee { background: rgba(255, 92, 115, 0.12); color: var(--down); }
+.flow-ico.k-transfer { background: rgba(138, 180, 255, 0.13); color: var(--focus); }
+.flow-ico.k-reward { background: rgba(245, 184, 75, 0.13); color: var(--warn); }
+.amt-up { color: var(--up); }
+.amt-down { color: var(--ink); }
+.amt-flat { color: var(--ink-2); }
+.flow-chev { flex: none; margin-right: -4px; color: var(--ink-3); transition: transform 0.25s var(--ease-out); }
+.flow-tag {
+  flex: none; display: inline-flex; align-items: center; height: 19px; padding: 0 7px; border-radius: 6px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.02em; white-space: nowrap;
+}
+.flow-tag.warn { background: rgba(245, 184, 75, 0.14); color: var(--warn); }
+.flow-tag.review { background: rgba(245, 184, 75, 0.14); color: var(--warn); }
+.flow-detail { margin: 0; padding: 2px 16px 12px 64px; font-size: 13px; }
+.flow-detail li { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.flow-meta { margin: -4px 0 0; padding: 0 16px 0 64px; font-size: 12px; font-weight: 600; color: var(--ink-3); overflow-wrap: anywhere; }
+.flow-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 12px 58px; }
+.match-box { margin: 0 16px 14px 64px; padding: 10px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--line); }
+.match-option {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px;
+  padding: 8px 10px; border-radius: 12px; border: 1px solid var(--line-strong);
+  background: var(--surface); text-align: left; transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+.match-option:active:not(:disabled) { background: var(--surface-3); }
+@media (hover: hover) { .match-option:hover:not(:disabled) { border-color: var(--focus); } }
+.match-option:disabled { opacity: 0.5; }
+@media (max-width: 380px) {
+  .flow-detail, .flow-meta { padding-left: 16px; }
+  .flow-actions { padding-left: 10px; }
+  .match-box { margin-left: 16px; }
+}
+
+.undo-bar .icon { color: var(--up); }
+.undo-bar .link-btn { color: var(--ink); }
+
+/* -- Allocation card (M7) ------------------------------------------------------------ */
+.alloc-invite {
+  display: flex; gap: 12px; align-items: flex-start; padding: 14px;
+  border-radius: 18px; border: 1px dashed var(--line-strong);
+  background: radial-gradient(120% 120% at 0% 0%, rgba(34, 229, 139, 0.07), transparent 60%), var(--surface-2);
+}
+.alloc-invite-ico { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: rgba(34, 229, 139, 0.12); color: var(--up); }
+.alloc-list { display: flex; flex-direction: column; gap: 14px; }
+.alloc-track { position: relative; height: 10px; border-radius: 5px; background: var(--surface-2); }
+.alloc-band { position: absolute; top: 0; bottom: 0; border-radius: 5px; background: rgba(233, 237, 242, 0.09); }
+.alloc-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 5px; background: var(--ink-2); transition: width 0.5s var(--ease-out); }
+.alloc-fill.ok { background: var(--up); }
+.alloc-fill.over { background: var(--warn); }
+.alloc-fill.under { background: var(--focus); }
+.alloc-target { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--ink); box-shadow: 0 0 0 1.5px var(--surface); }
+.alloc-drift { display: inline-flex; align-items: center; gap: 4px; }
+.alloc-drift.ok { color: var(--ink-3); }
+.alloc-drift.over { color: var(--warn); }
+.alloc-drift.under { color: var(--focus); }
+.alloc-orders { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.alloc-order { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 6px 8px 6px 12px; background: var(--surface-2); }
+.alloc-order + .alloc-order { border-top: 1px solid var(--line); }
+.order-side { flex: none; width: 42px; padding: 3px 0; border-radius: 7px; text-align: center; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; }
+.order-side.buy { background: rgba(34, 229, 139, 0.14); color: var(--up); }
+.order-side.sell { background: rgba(255, 92, 115, 0.14); color: var(--down); }
+
+/* -- Manual assets form (M6) ---------------------------------------------------------- */
+.kind-badge {
+  flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 6px;
+  background: var(--surface-3); color: var(--ink-2); font-size: 10.5px; font-weight: 800; letter-spacing: 0.03em;
+}
+.kind-badge.kind-cold_wallet { background: rgba(138, 180, 255, 0.13); color: #C5D7FA; }
+.kind-badge.kind-staking { background: rgba(34, 229, 139, 0.12); color: var(--up); }
+.holding-row { display: flex; align-items: center; gap: 8px; }
+.holding-sym { width: 104px; flex: none; }
+.holding-sym input { text-transform: uppercase; }
+.holding-qty { flex: 1; min-width: 0; }
+@media (max-width: 380px) { .holding-sym { width: 80px; } .holding-row { gap: 6px; } .holding-row .icon-btn { width: 36px; } }

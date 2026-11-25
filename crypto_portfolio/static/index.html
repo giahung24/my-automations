@@ -61,6 +61,11 @@
     <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="i-pie" viewBox="0 0 24 24"><path d="M21 12c.55 0 1-.45.95-1A10 10 0 0 0 13 2.05c-.55-.05-1 .4-1 .95v8a1 1 0 0 0 1 1z"/><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/></symbol>
     <symbol id="i-trend" viewBox="0 0 24 24"><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M13 5h8M13 12h8M13 19h8"/><circle cx="6" cy="7" r="3"/><path d="M6 6v1.2l.8.8"/><path d="M3 14h6v6H3z"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><path d="M12 8.5 13.2 10.8 15.5 12 13.2 13.2 12 15.5 10.8 13.2 8.5 12 10.8 10.8z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect width="13" height="13" x="9" y="9" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-snow" viewBox="0 0 24 24"><path d="M12 2v20M4.93 4.93l14.14 14.14M2 12h20M4.93 19.07 19.07 4.93"/><path d="m9 4 3 2 3-2M9 20l3-2 3 2M4 9l2 3-2 3M20 9l-2 3 2 3"/></symbol>
   </svg>
 
   <div id="app" v-cloak>
@@ -95,7 +100,7 @@
         <div class="mx-auto flex h-14 max-w-[560px] items-center justify-between pl-4 pr-2">
           <div class="flex items-center gap-2.5">
             <img src="/static/icons/icon.svg" alt="" class="size-7 rounded-[9px]">
-            <span class="text-[16px] font-extrabold tracking-tight">{{ activeTab === 'analytics' ? 'Analytics' : 'Portfolio' }}</span>
+            <span class="text-[16px] font-extrabold tracking-tight">{{ sectionTitles[activeTab] }}</span>
           </div>
           <div class="flex items-center">
             <button class="icon-btn" type="button" @click="refresh()" :disabled="refreshing || !portfolio.configured"
@@ -455,6 +460,152 @@
                    :aria-label="'Underwater chart: drawdown from the high-water mark; maximum ' + (insights.data.drawdown.max_drawdown_pct ?? 0) + '%'"></div>
               <div class="h-4"></div>
             </section>
+
+            <!-- 4. Allocation & rebalancing (M7): a picture of now, so the period above does not apply -->
+            <section class="card mt-4" aria-labelledby="alloc-title" :aria-busy="alloc.loading">
+              <div class="flex items-start gap-3 px-5 pt-4">
+                <div class="min-w-0 flex-1">
+                  <h2 id="alloc-title" class="section-title">Allocation &amp; rebalancing</h2>
+                  <p class="section-sub">Target vs actual, right now · suggestions only, nothing is traded</p>
+                </div>
+                <button type="button" class="switch mt-0.5" role="switch" :aria-checked="allocEnabled"
+                        aria-label="Allocation assistant" :disabled="alloc.toggling || (!alloc.data && !alloc.errors.length)"
+                        @click="toggleAllocation()"></button>
+              </div>
+
+              <div v-if="alloc.loading && !alloc.data && !alloc.errors.length" class="space-y-3 px-5 pb-5 pt-3">
+                <div class="skeleton h-12 w-full"></div>
+                <div v-for="n in 3" :key="n" class="skeleton h-9 w-full"></div>
+              </div>
+
+              <!-- OFF: an invitation, not an empty card -->
+              <div v-else-if="alloc.data && !alloc.data.enabled" class="alloc-invite mx-4 mb-4 mt-3">
+                <span class="alloc-invite-ico" aria-hidden="true"><svg class="icon"><use href="#i-pie"/></svg></span>
+                <div class="min-w-0 flex-1">
+                  <p class="font-extrabold">Keep your mix on target</p>
+                  <p class="mt-0.5 text-[13px] text-ink-2">Set target weights, for example BTC 50 · ETH 30 · stablecoins 20, and get buy and sell ideas when a bucket drifts too far, or a plan for where new money should go.</p>
+                  <button type="button" class="btn btn-primary mt-3" @click="toggleAllocation(true)" :disabled="alloc.toggling">
+                    <svg class="icon icon-sm" :class="{ spin: alloc.toggling }"><use :href="alloc.toggling ? '#i-refresh' : '#i-zap'"/></svg>
+                    {{ alloc.toggling ? 'Turning on…' : 'Turn on' }}
+                  </button>
+                </div>
+              </div>
+
+              <template v-else>
+                <div v-if="alloc.errors.length" class="notice error mx-4 mt-3" role="alert">
+                  <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                  <div class="min-w-0">
+                    <p class="font-bold">{{ alloc.error || 'The allocation targets in config.yaml are invalid.' }}</p>
+                    <ul class="mt-1 list-disc space-y-0.5 break-words pl-4 text-[12px] opacity-90">
+                      <li v-for="(e, i) in alloc.errors" :key="i">{{ e }}</li>
+                    </ul>
+                  </div>
+                </div>
+
+                <template v-if="allocReady">
+                  <div v-if="alloc.data.default_targets" class="notice info mx-4 mt-3" role="status">
+                    <svg class="icon icon-sm"><use href="#i-info"/></svg>
+                    <span>These are example targets. Set yours under <span class="font-mono">allocation.targets</span> in config.yaml.</span>
+                  </div>
+
+                  <div class="segmented segmented-2 mx-4 mt-3" role="tablist" aria-label="Suggestion mode">
+                    <button type="button" class="segment" role="tab" :aria-selected="alloc.mode === 'rebalance'" @click="setAllocMode('rebalance')">
+                      <span class="seg-label">Rebalance</span><span class="seg-total">buy &amp; sell</span>
+                    </button>
+                    <button type="button" class="segment" role="tab" :aria-selected="alloc.mode === 'contribution'" @click="setAllocMode('contribution')">
+                      <span class="seg-label">New money</span><span class="seg-total">buy only</span>
+                    </button>
+                  </div>
+
+                  <form v-if="alloc.mode === 'contribution'" class="mx-4 mt-3" @submit.prevent="applyContribution" novalidate>
+                    <label class="label" for="alloc-amount">Amount to invest</label>
+                    <div class="flex gap-2">
+                      <div class="field min-w-0 flex-1" :class="{ 'is-invalid': alloc.amountError }">
+                        <span class="field-prefix" aria-hidden="true">$</span>
+                        <input id="alloc-amount" v-model="alloc.amount" inputmode="decimal" placeholder="500" autocomplete="off" enterkeyhint="go"
+                               class="num" :aria-invalid="alloc.amountError ? 'true' : null" aria-describedby="alloc-amount-msg">
+                      </div>
+                      <button type="submit" class="btn btn-secondary min-h-12" :disabled="alloc.loading">Suggest buys</button>
+                    </div>
+                    <p id="alloc-amount-msg" class="field-msg" :class="{ error: alloc.amountError }" aria-live="polite">
+                      <template v-if="alloc.amountError"><svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ alloc.amountError }}</span></template>
+                      <span v-else-if="alloc.applied">Buys that bring each bucket closer to target with <span class="priv priv-soft num">{{ fmt.money(alloc.applied) }}</span>. Nothing gets sold.</span>
+                      <span v-else>Fresh cash only: the suggestion never sells anything.</span>
+                    </p>
+                  </form>
+
+                  <ul class="alloc-list mt-4 px-5" aria-label="Target versus actual weight per bucket">
+                    <li v-for="row in allocRows" :key="row.name" class="alloc-row">
+                      <div class="flex items-baseline justify-between gap-3">
+                        <span class="min-w-0 truncate">
+                          <span class="text-[14px] font-extrabold tracking-tight">{{ row.name }}</span>
+                          <span v-if="row.symbols.length" class="ml-1.5 text-[12px] font-semibold text-ink-3">{{ row.symbols.slice(0, 4).join(' · ') }}<template v-if="row.symbols.length > 4"> +{{ row.symbols.length - 4 }}</template></span>
+                        </span>
+                        <span class="num whitespace-nowrap text-[13px] font-bold">
+                          <span class="text-ink">{{ fmt.pct(row.actual_pct) }}</span>
+                          <span class="text-ink-3"> / {{ fmt.pct(row.target_pct) }}</span>
+                        </span>
+                      </div>
+                      <div class="alloc-track mt-1.5" aria-hidden="true">
+                        <span class="alloc-band" :style="{ left: row.bandL + '%', width: row.bandW + '%' }"></span>
+                        <span class="alloc-fill" :class="row.breach ? row.direction : 'ok'" :style="{ width: row.actualW + '%' }"></span>
+                        <span class="alloc-target" :style="{ left: row.targetW + '%' }"></span>
+                      </div>
+                      <div class="mt-1 flex items-center justify-between gap-2 text-[12px] font-semibold">
+                        <span class="alloc-drift num" :class="row.breach ? row.direction : 'ok'">
+                          <svg class="icon icon-xs"><use :href="!row.breach ? '#i-check' : row.direction === 'over' ? '#i-up' : '#i-down'"/></svg>
+                          {{ row.driftText }} · {{ row.flag || 'within band' }}
+                        </span>
+                        <span class="num text-ink-3 priv priv-soft">{{ fmt.money(row.value_usd) }}</span>
+                      </div>
+                      <p v-if="row.lockedNote" class="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-ink-3">
+                        <svg class="icon icon-xs"><use href="#i-lock"/></svg>
+                        <span><span class="priv priv-soft num">{{ fmt.money(row.locked_usd) }}</span> {{ row.lockedNote }}</span>
+                      </p>
+                    </li>
+                  </ul>
+                  <p class="legend-note px-5 pt-2">Bar: actual weight · white tick: target · shaded: the ±{{ alloc.data.tolerance_pp }} pp band where nothing needs doing.</p>
+                  <p v-if="alloc.data.unassigned && alloc.data.unassigned.usd > 0" class="px-5 pt-1 text-[12px] font-semibold text-ink-3">
+                    <span class="priv priv-soft num">{{ fmt.money(alloc.data.unassigned.usd) }}</span> sits in no bucket ({{ alloc.data.unassigned.symbols.slice(0, 5).join(', ') }}).
+                  </p>
+
+                  <div v-if="alloc.data.dry_powder && alloc.data.dry_powder.configured" class="mx-4 mt-3 flex items-center gap-3 rounded-2xl bg-surface-2 px-3.5 py-2.5">
+                    <div class="min-w-0 flex-1">
+                      <p class="text-[13px] font-bold">Count dry powder</p>
+                      <p class="text-[12px] text-ink-3"><span class="priv priv-soft num">{{ fmt.money(alloc.data.dry_powder.usd) }}</span> set aside, {{ alloc.includeDry ? 'counted in' : 'left out of' }} the weights</p>
+                    </div>
+                    <button type="button" class="switch" role="switch" :aria-checked="alloc.includeDry" aria-label="Count dry powder in the weights" @click="toggleDryPowder"></button>
+                  </div>
+
+                  <div v-if="allocActions.length" class="mt-4">
+                    <div class="flex items-center justify-between px-5">
+                      <h3 class="block-sub">Suggested orders</h3>
+                      <button type="button" class="link-btn hit text-[13px]" style="--hit: -12px -10px" @click="copyAllOrders">Copy all</button>
+                    </div>
+                    <ul class="alloc-orders mx-4 mt-2">
+                      <li v-for="a in allocActions" :key="a.key" class="alloc-order">
+                        <span class="order-side" :class="a.action === 'BUY' ? 'buy' : 'sell'">{{ a.action }}</span>
+                        <span class="min-w-0 flex-1">
+                          <span class="block truncate text-[14px] font-extrabold num priv priv-soft">{{ a.what }}</span>
+                          <span class="block truncate text-[12px] font-semibold text-ink-3" :title="a.note">{{ a.note }}</span>
+                        </span>
+                        <span class="whitespace-nowrap text-[14px] font-extrabold num priv priv-soft">~{{ fmt.money(a.usd) }}</span>
+                        <button type="button" class="icon-btn -mr-2" @click="copyOrder(a)" :aria-label="'Copy order: ' + a.text">
+                          <svg class="icon icon-sm"><use href="#i-copy"/></svg>
+                        </button>
+                      </li>
+                    </ul>
+                    <p class="px-5 pt-2 text-[12px] font-semibold text-ink-3 num">
+                      Volume <span class="priv priv-soft">{{ fmt.money(alloc.data.turnover_usd) }}</span>
+                      · est. fees <span class="priv priv-soft">{{ fmt.money(alloc.data.est_fees_usd) }}</span>
+                      <template v-if="alloc.data.unfilled_usd > 0"> · <span class="priv priv-soft">{{ fmt.money(alloc.data.unfilled_usd) }}</span> cannot move yet (locked)</template>
+                    </p>
+                  </div>
+                </template>
+                <p v-if="allocMessage && !alloc.errors.length" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ allocMessage }}</p>
+                <div class="h-4"></div>
+              </template>
+            </section>
           </template>
 
           <!-- Nothing to analyse yet -->
@@ -476,6 +627,207 @@
           </div>
         </div>
 
+        <!-- ============ Activity: where the money went (Epic M4) ============ -->
+        <div v-show="activeTab === 'activity'" id="panel-activity" role="tabpanel" aria-labelledby="tab-activity">
+          <section aria-labelledby="activity-title" :aria-busy="act.loading">
+            <div class="flex items-center justify-between gap-3 px-1 pt-1">
+              <div class="min-w-0">
+                <h2 id="activity-title" class="section-title">Activity</h2>
+                <p class="section-sub">Money in, out and between your own accounts</p>
+              </div>
+              <label class="period-select">
+                <span class="sr-only">Period</span>
+                <select :value="act.period" @change="setActPeriod($event.target.value)">
+                  <option v-for="p in activityPeriods" :key="p.id" :value="p.id">{{ p.id }}</option>
+                </select>
+                <svg class="icon icon-xs" aria-hidden="true"><use href="#i-chevron"/></svg>
+              </label>
+            </div>
+
+            <!-- Filters: source x kind, each chip with its count; an empty chip is dimmed, never hidden -->
+            <div class="chip-rows mt-3">
+              <div class="chip-row" role="group" aria-label="Filter by source">
+                <button v-for="src in activitySources" :key="src.id" type="button" class="chip"
+                        :aria-pressed="act.source === src.id" :class="{ 'is-empty': actFacet('source', src.id) === 0 }"
+                        @click="setActSource(src.id)">
+                  {{ src.label }}<span v-if="actFacet('source', src.id) !== null" class="chip-count num">{{ actFacet('source', src.id) }}</span>
+                </button>
+              </div>
+              <div class="chip-row" role="group" aria-label="Filter by type">
+                <button v-for="k in activityKinds" :key="k.id" type="button" class="chip" :title="k.hint"
+                        :aria-pressed="act.kind === k.id" :class="{ 'is-empty': actFacet('kind', k.id) === 0 }"
+                        :aria-label="k.label + ' (' + k.hint + ')'" @click="setActKind(k.id)">
+                  <svg class="icon icon-xs" aria-hidden="true"><use :href="k.id === 'deposit' ? '#i-down' : k.id === 'withdrawal' ? '#i-up' : k.id === 'transfer' ? '#i-swap' : '#i-sparkle'"/></svg>
+                  {{ k.label }}<span v-if="actFacet('kind', k.id) !== null" class="chip-count num">{{ actFacet('kind', k.id) }}</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Waiting for a human: unmatched transfers, low-confidence pairings -->
+            <button v-if="act.data && act.data.needs_review && !act.review" type="button" class="review-banner mt-3" @click="setActReview(true)">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-alert"/></svg>
+              <span class="min-w-0 flex-1 text-left">{{ act.data.needs_review }} {{ act.data.needs_review === 1 ? 'transaction needs' : 'transactions need' }} a confirmation</span>
+              <span class="font-extrabold">Review</span>
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-right"/></svg>
+            </button>
+            <div v-if="act.review" class="notice info mt-3" role="status">
+              <svg class="icon icon-sm"><use href="#i-info"/></svg>
+              <span class="min-w-0 flex-1">Only what needs a confirmation. Each answer makes PnL and returns more accurate.</span>
+              <button type="button" class="link-btn hit whitespace-nowrap" style="--hit: -12px -10px" @click="setActReview(false)">Show all</button>
+            </div>
+
+            <ul v-if="actSummary && !act.review && act.items.length" class="bucket-tiles mt-3" aria-label="Totals for the period">
+              <li class="bucket-tile" title="Deposits minus withdrawals; transfers between your own accounts are left out">
+                <span class="block text-[12px] font-semibold text-ink-3">Net deposits · {{ activityPeriod.id }}</span>
+                <span class="pnl num block text-[16px] font-extrabold" :class="actSummary.netTrend"><span class="priv priv-soft">{{ fmt.signedMoney(actSummary.net) }}</span></span>
+              </li>
+              <li class="bucket-tile" title="Simple Earn interest credited over the period">
+                <span class="block text-[12px] font-semibold text-ink-3">Earn interest</span>
+                <span class="pnl num block text-[16px] font-extrabold" :class="actSummary.earned > 0 ? 'up' : 'flat'"><span class="priv priv-soft">{{ fmt.signedMoney(actSummary.earned) }}</span></span>
+              </li>
+            </ul>
+
+            <!-- loading -->
+            <div v-if="act.loading && !act.items.length" class="mt-4 space-y-2" aria-hidden="true">
+              <div class="skeleton h-3.5 w-20"></div>
+              <div class="card">
+                <div v-for="n in 5" :key="n" class="flex items-center gap-3 px-4 py-3.5" :class="{ 'border-t border-line': n > 1 }">
+                  <div class="skeleton size-9 rounded-full"></div>
+                  <div class="flex-1 space-y-2"><div class="skeleton h-3.5 w-24"></div><div class="skeleton h-3 w-36"></div></div>
+                  <div class="space-y-2"><div class="skeleton ml-auto h-3.5 w-16"></div><div class="skeleton ml-auto h-3 w-10"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- error -->
+            <div v-else-if="act.error" class="card mt-4 px-5 py-7 text-center" role="alert">
+              <span class="mx-auto grid size-11 place-items-center rounded-2xl bg-surface-3 text-down"><svg class="icon"><use href="#i-alert"/></svg></span>
+              <p class="mt-3 font-bold">{{ act.error }}</p>
+              <button type="button" class="btn btn-secondary mt-4" @click="reloadActivity">
+                <svg class="icon icon-sm"><use href="#i-refresh"/></svg>Try again
+              </button>
+            </div>
+
+            <template v-else>
+              <!-- timeline, one block per day -->
+              <section v-for="group in actGroups" :key="group.day" class="mt-4" :aria-label="group.label">
+                <h3 class="day-head">{{ group.label }}</h3>
+                <ul class="card flow-list mt-1.5" :class="{ 'is-dim': act.loading }">
+                  <li v-for="item in group.items" :key="item.key" :class="{ 'needs-review': item.needs_review }">
+                    <component :is="item.group ? 'button' : 'div'" class="flow-row" :type="item.group ? 'button' : null"
+                               :aria-expanded="item.group ? !!act.open[item.key] : null"
+                               @click="item.group && toggleEarnDay(item.key)">
+                      <span class="flow-ico" :class="'k-' + item.kind" aria-hidden="true"><svg class="icon icon-sm"><use :href="item.icon"/></svg></span>
+                      <span class="min-w-0 flex-1">
+                        <span class="flex min-w-0 items-center gap-1.5">
+                          <span class="truncate text-[15px] font-extrabold tracking-tight num" :class="{ 'priv priv-soft': !item.group }">{{ item.title }}</span>
+                          <span v-if="item.pending" class="flow-tag warn">Pending</span>
+                          <span v-if="item.reviewText" class="flow-tag review">? {{ item.reviewText }}</span>
+                        </span>
+                        <span class="block truncate text-[13px] font-semibold text-ink-3" :title="item.route">
+                          <span class="sr-only">{{ item.kindLabel }}: </span>{{ item.route }}
+                        </span>
+                      </span>
+                      <span class="flex-none text-right">
+                        <span class="block whitespace-nowrap text-[15px] font-extrabold num priv" :class="'amt-' + item.tone">{{ item.amountText }}</span>
+                        <span class="block whitespace-nowrap text-[12px] font-semibold text-ink-3 num">
+                          <template v-if="item.feeText"><span class="priv priv-soft">{{ item.feeText }}</span> · </template>{{ item.time }}
+                        </span>
+                      </span>
+                      <svg v-if="item.group" class="icon icon-sm flow-chev" :class="{ 'rotate-180': act.open[item.key] }" aria-hidden="true"><use href="#i-chevron"/></svg>
+                    </component>
+
+                    <!-- Earn day, unfolded: one line per asset -->
+                    <transition name="expand">
+                      <ul v-if="item.group && act.open[item.key]" class="flow-detail num" :aria-label="'Earn interest on ' + group.label">
+                        <li v-for="a in item.assets" :key="a.asset">
+                          <span class="coin coin-xs" :style="{ '--hue': fmt.hue(a.asset) }" aria-hidden="true">
+                            <img v-if="coinIcon(a.asset)" :src="coinIcon(a.asset)" alt="" @error="iconFailed[a.asset] = true">
+                            <span v-else>{{ fmt.badge(a.asset) }}</span>
+                          </span>
+                          <span class="min-w-0 flex-1 truncate font-bold">{{ a.asset }}<span v-if="a.count > 1" class="font-semibold text-ink-3"> · {{ a.count }}×</span></span>
+                          <span class="priv priv-soft text-ink-2">+{{ fmt.qty(a.amount) }}</span>
+                          <span class="priv priv-soft w-20 text-right font-bold">{{ fmt.money(a.value_usd) }}</span>
+                        </li>
+                      </ul>
+                    </transition>
+
+                    <!-- Manual confirmation (M4.6) -->
+                    <template v-if="item.needs_review">
+                      <p v-if="item.txShort || item.counterparty_address" class="flow-meta">
+                        <template v-if="item.counterparty_address">to/from <span class="priv priv-soft font-mono" :title="item.counterparty_address">{{ fmt.shortAddress(item.counterparty_address) }}</span></template>
+                        <template v-if="item.txShort"><template v-if="item.counterparty_address"> · </template>tx <span class="priv priv-soft font-mono" :title="item.tx_hash">{{ item.txShort }}</span></template>
+                        <template v-if="item.network"> · {{ item.network }}</template>
+                      </p>
+                      <div class="flow-actions">
+                        <template v-if="item.kind === 'transfer'">
+                          <button type="button" class="btn btn-secondary btn-sm" :disabled="!!act.busy || !item.canPair" @click="confirmPair(item)">
+                            <svg class="icon icon-sm"><use href="#i-check"/></svg>Same transfer
+                          </button>
+                          <button type="button" class="btn btn-ghost btn-sm" :disabled="!!act.busy" @click="markExternal(item)">Not a transfer</button>
+                        </template>
+                        <template v-else>
+                          <button type="button" class="btn btn-secondary btn-sm" :disabled="!!act.busy"
+                                  :aria-expanded="!!(act.match && act.match.id === item.id)" @click="openMatch(item)">
+                            <svg class="icon icon-sm"><use href="#i-wallet"/></svg>My own wallet
+                          </button>
+                          <button type="button" class="btn btn-ghost btn-sm" :disabled="!!act.busy" @click="markExternal(item)">
+                            {{ item.direction === 'out' ? 'Sent outside' : 'From outside' }}
+                          </button>
+                        </template>
+                      </div>
+
+                      <div v-if="act.match && act.match.id === item.id" class="match-box">
+                        <p class="text-[12px] font-bold text-ink-2">Which flow is the other side?</p>
+                        <div v-if="act.match.loading" class="mt-2 space-y-1.5"><div class="skeleton h-12 w-full"></div><div class="skeleton h-12 w-full"></div></div>
+                        <p v-else-if="act.match.error" class="field-msg error"><svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ act.match.error }}</span></p>
+                        <template v-else>
+                          <ul v-if="act.match.list.length" class="mt-2 space-y-1.5">
+                            <li v-for="c in act.match.list" :key="c.id">
+                              <button type="button" class="match-option" :disabled="!!act.busy" @click="pickMatch(item, c)">
+                                <span class="min-w-0 flex-1">
+                                  <span class="block truncate text-[14px] font-bold num"><span class="priv priv-soft">{{ fmt.qty(c.amount) }} {{ c.asset }}</span> · {{ c.direction === 'in' ? c.to : c.from }}</span>
+                                  <span class="block truncate text-[12px] font-semibold text-ink-3 num">
+                                    {{ fmt.fullDate(c.timestamp) }} · {{ c.amount_gap_pct < 0.01 ? 'same amount' : c.amount_gap_pct.toFixed(2) + '% apart' }}
+                                  </span>
+                                </span>
+                                <svg class="icon icon-sm text-ink-3" aria-hidden="true"><use href="#i-chevron-right"/></svg>
+                              </button>
+                            </li>
+                          </ul>
+                          <p v-else class="mt-1 text-[12px] text-ink-3">No opposite {{ item.asset }} flow on your other accounts within 7 days.</p>
+                        </template>
+                        <button type="button" class="btn btn-ghost btn-sm mt-2 w-full" :disabled="!!act.busy" @click="pickMatch(item, null)">
+                          My wallet, but its side is not tracked
+                        </button>
+                      </div>
+                    </template>
+                  </li>
+                </ul>
+              </section>
+
+              <button v-if="act.data && act.data.next_cursor" type="button" class="btn btn-secondary mt-4 w-full"
+                      @click="loadActivity({ append: true })" :disabled="act.loadingMore">
+                <svg v-if="act.loadingMore" class="icon icon-sm spin"><use href="#i-refresh"/></svg>
+                {{ act.loadingMore ? 'Loading…' : 'Show more' }}
+              </button>
+
+              <!-- empty / not synced -->
+              <div v-if="actMessage" class="card mt-4 px-5 py-8 text-center">
+                <span class="mx-auto grid size-11 place-items-center rounded-2xl bg-surface-3" :class="act.review ? 'text-up' : 'text-ink-2'">
+                  <svg class="icon"><use :href="act.review ? '#i-check' : '#i-activity'"/></svg>
+                </span>
+                <p class="mx-auto mt-3 max-w-[340px] text-[14px] font-semibold text-ink-2">{{ actMessage }}</p>
+                <button v-if="act.review" type="button" class="btn btn-secondary mt-4" @click="setActReview(false)">Show all activity</button>
+              </div>
+
+              <p v-if="act.data && act.items.length" class="mt-3 px-1 text-[12px] text-ink-3 num">
+                {{ act.items.length }} of {{ act.data.total }} · {{ activityPeriod.label }}. Synced by the collector with Binance history.
+              </p>
+            </template>
+          </section>
+        </div>
+
         <footer class="mt-10 px-1 text-[12px] leading-relaxed text-ink-3">
           Read-only. Balances from Binance and public RPCs, prices from Binance and DefiLlama.
           Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts™.
@@ -484,7 +836,7 @@
 
       <!-- Bottom tab bar -->
       <nav class="tabbar fixed bottom-0 left-0 right-0 z-30 bg-[#161B22]/90 backdrop-blur-md border-t border-line" aria-label="Sections">
-        <div class="mx-auto grid max-w-[560px] grid-cols-2" role="tablist" aria-label="Sections" @keydown="onTabKeydown">
+        <div class="mx-auto grid max-w-[560px] grid-cols-3" role="tablist" aria-label="Sections" @keydown="onTabKeydown">
           <button id="tab-portfolio" type="button" class="tabbar-btn" role="tab" aria-controls="panel-portfolio"
                   :aria-selected="activeTab === 'portfolio'" :tabindex="activeTab === 'portfolio' ? 0 : -1" @click="setTab('portfolio')">
             <span class="tabbar-ico"><svg class="icon"><use href="#i-pie"/></svg></span>
@@ -494,6 +846,14 @@
                   :aria-selected="activeTab === 'analytics'" :tabindex="activeTab === 'analytics' ? 0 : -1" @click="setTab('analytics')">
             <span class="tabbar-ico"><svg class="icon"><use href="#i-trend"/></svg></span>
             <span class="tabbar-label">Analytics</span>
+          </button>
+          <button id="tab-activity" type="button" class="tabbar-btn" role="tab" aria-controls="panel-activity"
+                  :aria-selected="activeTab === 'activity'" :tabindex="activeTab === 'activity' ? 0 : -1" @click="setTab('activity')">
+            <span class="tabbar-ico">
+              <svg class="icon"><use href="#i-activity"/></svg>
+              <span v-if="act.data && act.data.needs_review" class="tab-badge num" aria-hidden="true">{{ act.data.needs_review > 99 ? '99+' : act.data.needs_review }}</span>
+            </span>
+            <span class="tabbar-label">Activity<span v-if="act.data && act.data.needs_review" class="sr-only">, {{ act.data.needs_review }} to confirm</span></span>
           </button>
         </div>
       </nav>
@@ -708,6 +1068,105 @@
                   </button>
                 </section>
 
+                <!-- Manual assets: cold wallets and anything no API can read (M6) -->
+                <section class="card mt-4 p-4" aria-labelledby="manual-title">
+                  <div class="flex items-center gap-3">
+                    <span class="grid size-10 flex-none place-items-center rounded-xl bg-[#8AB4FF]/12 text-[#8AB4FF]"><svg class="icon"><use href="#i-snow"/></svg></span>
+                    <div class="min-w-0 flex-1">
+                      <h3 id="manual-title" class="font-extrabold">Manual assets &amp; cold wallets</h3>
+                      <p class="text-[12px] font-semibold text-ink-3">Hardware wallets, staking, other exchanges</p>
+                    </div>
+                  </div>
+
+                  <div v-if="settings.manual_errors && settings.manual_errors.length" class="notice mt-3" role="status">
+                    <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                    <div class="min-w-0">
+                      <p class="font-bold">Some entries in config.yaml could not be read and are skipped:</p>
+                      <ul class="mt-1 list-disc space-y-0.5 break-words pl-4 text-[12px] opacity-90">
+                        <li v-for="(e, i) in settings.manual_errors" :key="i">{{ e }}</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <ul class="mt-4 space-y-2" v-if="form.manual.length">
+                    <li v-for="(asset, index) in form.manual" :key="asset.label" class="wallet-card p-3">
+                      <div class="flex items-start gap-2">
+                        <div class="min-w-0 flex-1 pt-0.5">
+                          <p class="flex min-w-0 items-center gap-2">
+                            <span class="truncate font-extrabold">{{ asset.label }}</span>
+                            <span class="kind-badge" :class="'kind-' + asset.kind">{{ manualKindLabel(asset.kind) }}</span>
+                          </p>
+                          <p class="mt-0.5 truncate text-[13px] font-semibold text-ink-2 num priv priv-soft">{{ manualSummary(asset) }}</p>
+                          <p v-if="manualAge(asset)" class="text-[12px] text-ink-3">{{ manualAge(asset) }}</p>
+                        </div>
+                        <button type="button" class="icon-btn" @click="editManual(index)" :aria-label="'Edit ' + asset.label">
+                          <svg class="icon icon-sm"><use href="#i-pencil"/></svg>
+                        </button>
+                        <button type="button" class="btn btn-danger min-h-11" :class="{ 'is-armed': armedManual === index }"
+                                @click="deleteManual(index)" :aria-label="armedManual === index ? 'Confirm delete' : 'Delete ' + asset.label">
+                          <svg class="icon icon-sm"><use href="#i-trash"/></svg>
+                          <span v-if="armedManual === index" class="text-[13px]">Delete?</span>
+                        </button>
+                      </div>
+                      <p v-if="asset.review_hint" class="field-msg warn"><svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ asset.review_hint }}</span></p>
+                    </li>
+                  </ul>
+                  <p v-else-if="!manualDraft" class="mt-4 text-[13px] text-ink-3">Nothing yet. Add the BTC on your hardware wallet, ETH staked with a validator or coins on another exchange: they are priced and counted like everything else.</p>
+
+                  <!-- Manual asset editor -->
+                  <div v-if="manualDraft" class="mt-4 rounded-2xl border border-line bg-surface-2/60 p-3.5" ref="manualEl">
+                    <p class="mb-3 text-[14px] font-extrabold">{{ manualDraft.index === -1 ? 'Add manual asset' : 'Edit ' + (form.manual[manualDraft.index] || {}).label }}</p>
+                    <label class="label" for="manual-label">Name</label>
+                    <div class="field mb-3" :class="{ 'is-invalid': manualDraft.labelError }">
+                      <input id="manual-label" v-model="manualDraft.label" maxlength="40" placeholder="e.g. Ledger, Lido, Kraken" autocomplete="off"
+                             enterkeyhint="next" :aria-invalid="manualDraft.labelError ? 'true' : null">
+                    </div>
+
+                    <p class="label" id="manual-kind-label">Type</p>
+                    <div class="flex flex-wrap gap-2" role="group" aria-labelledby="manual-kind-label">
+                      <button v-for="k in manualKinds" :key="k.id" type="button" class="chain-toggle" style="--chain: #8AB4FF"
+                              :aria-pressed="manualDraft.kind === k.id" @click="manualDraft.kind = k.id">{{ k.label }}</button>
+                    </div>
+
+                    <p class="label mt-4" id="manual-holdings-label">Balances</p>
+                    <ul class="space-y-2" aria-labelledby="manual-holdings-label">
+                      <li v-for="(h, j) in manualDraft.holdings" :key="j" class="holding-row">
+                        <div class="field holding-sym" :class="{ 'is-invalid': h.invalid === 'symbol' || h.invalid === 'duplicate' }">
+                          <input v-model.trim="h.symbol" placeholder="BTC" maxlength="20" autocapitalize="characters" autocomplete="off"
+                                 autocorrect="off" spellcheck="false" :aria-label="'Coin ' + (j + 1)" enterkeyhint="next">
+                        </div>
+                        <div class="field holding-qty" :class="{ 'is-invalid': h.invalid === 'quantity' }">
+                          <input v-model="h.quantity" inputmode="decimal" placeholder="0.00" autocomplete="off" class="num"
+                                 :aria-label="'Quantity of ' + (h.symbol || 'coin ' + (j + 1))" enterkeyhint="done" @keydown.enter.prevent="applyManual">
+                        </div>
+                        <button type="button" class="icon-btn" @click="removeHolding(j)" :disabled="manualDraft.holdings.length === 1"
+                                :aria-label="'Remove ' + (h.symbol || 'this balance')">
+                          <svg class="icon icon-sm"><use href="#i-x"/></svg>
+                        </button>
+                      </li>
+                    </ul>
+                    <button type="button" class="btn btn-ghost mt-2 -ml-2.5" @click="addHolding">
+                      <svg class="icon icon-sm"><use href="#i-plus"/></svg>Add another coin
+                    </button>
+
+                    <p v-if="manualDraft.error" class="field-msg error mt-2" role="alert">
+                      <svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ manualDraft.error }}</span>
+                    </p>
+                    <p class="hint mt-2">Priced from Binance, then DefiLlama. Changing a quantity later is recorded as a deposit or withdrawal, not as profit.</p>
+
+                    <div class="mt-4 grid grid-cols-2 gap-2">
+                      <button type="button" class="btn btn-ghost" @click="cancelManual">Cancel</button>
+                      <button type="button" class="btn btn-secondary" @click="applyManual">
+                        <svg class="icon icon-sm"><use href="#i-check"/></svg>{{ manualDraft.index === -1 ? 'Add to list' : 'Update' }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button v-if="!manualDraft" type="button" class="btn btn-secondary mt-4 w-full" @click="newManual">
+                    <svg class="icon icon-sm"><use href="#i-plus"/></svg>Add manual asset
+                  </button>
+                </section>
+
                 <p class="mt-4 px-1 text-[12px] leading-relaxed text-ink-3">
                   Saved to <span class="break-all font-mono">{{ settings.config_path }}</span> (owner-only permissions; the previous file is kept as <span class="font-mono">.bak</span>). Secrets are never sent back to this page.
                 </p>
@@ -718,8 +1177,8 @@
               <p v-if="saveError" class="field-msg error mb-2 mt-0" role="alert">
                 <svg class="icon icon-xs"><use href="#i-alert"/></svg><span class="min-w-0 break-words">{{ saveError }}</span>
               </p>
-              <button type="button" class="btn btn-primary btn-block" @click="saveSettings" :disabled="!settings || saving || !dirty || !!draft || !!saveBlocker">
-                {{ saving ? 'Saving…' : (draft ? 'Finish the wallet first' : (saveBlocker || (dirty ? 'Save settings' : 'No changes'))) }}
+              <button type="button" class="btn btn-primary btn-block" @click="saveSettings" :disabled="!settings || saving || !dirty || !!draft || !!manualDraft || !!saveBlocker">
+                {{ saving ? 'Saving…' : (draft ? 'Finish the wallet first' : manualDraft ? 'Finish the manual asset first' : (saveBlocker || (dirty ? 'Save settings' : 'No changes'))) }}
               </button>
             </div>
           </div>
@@ -794,6 +1253,14 @@
       </transition>
 
       <div class="toast-wrap" aria-live="polite">
+        <!-- 5 s to take back an Activity confirmation (M4.6 AC3) -->
+        <transition name="toast">
+          <div v-if="act.undo && activeTab === 'activity'" class="toast undo-bar" role="status">
+            <svg class="icon icon-sm"><use href="#i-check"/></svg>
+            <span class="min-w-0 flex-1">{{ act.undo.text }}</span>
+            <button type="button" class="link-btn hit" style="--hit: -14px -12px" @click="undoConfirm">Undo</button>
+          </div>
+        </transition>
         <transition name="toast">
           <div v-if="toast" class="toast" :class="toast.kind" :key="toast.id" role="status">
             <svg class="icon icon-sm"><use :href="toast.kind === 'error' ? '#i-alert' : '#i-check'"/></svg>

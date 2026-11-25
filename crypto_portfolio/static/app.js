@@ -8,11 +8,14 @@
  *   GET  /api/analytics/quant     Analytics: TWR, base 100 vs BTC/ETH, max drawdown, volatility
  *   GET  /api/analytics/allocation  target vs actual weights + suggested orders (?contribution=)
  *   POST /api/settings/allocation   the Allocation assistant's ON/OFF switch
+ *   GET  /api/cash-flows            Activity timeline: deposits, withdrawals, transfers, Earn by day
+ *   GET  /api/cash-flows/{id}/candidates, PATCH /api/cash-flows/{id}   manual transfer confirmation
  *
- * Two sections behind a bottom tab bar: Portfolio (glance: total, chart, assets) and Analytics
- * (attribution, performance, risk), both driven by one period selector. Sections are kept
- * mounted (v-show) so charts survive a switch; they are re-fitted when their section shows.
- *   GET/POST /api/settings (+ test-binance, test-wallet) for the settings sheet
+ * Three sections behind a bottom tab bar: Portfolio (glance: total, chart, assets), Analytics
+ * (attribution, performance, risk, allocation; one period selector) and Activity (the cash-flow
+ * timeline, fetched the first time the tab opens). Sections are kept mounted (v-show) so charts
+ * survive a switch; they are re-fitted when their section shows.
+ *   GET/POST /api/settings (+ test-binance, test-wallet) for the settings sheet, manual assets included
  */
 (function () {
   'use strict';
@@ -36,7 +39,7 @@
     { id: 'binance', label: 'Binance', hint: 'Spot + Simple Earn + Funding' },
     { id: 'onchain', label: 'On-chain', hint: 'Every configured wallet and chain' },
   ];
-  const SOURCE_ORDER = ['binance_spot', 'binance_earn', 'binance_funding', 'onchain'];
+  const SOURCE_ORDER = ['binance_spot', 'binance_earn', 'binance_funding', 'onchain', 'manual'];
   const BINANCE_SOURCES = ['binance_spot', 'binance_earn', 'binance_funding'];
   const CHAIN_COLORS = {
     ethereum: '#7B93F0', bsc: '#F0B90B', arbitrum: '#28A0F0',
@@ -56,8 +59,45 @@
   const SCRUB_HOLD_MS = 130;       // a finger resting this long on the chart starts scrubbing
   const SCRUB_SLOP_PX = 8;         // ...or one that moved this far sideways first
   const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab',
-    period: 'portfolio.analytics.period' };
-  const SECTIONS = ['portfolio', 'analytics'];
+    period: 'portfolio.analytics.period', actPeriod: 'portfolio.activity.period',
+    actSource: 'portfolio.activity.source', actKind: 'portfolio.activity.kind' };
+  const SECTIONS = ['portfolio', 'analytics', 'activity'];
+  const SECTION_TITLES = { portfolio: 'Portfolio', analytics: 'Analytics', activity: 'Activity' };
+  // Activity tab (M4): look-back, then two independent filters (source x kind) with counts.
+  const ACTIVITY_PERIODS = [
+    { id: '30D', days: 30, label: 'past 30 days' },
+    { id: '90D', days: 90, label: 'past 90 days' },
+    { id: '1Y', days: 365, label: 'past year' },
+    { id: 'ALL', days: 0, label: 'all history' },
+  ];
+  const ACTIVITY_SOURCES = [
+    { id: 'all', label: 'All' },
+    { id: 'binance', label: 'Binance' },
+    { id: 'onchain', label: 'On-chain' },
+  ];
+  const ACTIVITY_KINDS = [
+    { id: 'deposit', label: 'Nạp', hint: 'Deposits' },
+    { id: 'withdrawal', label: 'Rút', hint: 'Withdrawals' },
+    { id: 'transfer', label: 'Chuyển', hint: 'Transfers between your own accounts' },
+    { id: 'reward', label: 'Earn', hint: 'Simple Earn interest' },
+  ];
+  // Direction is always carried by an arrow or a sign, never by colour alone (M4.4 AC3).
+  const KIND_META = {
+    deposit: { icon: '#i-down', label: 'Deposit' },
+    withdrawal: { icon: '#i-up', label: 'Withdrawal' },
+    transfer: { icon: '#i-swap', label: 'Transfer' },
+    reward: { icon: '#i-sparkle', label: 'Earn' },
+    fee: { icon: '#i-up', label: 'Fee' },
+  };
+  const CHANNEL_LABELS = { fiat: 'Bank', fiat_payment: 'Card', p2p: 'P2P', onchain: 'On-chain', manual: 'Manual', earn: 'Earn' };
+  const ACTIVITY_PAGE = 50;
+  const UNDO_MS = 5000;
+  const MANUAL_KINDS = [
+    { id: 'cold_wallet', label: 'Cold wallet' },
+    { id: 'staking', label: 'Staking' },
+    { id: 'other', label: 'Other' },
+  ];
+  const SYMBOL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/;
   // One period drives the whole Analytics section. `why` is the attribution window
   // (GET /api/portfolio/attribution, at most 365d); `quant` the period of
   // GET /api/analytics/quant, which works on daily closes and so needs two of them at least.
@@ -243,7 +283,7 @@
 
       // sections: the app always opens on Portfolio (a one-second glance)
       const activeTab = ref('portfolio');
-      const tabScroll = { portfolio: 0, analytics: 0 };   // each section keeps its own scroll position
+      const tabScroll = { portfolio: 0, analytics: 0, activity: 0 };   // each section keeps its own scroll position
 
       // Analytics: one period for attribution, performance and risk
       const periodId = ref(ANALYTICS_PERIODS.some((p) => p.id === storage.get(STORE.period)) ? storage.get(STORE.period) : '30D');
@@ -262,6 +302,22 @@
       let underwaterChart = null;
       let insightChartsStale = false;   // data arrived while Analytics was hidden: draw on show
 
+      // Activity tab (M4): fetched the first time the tab opens, then on every filter change
+      const pick = (list, key, fallback) => (list.some((x) => x.id === storage.get(key)) ? storage.get(key) : fallback);
+      const act = reactive({
+        data: null, items: [], loading: false, loadingMore: false, error: '', loaded: false,
+        period: pick(ACTIVITY_PERIODS, STORE.actPeriod, '90D'),
+        source: pick(ACTIVITY_SOURCES, STORE.actSource, 'all'),
+        kind: storage.get(STORE.actKind) && ACTIVITY_KINDS.some((k) => k.id === storage.get(STORE.actKind)) ? storage.get(STORE.actKind) : 'all',
+        review: false,
+        open: {},       // Earn days expanded, by item key
+        match: null,    // { id, loading, list, error }: candidate list open under one item
+        busy: null,     // id of the flow being confirmed
+        undo: null,     // { text, id } for UNDO_MS after a confirmation
+      });
+      let actSeq = 0;
+      let undoTimer = null;
+
       // "Why it moved" peek sheet, opened from the 24h chip
       const peek = reactive({ open: false, data: null, loading: false, error: '' });
       const peekSheet = ref(null);
@@ -277,7 +333,7 @@
       // settings state
       const settingsOpen = ref(false);
       const settings = ref(null);
-      const form = reactive({ binance: { enabled: true, api_key: '', api_secret: '', clear: false }, wallets: [] });
+      const form = reactive({ binance: { enabled: true, api_key: '', api_secret: '', clear: false }, wallets: [], manual: [] });
       const baseline = ref('');
       const showKey = ref(false);
       const showSecret = ref(false);
@@ -287,6 +343,9 @@
       const draft = ref(null);
       const draftError = ref('');
       const armedDelete = ref(-1);
+      const manualDraft = ref(null);
+      const armedManual = ref(-1);
+      const manualBaseline = ref('');
 
       // template refs
       const chartWrap = ref(null);
@@ -294,6 +353,7 @@
       const sheet = ref(null);
       const sheetClose = ref(null);
       const draftEl = ref(null);
+      const manualEl = ref(null);
 
       let chart = null;
       let series = null;
@@ -902,16 +962,230 @@
         }
       }
 
+      // -- activity (Epic M4) --------------------------------------------------------
+      const activityPeriod = computed(() => ACTIVITY_PERIODS.find((p) => p.id === act.period) || ACTIVITY_PERIODS[1]);
+
+      async function loadActivity({ append = false } = {}) {
+        if (append && !(act.data && act.data.next_cursor)) return;
+        const seq = ++actSeq;   // a slower answer for filters the user already left is dropped
+        if (append) act.loadingMore = true; else act.loading = true;
+        const params = new URLSearchParams({
+          days: String(activityPeriod.value.days), source: act.source, type: act.kind,
+          limit: String(ACTIVITY_PAGE), tz_offset: String(-new Date().getTimezoneOffset()),
+        });
+        if (act.review) params.set('review', 'true');
+        if (append) params.set('cursor', act.data.next_cursor);
+        try {
+          const data = await api('/api/cash-flows?' + params.toString());
+          if (seq !== actSeq) return;
+          act.items = append ? [...act.items, ...data.items] : data.items;
+          act.data = data;
+          act.error = '';
+          act.loaded = true;
+        } catch (error) {
+          if (seq !== actSeq) return;
+          handleError(error, { silent: true });
+          if (!append) { act.data = null; act.items = []; }
+          act.error = error.status === 401 ? '' : 'Could not load the activity: ' + error.message;
+        } finally {
+          if (seq === actSeq) { act.loading = false; act.loadingMore = false; }
+        }
+      }
+
+      function reloadActivity() {
+        act.match = null;
+        loadActivity();
+      }
+
+      function setActPeriod(id) {
+        if (act.period === id || !ACTIVITY_PERIODS.some((p) => p.id === id)) return;
+        act.period = id;
+        storage.set(STORE.actPeriod, id);
+        reloadActivity();
+      }
+
+      function setActSource(id) {
+        if (act.source === id) return;
+        act.source = id;
+        storage.set(STORE.actSource, id);
+        reloadActivity();
+      }
+
+      // Kind chips work like radio buttons that can be switched off again: tap the active one for all.
+      function setActKind(id) {
+        act.kind = act.kind === id ? 'all' : id;
+        storage.set(STORE.actKind, act.kind);
+        reloadActivity();
+      }
+
+      function setActReview(on) {
+        if (act.review === on) return;
+        act.review = on;
+        reloadActivity();
+        if (on) nextTick(() => window.scrollTo({ top: 0 }));
+      }
+
+      function toggleEarnDay(key) {
+        act.open[key] = !act.open[key];
+      }
+
+      async function openMatch(item) {
+        if (act.match && act.match.id === item.id) { act.match = null; return; }
+        const current = { id: item.id, loading: true, list: [], error: '' };
+        act.match = current;
+        try {
+          const data = await api(`/api/cash-flows/${item.id}/candidates`);
+          if (act.match && act.match.id === item.id) act.match.list = data.candidates || [];
+        } catch (error) {
+          handleError(error, { silent: true });
+          if (act.match && act.match.id === item.id) act.match.error = error.status === 401 ? '' : error.message;
+        } finally {
+          if (act.match && act.match.id === item.id) act.match.loading = false;
+        }
+      }
+
+      async function confirmFlow(item, body, text) {
+        if (act.busy) return;
+        act.busy = item.id;
+        try {
+          await api(`/api/cash-flows/${item.id}`, { method: 'PATCH', body });
+          act.match = null;
+          await loadActivity();
+          clearTimeout(undoTimer);
+          act.undo = { text, id: item.id };
+          undoTimer = setTimeout(() => { act.undo = null; }, UNDO_MS);
+        } catch (error) {
+          handleError(error);   // nothing was changed server-side: the row keeps its old state
+        } finally {
+          act.busy = null;
+        }
+      }
+
+      function markExternal(item) {
+        const text = item.kind === 'transfer' ? 'Marked as not a transfer'
+          : item.direction === 'out' ? 'Marked as sent outside' : 'Marked as received from outside';
+        confirmFlow(item, { is_internal_transfer: false }, text);
+      }
+
+      // `candidate` null: "it went to one of my wallets, but its other side is not tracked".
+      function pickMatch(item, candidate) {
+        confirmFlow(item, { is_internal_transfer: true, matched_flow_id: candidate ? candidate.id : null },
+          candidate ? 'Paired as one transfer' : 'Marked as a move to your own wallet');
+      }
+
+      function confirmPair(item) {
+        confirmFlow(item, { is_internal_transfer: true, matched_flow_id: item.partner_id }, 'Transfer confirmed');
+      }
+
+      async function undoConfirm() {
+        const undo = act.undo;
+        if (!undo) return;
+        clearTimeout(undoTimer);
+        act.undo = null;
+        try {
+          await api(`/api/cash-flows/${undo.id}`, { method: 'PATCH', body: { reset: true } });
+          await loadActivity();
+          showToast('Undone');
+        } catch (error) {
+          handleError(error);
+        }
+      }
+
+      const localDay = (ms) => new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+      function dayLabel(day, today, yesterday) {
+        if (day === today) return 'Today';
+        if (day === yesterday) return 'Yesterday';
+        const d = new Date(day + 'T12:00:00');
+        const opts = { weekday: 'short', month: 'short', day: 'numeric' };
+        if (d.getFullYear() !== new Date().getFullYear()) { opts.year = 'numeric'; delete opts.weekday; }
+        return d.toLocaleDateString(undefined, opts);
+      }
+
+      function presentFlow(item) {
+        const meta = KIND_META[item.kind] || KIND_META.deposit;
+        const isTransfer = item.kind === 'transfer';
+        const out = item.direction === 'out';
+        const tone = isTransfer ? 'flat' : out ? 'down' : 'up';
+        const channel = item.channel === 'crypto' ? (item.network || '') : (CHANNEL_LABELS[item.channel] || '');
+        const time = new Date(item.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        let title;
+        let route;
+        if (item.group) {
+          const n = item.assets.length;
+          title = 'Earn';
+          route = n === 1 ? `${fmt.qty(item.assets[0].amount)} ${item.assets[0].asset}` : `${n} assets`;
+          if (item.count > n) route += ` · ${item.count} payouts`;
+        } else {
+          title = `${fmt.qty(item.amount)} ${item.asset}`;
+          if (isTransfer) route = `${item.from} → ${item.to}`;
+          else if (item.kind === 'reward') route = 'Earn reward';
+          else if (out) route = item.to && item.to !== 'External' ? `${meta.label} → ${item.to}` : [meta.label, channel].filter(Boolean).join(' · ');
+          else route = item.from && item.from !== 'External' ? `${meta.label} from ${item.from}` : [meta.label, channel].filter(Boolean).join(' · ');
+        }
+        const sign = isTransfer ? '' : out ? '−' : '+';
+        const value = num(item.value_usd);
+        return {
+          ...item, icon: meta.icon, kindLabel: meta.label, tone, title, route, time,
+          amountText: value > 0 ? sign + fmt.money(value) : (isTransfer ? '' : 'No price'),
+          feeText: num(item.fee_usd) >= 0.01 ? '−' + fmt.money(item.fee_usd) + ' fee' : '',
+          pending: item.status === 'pending',
+          reviewText: !item.needs_review ? '' : isTransfer ? 'Check pairing' : 'Unmatched',
+          canPair: isTransfer && !!item.partner_id,
+          txShort: item.tx_hash ? fmt.shortAddress(item.tx_hash, 6) : '',
+          sr: `${meta.label}, ${title}, ${route}${value > 0 ? ', ' + sign + fmt.money(value) : ''}`,
+        };
+      }
+
+      const actGroups = computed(() => {
+        const now = Date.now();
+        const today = localDay(now);
+        const yesterday = localDay(now - 86400000);
+        const groups = [];
+        for (const item of act.items) {
+          let group = groups[groups.length - 1];
+          if (!group || group.day !== item.day) {
+            group = { day: item.day, label: dayLabel(item.day, today, yesterday), items: [] };
+            groups.push(group);
+          }
+          group.items.push(presentFlow(item));
+        }
+        return groups;
+      });
+
+      const actFacet = (axis, id) => {
+        const facets = act.data && act.data.facets;
+        return facets && facets[axis] ? num(facets[axis][id]) : null;
+      };
+
+      const actSummary = computed(() => {
+        const d = act.data;
+        if (!d) return null;
+        const net = num(d.net_external_usd);
+        return { net, netTrend: trendOf(net), earned: num(d.earned_usd) };
+      });
+
+      const actMessage = computed(() => {
+        if (act.error || act.loading || !act.data) return '';
+        if (act.items.length) return '';
+        if (act.review) return 'Nothing waits for a confirmation. Every transfer is matched.';
+        if (!act.data.synced) return 'Binance history is not synced yet. The collector (`python main.py record`) pulls up to 5 years of deposits, withdrawals and Earn interest after each snapshot.';
+        const filtered = act.source !== 'all' || act.kind !== 'all';
+        return `No activity in the ${activityPeriod.value.label}${filtered ? ' for these filters' : ''}.`;
+      });
+
       // -- sections ------------------------------------------------------------
       function setTab(tab) {
         if (SECTIONS.includes(tab)) activeTab.value = tab;
       }
 
-      // Left/right arrows move between the two tabs (WAI-ARIA tabs pattern).
+      // Left/right arrows cycle through the tabs, Home/End jump to the ends (WAI-ARIA tabs pattern).
       function onTabKeydown(event) {
-        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        const at = SECTIONS.indexOf(activeTab.value);
+        const moves = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: SECTIONS.length - 1 };
+        if (!(event.key in moves)) return;
         event.preventDefault();
-        const next = SECTIONS[(SECTIONS.indexOf(activeTab.value) + 1) % SECTIONS.length];
+        const next = SECTIONS[(moves[event.key] + SECTIONS.length) % SECTIONS.length];
         setTab(next);
         nextTick(() => { const el = document.getElementById('tab-' + next); if (el) el.focus(); });
       }
@@ -925,6 +1199,7 @@
             if (chart) chart.timeScale().fitContent();
             return;
           }
+          if (tab !== 'analytics') return;
           if (insightChartsStale) { drawInsightCharts(); return; }
           if (benchChart) benchChart.timeScale().fitContent();
           if (underwaterChart) underwaterChart.timeScale().fitContent();
@@ -940,6 +1215,8 @@
             && portfolio.value.origin !== 'empty') {
           loadAnalytics();
         }
+        // Activity is fetched only when first opened, so it never slows down the Portfolio load.
+        if (tab === 'activity' && !act.loaded && !act.loading) loadActivity();
         refitCharts(tab);
       });
 
@@ -1000,6 +1277,7 @@
           loadAnalytics();
           peek.data = null;   // a new snapshot changes the 24h story
           if (peek.open) loadPeek();
+          if (act.loaded) loadActivity();   // an edited manual quantity is a new flow
           if (!silent) {
             const failed = portfolio.value.errors.length;
             showToast(failed ? `Updated, but ${failed} ${failed === 1 ? 'source' : 'sources'} failed` : 'Balances updated',
@@ -1239,9 +1517,15 @@
       }
 
       // -- settings ------------------------------------------------------------
+      const manualSnapshot = () => JSON.stringify(form.manual.map((a) => ({
+        label: a.label, kind: a.kind,
+        holdings: a.holdings.map((h) => ({ symbol: h.symbol, quantity: num(h.quantity), price_id: h.price_id || '',
+          price_usd: h.price_usd ?? null, liquid: h.liquid !== false })),
+      })));
       const formSnapshot = () => JSON.stringify({
         binance: { ...form.binance },
         wallets: form.wallets.map((w) => ({ name: w.name, address: w.address, chains: [...w.chains] })),
+        manual: manualSnapshot(),
       });
       const dirty = computed(() => settings.value !== null && formSnapshot() !== baseline.value);
 
@@ -1252,6 +1536,14 @@
         form.binance.api_secret = '';
         form.binance.clear = false;
         form.wallets = data.wallets.map((w) => ({ name: w.name, address: w.address, type: w.type, chains: [...w.chains] }));
+        form.manual = (data.manual_assets || []).map((a) => ({
+          label: a.label, kind: a.kind, updated_at: a.updated_at, age_days: a.age_days, review_hint: a.review_hint,
+          holdings: a.holdings.map((h) => ({ symbol: h.symbol, quantity: num(h.quantity), price_id: h.price_id || '',
+            price_usd: h.price_usd ?? null, liquid: h.liquid !== false })),
+        }));
+        manualBaseline.value = manualSnapshot();
+        manualDraft.value = null;
+        armedManual.value = -1;
         baseline.value = formSnapshot();
         binanceTest.state = 'idle';
         binanceTest.result = null;
@@ -1296,7 +1588,7 @@
       // Keep Tab inside an open sheet.
       function trapFocus(event, container) {
         if (event.key !== 'Tab' || !container) return;
-        const focusable = [...container.querySelectorAll('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+        const focusable = [...container.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
           .filter((el) => el.offsetParent !== null);
         if (!focusable.length) return;
         const first = focusable[0];
@@ -1306,7 +1598,7 @@
       }
 
       async function saveSettings() {
-        if (!settings.value || saving.value || draft.value || saveBlocker.value) return;
+        if (!settings.value || saving.value || draft.value || manualDraft.value || saveBlocker.value) return;
         saving.value = true;
         saveError.value = '';
         const b = form.binance;
@@ -1318,6 +1610,9 @@
           },
           wallets: form.wallets.map((w) => ({ name: w.name, address: w.address, chains: w.chains })),
         };
+        // Only when edited: an entry config.yaml has but cannot parse (see manual_errors) must not
+        // be dropped by a save that was about something else.
+        if (manualSnapshot() !== manualBaseline.value) body.manual_assets = JSON.parse(manualSnapshot());
         try {
           const data = await api('/api/settings', { method: 'POST', body });
           populateForm(data);
@@ -1325,7 +1620,7 @@
           showToast('Settings saved');
           historyCache.clear();
           await loadPortfolio().catch((error) => handleError(error, { silent: true }));
-          if (data.binance.configured || data.wallets.length) refresh();
+          if (data.binance.configured || data.wallets.length || (data.manual_assets || []).length) refresh();
         } catch (error) {
           if (error.status === 401) { handleError(error); return; }
           saveError.value = error.message;
@@ -1590,6 +1885,121 @@
         }
       }
 
+      // manual assets (M6): balances no API can read - a hardware wallet, a validator, another exchange
+      const manualKindLabel = (id) => (MANUAL_KINDS.find((k) => k.id === id) || MANUAL_KINDS[2]).label;
+      const manualSummary = (asset) => asset.holdings.map((h) => `${fmt.qty(h.quantity)} ${h.symbol}`).join(' · ') || 'No balances';
+      const manualAge = (asset) => {
+        if (asset.age_days === null || asset.age_days === undefined) return '';
+        return asset.age_days === 0 ? 'updated today' : `updated ${asset.age_days} d ago`;
+      };
+
+      async function focusManual(selector = 'input') {
+        await nextTick();
+        if (!manualEl.value) return;
+        manualEl.value.scrollIntoView({ block: 'nearest' });
+        const input = manualEl.value.querySelector(selector);
+        if (input) input.focus({ preventScroll: true });
+      }
+
+      const blankHolding = (symbol = '') => ({ symbol, quantity: '', price_id: '', price_usd: null, liquid: true, invalid: '' });
+
+      function newManual() {
+        armedManual.value = -1;
+        manualDraft.value = { index: -1, label: '', kind: 'cold_wallet', holdings: [blankHolding('BTC')], error: '', labelError: false };
+        focusManual();
+      }
+
+      function editManual(index) {
+        const a = form.manual[index];
+        armedManual.value = -1;
+        manualDraft.value = {
+          index, label: a.label, kind: a.kind, error: '', labelError: false,
+          holdings: a.holdings.map((h) => ({ ...h, quantity: String(h.quantity), invalid: '' })),
+        };
+        focusManual('.holding-qty input');
+      }
+
+      function cancelManual() {
+        manualDraft.value = null;
+      }
+
+      function addHolding() {
+        const d = manualDraft.value;
+        if (!d) return;
+        d.holdings.push(blankHolding());
+        focusManual('.holding-row:last-child input');
+      }
+
+      function removeHolding(index) {
+        const d = manualDraft.value;
+        if (d) d.holdings.splice(index, 1);
+      }
+
+      // "0,85" and "1 000.5" are what a phone keypad or a copy from a wallet app produce.
+      const parseQty = (value) => {
+        const text = String(value ?? '').trim().replace(/\s/g, '').replace(',', '.');
+        return text === '' ? NaN : Number(text);
+      };
+
+      function applyManual() {
+        const d = manualDraft.value;
+        if (!d) return;
+        d.error = '';
+        d.labelError = false;
+        const label = d.label.trim();
+        if (!label) { d.error = 'Give it a name, e.g. Ledger or Lido.'; d.labelError = true; focusManual('#manual-label'); return; }
+        if (form.manual.some((a, i) => i !== d.index && a.label.toLowerCase() === label.toLowerCase())) {
+          d.error = `"${label}" is already in the list. Names must be unique.`;
+          d.labelError = true;
+          focusManual('#manual-label');
+          return;
+        }
+        const seen = new Set();
+        let firstBad = -1;
+        d.holdings.forEach((h, i) => {
+          const symbol = h.symbol.trim().toUpperCase();
+          const qty = parseQty(h.quantity);
+          h.invalid = !SYMBOL_RE.test(symbol) ? 'symbol'
+            : seen.has(symbol) ? 'duplicate'
+              : !Number.isFinite(qty) || qty < 0 ? 'quantity' : '';
+          seen.add(symbol);
+          if (h.invalid && firstBad === -1) firstBad = i;
+        });
+        if (!d.holdings.length) { d.error = 'Add at least one balance.'; return; }
+        if (firstBad !== -1) {
+          const bad = d.holdings[firstBad];
+          d.error = bad.invalid === 'symbol' ? 'Enter a ticker such as BTC (letters and digits).'
+            : bad.invalid === 'duplicate' ? `${bad.symbol.trim().toUpperCase()} is listed twice.`
+              : 'Enter a quantity of 0 or more, e.g. 0.85.';
+          focusManual(`.holding-row:nth-child(${firstBad + 1}) ${bad.invalid === 'quantity' ? '.holding-qty ' : ''}input`);
+          return;
+        }
+        const previous = d.index === -1 ? null : form.manual[d.index];
+        const entry = {
+          label, kind: d.kind,
+          updated_at: previous ? previous.updated_at : null,
+          age_days: previous ? previous.age_days : null,
+          review_hint: previous ? previous.review_hint : null,
+          holdings: d.holdings.map((h) => ({ symbol: h.symbol.trim().toUpperCase(), quantity: parseQty(h.quantity),
+            price_id: h.price_id || '', price_usd: h.price_usd ?? null, liquid: h.liquid !== false })),
+        };
+        if (d.index === -1) form.manual.push(entry);
+        else form.manual.splice(d.index, 1, entry);
+        manualDraft.value = null;
+      }
+
+      function deleteManual(index) {
+        clearTimeout(armTimer);
+        if (armedManual.value === index) {
+          form.manual.splice(index, 1);
+          armedManual.value = -1;
+          if (manualDraft.value && manualDraft.value.index === index) manualDraft.value = null;
+          return;
+        }
+        armedManual.value = index;
+        armTimer = setTimeout(() => { armedManual.value = -1; }, 3500);
+      }
+
       // -- lifecycle -----------------------------------------------------------
       const onScroll = () => { scrolled.value = window.scrollY > 4; };
       const onVisible = () => {
@@ -1622,6 +2032,7 @@
         document.removeEventListener('touchstart', noop);
         document.removeEventListener('visibilitychange', onVisible);
         clearInterval(tickTimer);
+        clearTimeout(undoTimer);
         destroyChart();
         destroyInsightCharts();
       });
@@ -1632,7 +2043,11 @@
         iconFailed, toast, scrolled, locked, unlockToken, unlockError, unlocking,
         heroParts, heroChange, heroTrend, scrubLabel, rangeChange, rangeLabel, chartMessage, updatedAgo,
         visibleAssets, valueCol, emptyTitle, emptyHint,
-        activeTab, setTab, onTabKeydown,
+        activeTab, setTab, onTabKeydown, sectionTitles: SECTION_TITLES,
+        act, activityPeriods: ACTIVITY_PERIODS, activitySources: ACTIVITY_SOURCES, activityKinds: ACTIVITY_KINDS,
+        activityPeriod, actGroups, actFacet, actSummary, actMessage, loadActivity, reloadActivity,
+        setActPeriod, setActSource, setActKind, setActReview, toggleEarnDay,
+        openMatch, markExternal, pickMatch, confirmPair, undoConfirm,
         periods: ANALYTICS_PERIODS, periodId, analyticsPeriod, setPeriod,
         why, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
         insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
@@ -1640,7 +2055,7 @@
         setAllocMode, applyContribution, toggleDryPowder, copyOrder, copyAllOrders,
         peek, peekSheet, peekClose, peekReady, peekTrend, peekSpan, peekSpanNote, peekBuckets, peekRows, peekMessage,
         openPeek, closePeek, peekToAnalytics, onPeekKeydown,
-        chartWrap, chartEl, sheet, sheetClose, draftEl,
+        chartWrap, chartEl, sheet, sheetClose, draftEl, manualEl,
         refresh, setRange, togglePrivacy, toggleAsset, coinIcon, onChartDown, onChartMove, onChartRelease, onChartLeave, unlock,
         settingsOpen, settings, form, showKey, showSecret, saving, saveError, binanceTest, dirty,
         binanceStatus, canTestBinance, envBinanceNames, permissionList,
@@ -1648,6 +2063,8 @@
         openSettings, closeSettings, onSheetKeydown, saveSettings, testBinance, clearBinance,
         draft, draftError, draftKind, armedDelete, chainColor, chainShort, chainAllowed,
         toggleChain, newWallet, editWallet, cancelDraft, applyDraft, deleteWallet, testWallet,
+        manualKinds: MANUAL_KINDS, manualDraft, armedManual, manualKindLabel, manualSummary, manualAge,
+        newManual, editManual, cancelManual, addHolding, removeHolding, applyManual, deleteManual,
       };
     },
   });

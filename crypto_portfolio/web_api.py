@@ -60,6 +60,7 @@ from models import (
     Holding,
     Portfolio,
 )
+from services.activity import ActivityError, activity_report, confirm_flow, reset_flow, transfer_candidates
 from services.analytics.allocation import allocation_report
 from services.analytics.attribution import (
     MAX_WINDOW_HOURS,
@@ -143,6 +144,14 @@ class SettingsIn(BaseModel):
 
 class AllocationToggleIn(BaseModel):
     enabled: bool
+
+
+class CashFlowPatchIn(BaseModel):
+    is_internal_transfer: bool = False
+    # True: forget the user's decision (the "Undo" of the Activity tab), back to automatic
+    reset: bool = False
+    matched_flow_id: int | None = Field(default=None, ge=1)
+    note: str | None = Field(default=None, max_length=200)
 
 
 class TestBinanceIn(BaseModel):
@@ -578,6 +587,51 @@ def create_app(
             except OSError as exc:
                 raise HTTPException(500, f"Cannot write {path.name}: {exc}") from exc
         return {**allocation_status(config()), "saved": True}
+
+    # -- activity (Epic M4) ---------------------------------------------------------
+    @app.get("/api/cash-flows")
+    def cash_flows_timeline(
+        days: int = Query(90, ge=0, le=36500, description="Look-back window in days; 0 = everything"),
+        source: Literal["all", "binance", "onchain", "manual"] = Query("all"),
+        type: Literal["all", "deposit", "withdrawal", "transfer", "reward", "fee"] = Query("all"),
+        asset: str = Query("", max_length=20, pattern=r"^[A-Za-z0-9._-]*$"),
+        review: bool = Query(False, description="Only the items waiting for a confirmation"),
+        cursor: str | None = Query(None, max_length=80, description="`next_cursor` of the previous page"),
+        limit: int = Query(50, ge=1, le=200),
+        tz_offset: int = Query(0, ge=-14 * 60, le=14 * 60,
+                               description="Viewer's clock in minutes east of UTC; sets the Earn day edges"),
+    ):
+        """Deposits, withdrawals, internal transfers and Earn rewards, newest first.
+
+        A paired transfer is one `kind=transfer` item; Earn rewards are one item per day. Reads
+        SQLite only (`cash_flows`, filled by the collector's Binance sync), never the network.
+        """
+        cfg = config()
+        try:
+            return activity_report(Database(cfg.db_path), settings=cfg.cash_flow_settings, days=days,
+                                   source=source, kind=type, asset=asset, review=review, cursor=cursor,
+                                   limit=limit, tz_offset=tz_offset)
+        except ActivityError as exc:
+            raise HTTPException(exc.status, exc.message) from exc
+
+    @app.get("/api/cash-flows/{flow_id}/candidates")
+    def cash_flow_candidates(flow_id: int):
+        """Flows that could be the other leg of this deposit/withdrawal, best match first."""
+        try:
+            return transfer_candidates(Database(config().db_path), flow_id)
+        except ActivityError as exc:
+            raise HTTPException(exc.status, exc.message) from exc
+
+    @app.patch("/api/cash-flows/{flow_id}")
+    def cash_flow_confirm(flow_id: int, body: CashFlowPatchIn):
+        """The user's verdict: internal transfer (optionally paired) or external. Undo = the opposite."""
+        try:
+            if body.reset:
+                return reset_flow(Database(config().db_path), flow_id)
+            return confirm_flow(Database(config().db_path), flow_id, internal=body.is_internal_transfer,
+                                matched_flow_id=body.matched_flow_id, note=body.note)
+        except ActivityError as exc:
+            raise HTTPException(exc.status, exc.message) from exc
 
     # -- settings ------------------------------------------------------------------
     def settings_payload(cfg: Config) -> dict:
