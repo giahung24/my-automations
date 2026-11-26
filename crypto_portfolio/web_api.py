@@ -42,6 +42,7 @@ from config import (
     ManualAsset,
     ManualHolding,
     _normalize_wallets,
+    keep_unmanaged_keys,
     parse_allocation,
     parse_manual_assets,
     resolve_linked_wallet,
@@ -135,7 +136,8 @@ class ManualHoldingIn(BaseModel):
 class ManualAssetIn(BaseModel):
     label: str = Field(min_length=1, max_length=40)
     kind: Literal["cold_wallet", "staking", "other"] = "cold_wallet"
-    # label of a configured wallet that is the same device (shown together); None/"" = standalone
+    # label of a configured wallet that is the same device (shown together); None/"" = standalone.
+    # Left out of the request entirely = keep the stored link (see `_manual_section`).
     linked_wallet: str | None = Field(default=None, max_length=40)
     holdings: list[ManualHoldingIn] = Field(default_factory=list, max_length=50)
 
@@ -979,9 +981,17 @@ def _manual_section(assets: list[ManualAssetIn], existing, wallet_labels=None) -
     asset saved untouched keeps its date, so the staking reminder is not reset by accident.
     A `linked_wallet` must name one of `wallet_labels` (422 otherwise) and is stored with the
     wallet's own spelling.
+
+    The block is rebuilt from the request, so nothing stored may be lost by omission: an asset
+    whose request leaves `linked_wallet` out keeps its stored link (an explicit null or "" still
+    unlinks), and keys the form does not manage are carried over (`keep_unmanaged_keys`).
     """
     wallet_labels = list(wallet_labels or [])
     previous = {asset.label.casefold(): asset for asset in parse_manual_assets(existing)[0]}
+    previous_raw = {}
+    for entry in existing if isinstance(existing, list) else []:
+        if isinstance(entry, dict) and isinstance(entry.get("label"), str):
+            previous_raw.setdefault(entry["label"].strip().casefold(), entry)
     today = datetime.now(timezone.utc).date().isoformat()
     section, seen = [], set()
     for item in assets:
@@ -1004,16 +1014,21 @@ def _manual_section(assets: list[ManualAssetIn], existing, wallet_labels=None) -
         same = old is not None and {(x.symbol, x.quantity) for x in old.holdings} == \
             {(x.symbol, x.quantity) for x in holdings}
         updated_at = old.updated_at if same and old.updated_at else ("" if same else today)
+        stored = previous_raw.get(label.casefold())
+        wanted = item.linked_wallet
+        if "linked_wallet" not in item.model_fields_set and isinstance(stored, dict):
+            wanted = stored.get("linked_wallet") if isinstance(stored.get("linked_wallet"), str) else None
         linked = ""
-        if item.linked_wallet and item.linked_wallet.strip():
-            linked = resolve_linked_wallet(item.linked_wallet, wallet_labels) or ""
+        if wanted and wanted.strip():
+            linked = resolve_linked_wallet(wanted, wallet_labels) or ""
             if not linked:
                 known = ", ".join(f"'{name}'" for name in wallet_labels) or "none configured"
                 raise HTTPException(422, f"Manual asset '{label}' is linked to wallet "
-                                         f"'{item.linked_wallet.strip()}', which is not configured "
+                                         f"'{wanted.strip()}', which is not configured "
                                          f"(wallets: {known}).")
-        section.append(ManualAsset(label=label, kind=item.kind, holdings=tuple(holdings),
-                                   updated_at=updated_at, linked_wallet=linked).to_raw())
+        entry = ManualAsset(label=label, kind=item.kind, holdings=tuple(holdings),
+                            updated_at=updated_at, linked_wallet=linked).to_raw()
+        section.append(keep_unmanaged_keys(entry, stored))
     return section
 
 

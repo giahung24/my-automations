@@ -287,6 +287,33 @@ class ManualAsset:
         return entry
 
 
+# The keys `ManualAsset.to_raw` writes. Anything else in a `manual_assets` entry (a hand-written
+# note, a field added by a newer version) is not ours to drop: `keep_unmanaged_keys` carries it.
+MANUAL_ASSET_KEYS = frozenset({"label", "kind", "linked_wallet", "updated_at", "holdings"})
+MANUAL_HOLDING_KEYS = frozenset({"symbol", "quantity", "price_id", "price_usd", "liquid"})
+
+
+def keep_unmanaged_keys(entry: dict, previous) -> dict:
+    """`entry` (a `to_raw()` dict) plus every key of `previous` - the stored raw entry for the same
+    asset - that `to_raw` does not write; holdings are matched by symbol. A rewrite then drops only
+    what was edited, never a field this code does not know about."""
+    if not isinstance(previous, dict):
+        return entry
+    for key, value in previous.items():
+        if key not in MANUAL_ASSET_KEYS and key not in entry:
+            entry[key] = value
+    old_holdings = {}
+    for holding in previous.get("holdings") or []:
+        if isinstance(holding, dict) and isinstance(holding.get("symbol"), str):
+            old_holdings.setdefault(holding["symbol"].strip().upper(), holding)
+    for holding in entry.get("holdings", []):
+        old = old_holdings.get(holding["symbol"])
+        for key, value in (old or {}).items():
+            if key not in MANUAL_HOLDING_KEYS and key not in holding:
+                holding[key] = value
+    return entry
+
+
 def _number(value) -> float | None:
     """A finite float, or None. Booleans are not numbers here (`quantity: yes` is a typo)."""
     if isinstance(value, bool) or value is None:
