@@ -10,17 +10,21 @@ the last live fetch or the newest SQLite snapshot and never touches the network;
 `POST /api/portfolio/refresh` and the two `test-*` endpoints call Binance or an RPC.
 
 Access control: when PORTFOLIO_WEB_TOKEN (or `settings.web_token` in config.yaml) is set,
-every /api route except /api/auth needs it - as a `portfolio_token` cookie (set by opening
-`/?token=<it>` once, or by the app's unlock screen), an `Authorization: Bearer` header or an
-`X-Portfolio-Token` header. Without a token the API is open to whoever can reach the port,
+every /api route except /api/auth needs it - as an `Authorization: Bearer` header, an
+`X-Portfolio-Token` header, or the `portfolio_session` cookie the app's unlock screen gets from
+`POST /api/auth`. The cookie is a signed, expiring session, never the token itself, and wrong
+credentials are rate limited per client. Without a token the API is open to whoever can reach the port,
 which is why `serve` binds 127.0.0.1 unless told otherwise.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import re
 import secrets
 import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -80,8 +84,11 @@ from services.resample import TooManyBuckets, resample
 
 STATIC_DIR = ROOT / "static"
 BINANCE_SOURCES = (BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING)
-TOKEN_COOKIE = "portfolio_token"
-TOKEN_COOKIE_MAX_AGE = 365 * 86400
+SESSION_COOKIE = "portfolio_session"
+SESSION_MAX_AGE = 90 * 86400
+LEGACY_TOKEN_COOKIE = "portfolio_token"  # older builds stored the raw token here; cleared on sight
+AUTH_FAILURE_LIMIT = 20       # wrong credentials per client ...
+AUTH_FAILURE_WINDOW = 300.0   # ... within this many seconds, then 429 until the window slides
 TEST_TIMEOUT = 15  # seconds; a settings-screen check should fail fast, not hang the UI
 MASK = "****"
 # A staking balance untouched this long has probably grown with rewards (M6.4 AC3).
@@ -178,6 +185,68 @@ class AuthIn(BaseModel):
 def auth_token(config: Config) -> str:
     """The access token guarding the API, or "" when the API is open."""
     return (os.environ.get("PORTFOLIO_WEB_TOKEN") or str(config.settings.get("web_token") or "")).strip()
+
+
+def sign_session(token: str, *, now: float | None = None, max_age: int = SESSION_MAX_AGE) -> str:
+    """A session cookie value: `v1.<expiry>.<HMAC-SHA256(token, expiry)>`.
+
+    Stateless, so sessions survive a restart; keyed by the access token, so changing the token
+    signs every device out. A leaked cookie expires and does not hand over the token itself
+    (short of brute-forcing a weak one offline - use a long random token).
+    """
+    expires = int((time.time() if now is None else now) + max_age)
+    return f"v1.{expires}.{_session_mac(token, expires)}"
+
+
+def session_valid(value: str, token: str, *, now: float | None = None) -> bool:
+    version, _, rest = (value or "").partition(".")
+    expires, _, mac = rest.partition(".")
+    if version != "v1" or not expires.isascii() or not expires.isdigit() or not mac.isascii():
+        return False
+    if int(expires) <= (time.time() if now is None else now):
+        return False
+    return hmac.compare_digest(mac, _session_mac(token, int(expires)))
+
+
+def _session_mac(token: str, expires: int) -> str:
+    return hmac.new(token.encode("utf-8"), f"portfolio-session:{expires}".encode("ascii"),
+                    hashlib.sha256).hexdigest()
+
+
+class FailureLimiter:
+    """Counts wrong credentials per client in a sliding window; in memory, bounded."""
+
+    def __init__(self, limit: int = AUTH_FAILURE_LIMIT, window: float = AUTH_FAILURE_WINDOW,
+                 max_clients: int = 4096):
+        self.limit, self.window, self.max_clients = limit, window, max_clients
+        self._failures: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def retry_after(self, client: str) -> int:
+        """Seconds this client must wait before presenting credentials again; 0 = go ahead."""
+        now = time.monotonic()
+        with self._lock:
+            recent = self._recent(client, now)
+            if len(recent) < self.limit:
+                return 0
+            return max(1, int(recent[0] + self.window - now) + 1)
+
+    def record(self, client: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            recent = self._recent(client, now)
+            if not recent and len(self._failures) >= self.max_clients:
+                self._failures.clear()  # flood of distinct clients: forget rather than grow
+            recent.append(now)
+            self._failures[client] = recent
+
+    def _recent(self, client: str, now: float) -> list[float]:
+        recent = [t for t in self._failures.get(client, ()) if t > now - self.window]
+        if recent:
+            self._failures[client] = recent
+        else:
+            self._failures.pop(client, None)
+        return recent
 
 
 def mask_secret(value: str) -> str:
@@ -369,6 +438,7 @@ def create_app(
     app.state.http_session_factory = http_session_factory
     app.state.refresh_lock = threading.Lock()
     app.state.settings_lock = threading.Lock()
+    app.state.auth_failures = FailureLimiter()
     app.state.live = None  # (Portfolio, snapshot_id) of the last successful live refresh
 
     def config() -> Config:
@@ -388,17 +458,26 @@ def create_app(
         return factory() if factory else None
 
     # -- access control ----------------------------------------------------------
-    def _presented_token(request: Request) -> str:
+    def _header_token(request: Request) -> str:
         header = request.headers.get("authorization", "")
         if header.lower().startswith("bearer "):
             return header[7:].strip()
-        return request.headers.get("x-portfolio-token") or request.cookies.get(TOKEN_COOKIE) or ""
+        return request.headers.get("x-portfolio-token") or ""
 
-    def _token_cookie(response, token: str, request: Request) -> None:
-        response.set_cookie(
-            TOKEN_COOKIE, token, max_age=TOKEN_COOKIE_MAX_AGE, httponly=True,
-            samesite="strict", secure=request.url.scheme == "https", path="/",
-        )
+    def _same(presented: str, expected: str) -> bool:
+        return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+    def _client(request: Request) -> str:
+        return request.client.host if request.client else "unknown"
+
+    def _too_many(retry_after: int) -> JSONResponse:
+        return JSONResponse({"detail": "Too many wrong attempts. Try again in a few minutes."},
+                            status_code=429, headers={"Retry-After": str(retry_after)})
+
+    def _drop_cookies(response, request: Request) -> None:
+        for name in (SESSION_COOKIE, LEGACY_TOKEN_COOKIE):
+            if name in request.cookies:
+                response.delete_cookie(name, path="/")
 
     @app.middleware("http")
     async def require_token(request: Request, call_next):
@@ -408,19 +487,43 @@ def create_app(
                 expected = auth_token(config())
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-            if expected and not secrets.compare_digest(_presented_token(request), expected):
-                return JSONResponse({"detail": "Locked: enter the access token."}, status_code=401)
+            if expected:
+                header = _header_token(request)
+                cookie = request.cookies.get(SESSION_COOKIE, "")
+                if header or cookie:
+                    client = _client(request)
+                    wait = app.state.auth_failures.retry_after(client)
+                    if wait:
+                        return _too_many(wait)
+                    if not (_same(header, expected) if header else session_valid(cookie, expected)):
+                        app.state.auth_failures.record(client)
+                        header = cookie = ""
+                if not (header or cookie):
+                    response = JSONResponse({"detail": "Locked: enter the access token."}, status_code=401)
+                    _drop_cookies(response, request)  # a dead session must not be re-sent (and re-counted)
+                    return response
         return await call_next(request)
 
     @app.post("/api/auth")
     def authenticate(body: AuthIn, request: Request):
-        """Trade the access token for an HttpOnly cookie (the unlock screen calls this)."""
+        """Trade the access token for an HttpOnly session cookie (the unlock screen calls this)."""
         expected = auth_token(config())
-        if expected and not secrets.compare_digest(body.token.strip(), expected):
+        if not expected:
+            return JSONResponse({"ok": True, "required": False})
+        client = _client(request)
+        wait = app.state.auth_failures.retry_after(client)
+        if wait:
+            return _too_many(wait)
+        if not _same(body.token.strip(), expected):
+            app.state.auth_failures.record(client)
             raise HTTPException(401, "Wrong access token.")
-        response = JSONResponse({"ok": True, "required": bool(expected)})
-        if expected:
-            _token_cookie(response, expected, request)
+        response = JSONResponse({"ok": True, "required": True})
+        response.set_cookie(
+            SESSION_COOKIE, sign_session(expected), max_age=SESSION_MAX_AGE, httponly=True,
+            samesite="strict", secure=request.url.scheme == "https", path="/",
+        )
+        if LEGACY_TOKEN_COOKIE in request.cookies:
+            response.delete_cookie(LEGACY_TOKEN_COOKIE, path="/")
         return response
 
     @app.get("/api/health")
@@ -892,13 +995,11 @@ def create_app(
     no_cache = {"Cache-Control": "no-cache"}
 
     @app.get("/", include_in_schema=False)
-    def index(request: Request, token: str | None = None):
-        if token is not None:  # `/?token=...` bookmark: swap it for a cookie, drop it from the URL
-            expected = auth_token(config())
-            response = RedirectResponse("/", status_code=303)
-            if expected and secrets.compare_digest(token.strip(), expected):
-                _token_cookie(response, expected, request)
-            return response
+    def index(token: str | None = None):
+        if token is not None:
+            # `/?token=...` no longer unlocks anything (a token in a URL ends up in access logs
+            # and browser history); an old bookmark is just sent to the unlock screen.
+            return RedirectResponse("/", status_code=303)
         return FileResponse(static_dir / "index.html", headers=no_cache)
 
     @app.get("/sw.js", include_in_schema=False)

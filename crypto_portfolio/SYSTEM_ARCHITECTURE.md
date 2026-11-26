@@ -228,7 +228,7 @@ CREATE INDEX idx_assets_symbol   ON snapshot_assets(symbol);
 | `GET/POST /api/settings` | ❌ | Credential được **mask** (`abcd****wxyz`, `****wxyz`). POST merge vào `config.yaml` (giữ `chains`, `settings`, `tokens` của từng ví), kiểm tra địa chỉ EVM/Solana và tập chain hợp lệ. |
 | `POST /api/settings/test-binance` | ✅ | `apiRestrictions`: cảnh báo nếu key có quyền trade/withdraw/futures hoặc không giới hạn IP. Dịch mã lỗi Binance sang câu dễ hiểu. |
 | `POST /api/settings/test-wallet` | ✅ | Đọc native balance song song trên từng chain đã chọn, định giá qua DefiLlama. |
-| `POST /api/auth` | ❌ | Đổi token lấy cookie. |
+| `POST /api/auth` | ❌ | Đổi token lấy cookie phiên đã ký (có rate limit). |
 | `GET /api/health`, `/api/docs` | ❌ | Swagger UI nằm **sau** middleware token. |
 
 **`change_since` (biến động 24h):** chọn snapshot tham chiếu là *snapshot mới nhất ≤ now−24h*, nếu
@@ -243,12 +243,18 @@ không cần restart.
 - Token = `PORTFOLIO_WEB_TOKEN` (env) hoặc `settings.web_token`.
 - Áp dụng cho mọi `/api/*` trừ `/api/auth`. **App shell (`/`, `/static/*`) luôn public**: shell
   public, dữ liệu private.
-- Chấp nhận `Authorization: Bearer <t>`, `X-Portfolio-Token: <t>`, hoặc cookie `portfolio_token`
-  (HttpOnly, SameSite=Strict, `Secure` khi chạy https, sống 365 ngày).
-- `/?token=<t>`: đặt cookie rồi **303 redirect về `/`** để token không nằm lại trên URL/lịch sử.
-- So sánh bằng `secrets.compare_digest`.
-- **Không có token thì API mở hoàn toàn.** `main.py serve` in cảnh báo khi bind khác loopback
-  mà không có token.
+- Chấp nhận `Authorization: Bearer <t>`, `X-Portfolio-Token: <t>`, hoặc cookie phiên
+  `portfolio_session` (HttpOnly, SameSite=Strict, `Secure` khi chạy https, sống 90 ngày).
+- Cookie phiên **không chứa token**: giá trị là `v1.<hết hạn>.<HMAC-SHA256(token, hết hạn)>`. Không
+  cần lưu trạng thái (restart không mất phiên); đổi token là mọi thiết bị bị đăng xuất. Cookie cũ
+  `portfolio_token` (chứa token gốc) không còn được chấp nhận và bị xoá khi gặp.
+- `/?token=<t>` **đã bỏ** (token trên URL lọt vào access log và lịch sử trình duyệt): chỉ còn
+  303 về `/`, không đặt cookie. Mở khoá bằng màn hình unlock (`POST /api/auth`).
+- Rate limit credential sai (`FailureLimiter`): 20 lần / 5 phút / client, sau đó **429** kèm
+  `Retry-After` cho mọi request có kèm credential. Request không kèm credential không bị tính.
+- So sánh bằng `secrets.compare_digest` / `hmac.compare_digest`.
+- **Không có token thì API mở hoàn toàn**, nên `main.py serve` **từ chối khởi động** khi bind
+  khác loopback mà chưa đặt token (`python -m uvicorn web_api:app` không có chốt chặn này).
 
 #### 2.4.2 Frontend (`static/index.html`, `static/app.js`, `static/style.css`)
 
@@ -456,11 +462,11 @@ số. Còn T1 dù lộ cũng không cho phép di chuyển tiền (với điều 
 
 | ID | Mức | Phát hiện | Khuyến nghị |
 |---|---|---|---|
-| **SEC-1** | 🔴 **P0** | `web_api` chạy `0.0.0.0:8088` **không có `web_token`**: `GET /api/settings` và `/api/portfolio` trả **200** khi không có token [đã kiểm chứng]. Bất kỳ thiết bị nào trong LAN (hoặc container Docker) đều đọc được số dư và có thể `POST /api/settings` để **thay Binance key / danh sách ví** (đầu độc dữ liệu). | Đặt `PORTFOLIO_WEB_TOKEN` (≥ 32 byte ngẫu nhiên) ngay. Bind `192.168.1.66` thay vì `0.0.0.0` để Docker bridge không chạm tới. Lâu dài: cho `serve` **từ chối** bind non-loopback khi không có token (hiện chỉ cảnh báo). |
-| SEC-2 | 🟠 P1 | Tiến trình 8088 được khởi động **ad-hoc** qua `systemd-run` scope (từ một agent), không phải unit bền vững: reboot là mất dashboard, và không có sandbox như gateway. | Tạo `deploy/crypto-web.service` (user unit), sandbox tương đương gateway, `EnvironmentFile=` chứa token. |
+| **SEC-1** | 🔴 **P0** | `web_api` chạy `0.0.0.0:8088` **không có `web_token`**: `GET /api/settings` và `/api/portfolio` trả **200** khi không có token [đã kiểm chứng]. Bất kỳ thiết bị nào trong LAN (hoặc container Docker) đều đọc được số dư và có thể `POST /api/settings` để **thay Binance key / danh sách ví** (đầu độc dữ liệu). | Đặt `PORTFOLIO_WEB_TOKEN` (≥ 32 byte ngẫu nhiên) ngay. Bind `192.168.1.66` thay vì `0.0.0.0` để Docker bridge không chạm tới. Lâu dài: cho `serve` **từ chối** bind non-loopback khi không có token (hiện chỉ cảnh báo). <br>**Cập nhật 2026-11-26:** phần code đã xong (`serve` từ chối bind, cookie phiên đã ký, rate limit, bỏ `/?token=`). **Còn lại trên máy chủ:** đặt token, chuyển sang `127.0.0.1` + `tailscale serve`. |
+| SEC-2 | 🟠 P1 | Tiến trình 8088 được khởi động **ad-hoc** qua `systemd-run` scope (từ một agent), không phải unit bền vững: reboot là mất dashboard, và không có sandbox như gateway. | Tạo `deploy/crypto-web.service` (user unit), sandbox tương đương gateway, `EnvironmentFile=` chứa token. <br>**Cập nhật 2026-11-26:** unit đã có trong repo (token đọc từ `.env`). **Còn lại:** cài và bật trên máy chủ. |
 | SEC-3 | 🟠 P1 | `api_gateway.py`, `deploy/`, `test_api_gateway.py` **chưa được commit** (untracked). | Commit (không commit `.env.gateway`, vốn đã nằm trong `.gitignore`). |
-| SEC-4 | 🟡 P2 | `portfolio_history.db` mode **0644**: user khác trên host đọc được lịch sử tài sản. | `chmod 600`. `Database.__init__` nên tạo file với `umask 077`. |
-| SEC-5 | 🟡 P2 | Dashboard chạy HTTP thuần trên LAN: token/cookie đi plaintext, và SW không đăng ký được. | Đưa dashboard vào Cloudflare Tunnel thứ hai + **Cloudflare Access** (SSO/OTP), hoặc dùng Tailscale/WireGuard. Cookie sẽ tự bật `Secure` khi chạy https. |
+| SEC-4 | 🟡 P2 | `portfolio_history.db` mode **0644**: user khác trên host đọc được lịch sử tài sản. | `chmod 600`. `Database.__init__` nên tạo file với `umask 077`. <br>**Cập nhật 2026-11-26:** `Database` tạo file 0600 và tự siết file cũ (kèm `-wal`/`-shm`) ở lần mở kế tiếp. |
+| SEC-5 | 🟡 P2 | Dashboard chạy HTTP thuần trên LAN: token/cookie đi plaintext, và SW không đăng ký được. | Đưa dashboard vào Cloudflare Tunnel thứ hai + **Cloudflare Access** (SSO/OTP), hoặc dùng Tailscale/WireGuard. Cookie sẽ tự bật `Secure` khi chạy https. <br>**Cập nhật 2026-11-26:** chọn hướng `tailscale serve` (HTTPS trong tailnet); phương án Cloudflare nằm ở [`AUTH_SPEC.md`](AUTH_SPEC.md), để dành. |
 | SEC-6 | 🟢 P3 | `/api/docs` (Swagger) có tồn tại dù nằm sau token. | Tắt khi bind non-loopback. |
 | SEC-7 | 🟢 P3 | RPC public thấy địa chỉ ví + IP nhà. | Dùng RPC riêng (Alchemy/Infura) qua `chains.<name>.rpcs`, hoặc đi qua proxy. |
 
@@ -554,4 +560,5 @@ số. Còn T1 dù lộ cũng không cho phép di chuyển tiền (với điều 
 | `api_gateway.py` | gateway public read-only |
 | `static/` | `index.html`, `app.js`, `style.css`, `sw.js`, `manifest.json`, `vendor/`, `fonts/`, `icons/`, `coins/` |
 | `deploy/crypto-api-gateway.service` | systemd user unit cho gateway |
+| `deploy/crypto-web.service` | systemd user unit cho dashboard (loopback, sau `tailscale serve`) |
 | `test_all.py`, `test_api.py`, `test_api_gateway.py` | 147 test, offline |

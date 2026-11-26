@@ -1,0 +1,34 @@
+# User unit for the web dashboard (`main.py serve`, 127.0.0.1:8088, behind `tailscale serve`).
+#
+# The process binds loopback only; Tailscale terminates HTTPS and is the only way in:
+#     sudo tailscale serve --bg 8088        # https://<machine>.<tailnet>.ts.net -> 127.0.0.1:8088
+# HTTPS is what lets the PWA register its service worker and marks the session cookie Secure.
+#
+# Access token: put  PORTFOLIO_WEB_TOKEN=<long random>  in the project's .env (mode 0600,
+# git-ignored; config.py loads it). Generate one with:
+#     python -c 'import secrets; print(secrets.token_urlsafe(32))'
+#
+# Install:  cp deploy/crypto-web.service ~/.config/systemd/user/
+#           systemctl --user daemon-reload && systemctl --user enable --now crypto-web
+#           loginctl enable-linger "$USER"     # once: keep user units running without a login
+[Unit]
+Description=Crypto portfolio web dashboard (PWA + JSON API, tailnet only)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jean/projects/my-automations/crypto_portfolio
+ExecStart=/home/jean/projects/my-automations/crypto_portfolio/.venv/bin/python main.py serve --host 127.0.0.1 --port 8088
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# config.yaml (settings screen), portfolio_history.db (+ -wal/-shm) and charts/ live here.
+ReadWritePaths=/home/jean/projects/my-automations/crypto_portfolio
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=default.target

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 import time
@@ -186,3 +187,17 @@ def test_readonly_reader_does_not_block_the_collector(db):
         reader.execute("COMMIT")
         reader.close()
     assert Database(db).count() == 2
+
+
+# -- file mode -------------------------------------------------------------------------
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_database_file_is_private(tmp_path):
+    path = tmp_path / "new.db"
+    Database(path)
+    assert path.stat().st_mode & 0o777 == 0o600
+
+    wide = tmp_path / "wide.db"
+    Database(wide)
+    wide.chmod(0o644)
+    Database(wide)                                  # an existing world-readable file is tightened
+    assert wide.stat().st_mode & 0o777 == 0o600

@@ -630,28 +630,76 @@ def test_token_locks_the_api_but_not_the_shell(tmp_path, monkeypatch):
     assert client.get("/api/portfolio", headers={"Authorization": "Bearer nope"}).status_code == 401
 
 
-def test_auth_endpoint_sets_a_cookie(tmp_path, monkeypatch):
+def test_auth_endpoint_sets_a_session_cookie_that_is_not_the_token(tmp_path, monkeypatch):
     monkeypatch.setenv("PORTFOLIO_WEB_TOKEN", "letmein")
     client = make_client(tmp_path)
     assert client.post("/api/auth", json={"token": "wrong"}).status_code == 401
     response = client.post("/api/auth", json={"token": "letmein"})
     assert response.status_code == 200
-    cookie = response.headers["set-cookie"].lower()
-    assert "httponly" in cookie and "samesite=strict" in cookie
+    cookie = response.headers["set-cookie"]
+    assert "httponly" in cookie.lower() and "samesite=strict" in cookie.lower()
+    assert cookie.startswith("portfolio_session=v1.") and "letmein" not in cookie
     assert client.get("/api/settings").json()["auth_required"] is True
 
 
-def test_token_in_url_becomes_a_cookie_and_leaves_the_url(tmp_path, monkeypatch):
+def test_session_expires_and_dies_with_the_token():
+    now = 1_000_000.0
+    session = web_api.sign_session("letmein", now=now)
+    assert web_api.session_valid(session, "letmein", now=now + web_api.SESSION_MAX_AGE - 1)
+    assert not web_api.session_valid(session, "letmein", now=now + web_api.SESSION_MAX_AGE + 1)
+    assert not web_api.session_valid(session, "rotated", now=now)          # new token: signed out
+    version, expires, mac = session.split(".")
+    assert not web_api.session_valid(f"{version}.{int(expires) + 9999}.{mac}", "letmein", now=now)
+    for junk in ("", "letmein", "v1", "v1..", "v2.1.x", "v1.abc.def", "v1.99999999999.é"):
+        assert not web_api.session_valid(junk, "letmein", now=now), junk
+
+
+def test_raw_token_cookie_no_longer_unlocks_and_is_cleared(tmp_path, monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_WEB_TOKEN", "letmein")
+    client = make_client(tmp_path)
+    for name in ("portfolio_token", "portfolio_session"):                   # legacy cookie; forged session
+        response = client.get("/api/portfolio", headers={"Cookie": f"{name}=letmein"})
+        assert response.status_code == 401, name
+        assert f'{name}="";' in response.headers["set-cookie"] or f"{name}=;" in response.headers["set-cookie"]
+
+
+def test_token_in_url_no_longer_unlocks(tmp_path, monkeypatch):
     monkeypatch.setenv("PORTFOLIO_WEB_TOKEN", "letmein")
     client = make_client(tmp_path)
     response = client.get("/?token=letmein", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/"
-    assert "portfolio_token=letmein" in response.headers["set-cookie"]
-    assert client.get("/api/portfolio").status_code == 200
+    assert "set-cookie" not in response.headers
+    assert client.get("/api/portfolio").status_code == 401
 
-    fresh = make_client(tmp_path)
-    bad = fresh.get("/?token=nope", follow_redirects=False)
-    assert bad.status_code == 303 and "set-cookie" not in bad.headers
+
+def test_wrong_credentials_are_rate_limited(tmp_path, monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_WEB_TOKEN", "letmein")
+    client = make_client(tmp_path)
+    client.app.state.auth_failures = web_api.FailureLimiter(limit=3, window=60)
+    good = {"Authorization": "Bearer letmein"}
+    assert client.post("/api/auth", json={"token": "nope"}).status_code == 401
+    assert client.get("/api/portfolio", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert client.get("/api/portfolio", headers=good).status_code == 200    # successes are never counted
+    assert client.get("/api/portfolio").status_code == 401                  # nor is "no credentials"
+    assert client.get("/api/portfolio", headers={"Cookie": "portfolio_session=v1.1.x"}).status_code == 401
+
+    blocked = client.post("/api/auth", json={"token": "letmein"})           # third strike: locked out
+    assert blocked.status_code == 429 and int(blocked.headers["retry-after"]) >= 1
+    assert "set-cookie" not in blocked.headers
+    assert client.get("/api/portfolio", headers=good).status_code == 429
+    assert client.get("/").status_code == 200                               # the shell stays up
+
+
+def test_failure_limiter_window_slides(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(web_api.time, "monotonic", lambda: clock[0])
+    limiter = web_api.FailureLimiter(limit=2, window=60)
+    limiter.record("a")
+    clock[0] += 30
+    limiter.record("a")
+    assert limiter.retry_after("a") == 31 and limiter.retry_after("b") == 0
+    clock[0] += 31                                                          # the first strike aged out
+    assert limiter.retry_after("a") == 0
 
 
 def test_token_from_config_file(tmp_path):
@@ -673,17 +721,39 @@ def test_cli_serve_parses_and_launches_uvicorn(tmp_path, monkeypatch, capsys):
     launched = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: launched.update(app=app, **kw))
     cfg = write_config(tmp_path / "config.yaml")
+    monkeypatch.setenv("PORTFOLIO_WEB_TOKEN", "t" * 32)
     assert cli.main(["serve", "--config", str(cfg), "--host", "0.0.0.0", "--port", "8181", "--min-value", "0"]) == 0
     assert launched["host"] == "0.0.0.0" and launched["port"] == 8181
     assert launched["app"].state.config_path == cfg
     assert launched["app"].state.min_value == 0.0
-    assert "without an access token" in capsys.readouterr().err    # LAN exposure is called out
 
     launched.clear()
+    monkeypatch.delenv("PORTFOLIO_WEB_TOKEN")
     assert cli.main(["serve", "--config", str(cfg)]) == 0
     assert launched["host"] == "127.0.0.1" and launched["port"] == 8080
     assert launched["app"].state.min_value is None                   # config value, re-read per request
-    assert "without an access token" not in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.66", "100.64.0.1", "::", "myhost.ts.net"])
+def test_cli_serve_refuses_a_reachable_address_without_a_token(tmp_path, monkeypatch, capsys, host):
+    import uvicorn
+
+    launched = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: launched.update(app=app, **kw))
+    cfg = write_config(tmp_path / "config.yaml")
+    assert cli.main(["serve", "--config", str(cfg), "--host", host]) == 1
+    assert not launched and "without an access token" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "localhost", "::1"])
+def test_cli_serve_allows_loopback_without_a_token(tmp_path, monkeypatch, host):
+    import uvicorn
+
+    launched = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: launched.update(app=app, **kw))
+    assert cli.main(["serve", "--config", str(write_config(tmp_path / "config.yaml")), "--host", host]) == 0
+    assert launched["host"] == host
 
 
 def test_module_level_app_for_uvicorn_cli():

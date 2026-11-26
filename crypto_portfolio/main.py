@@ -16,6 +16,7 @@ Add `--min-value 0` to any command to disable the $1.00 dust filter.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import sys
 
@@ -272,6 +273,15 @@ def _portfolio_from_db(database, min_value: float):
     return portfolio_from_db(database, min_value)
 
 
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def cmd_serve(args, config) -> int:
     """Run the mobile web dashboard: FastAPI JSON API + the PWA in ./static."""
     try:
@@ -282,13 +292,17 @@ def cmd_serve(args, config) -> int:
         return 1
     from web_api import auth_token, create_app
 
-    if args.host not in ("127.0.0.1", "localhost", "::1") and not auth_token(config):
+    if not _is_loopback(args.host) and not auth_token(config):
         print(
-            f"warning: serving on {args.host} without an access token - anyone on this network can\n"
-            "  read your balances and change your settings. Set PORTFOLIO_WEB_TOKEN (or\n"
-            "  settings.web_token in config.yaml), then open http://<host>:<port>/?token=<it> once.",
+            f"error: refusing to serve on {args.host} without an access token - anyone who can reach\n"
+            "  that address could read your balances and change your settings. Set\n"
+            "  PORTFOLIO_WEB_TOKEN (or settings.web_token in config.yaml) to a long random value,\n"
+            "  e.g. `python -c 'import secrets; print(secrets.token_urlsafe(32))'`, then type it on\n"
+            "  the app's unlock screen once per device. Or keep the default 127.0.0.1 and put\n"
+            "  `tailscale serve` (or another authenticating proxy) in front.",
             file=sys.stderr,
         )
+        return 1
     app = create_app(config_path=args.config, min_value=args.min_value_override)
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level,
                 proxy_headers=True, forwarded_allow_ips="127.0.0.1")
@@ -360,7 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = subparsers.add_parser("serve", parents=[common], help="run the mobile web dashboard")
     serve.add_argument("--host", default="127.0.0.1",
-                       help="interface to bind (default: 127.0.0.1; 0.0.0.0 for your phone on the LAN)")
+                       help="interface to bind (default: 127.0.0.1; anything else needs an access token)")
     serve.add_argument("--port", type=int, default=8080)
     serve.add_argument("--log-level", default="info",
                        choices=["critical", "error", "warning", "info", "debug"])

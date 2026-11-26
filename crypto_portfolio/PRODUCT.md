@@ -41,7 +41,7 @@ service holds the keys or the balances.
 - Partial failures are normal (public RPCs drop); the product reports them instead of failing.
 - 24h change is snapshot-based: deposits and withdrawals show up as change *(inferred
   trade-off; price-based P&L is undecided)*.
-- Optional access token (`PORTFOLIO_WEB_TOKEN`) guards the API when served beyond localhost.
+- An access token (`PORTFOLIO_WEB_TOKEN`) guards the API; it is mandatory when served beyond localhost.
 
 ## Brand Commitments
 Pinned by the brief: CoinStats-like layout, deep dark background `#0B0E14`, card surfaces

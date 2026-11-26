@@ -22,6 +22,7 @@ while the collector is writing, instead of failing with `database is locked`.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sqlite3
 from collections.abc import Sequence
@@ -225,11 +226,36 @@ def parse_timestamp(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _make_private(path: Path) -> None:
+    """Keep the history (balances, wallet addresses) readable by its owner only: mode 0600.
+
+    Created up front so SQLite never makes it with the process umask (usually 0644); an
+    existing wider file is tightened. SQLite gives `-wal` / `-shm` the main file's mode. A
+    filesystem without POSIX modes (or a file owned by someone else) is left as it is.
+    """
+    try:
+        try:
+            os.close(os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600))
+            return
+        except FileExistsError:
+            pass
+        mode = path.stat().st_mode & 0o777
+        if mode & 0o077:
+            path.chmod(0o600)
+            for sidecar in (path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+                if sidecar.exists():
+                    sidecar.chmod(0o600)
+            log.warning("%s was readable by group/others (mode %o); reset to 600", path, mode)
+    except OSError as exc:
+        log.debug("could not restrict %s: %s", path, exc)
+
+
 class Database:
     def __init__(self, path: str | Path = "portfolio_history.db"):
         self.path = Path(path)
         if self.path.parent and not self.path.parent.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
+        _make_private(self.path)
         self._init_schema()
 
     @contextmanager

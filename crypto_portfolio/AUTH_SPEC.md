@@ -1,76 +1,105 @@
-# AUTH_SPEC — Giải pháp Xác thực & Bảo mật Web Dashboard (Dự phòng triển khai sau)
+# AUTH_SPEC — Mở dashboard ra Internet (để dành, chưa triển khai)
 
-> **Trạng thái:** `[ ] BACKLOG` (Tài liệu kiến trúc lưu trữ, để dành triển khai khi cần mở web ra Internet không qua Tailscale).  
-> **Mục tiêu:** Mở dashboard PWA (`0.0.0.0:8088`) ra Internet an toàn tuyệt đối, truy cập mọi nơi bằng điện thoại/laptop mà **không cần bật VPN Tailscale**, trải nghiệm mượt mà một chạm (Face ID).
+> **Trạng thái:** `[ ] BACKLOG`. Cập nhật 2026-11-26 sau khi rà lại với code thực tế.
+> **Quyết định hiện tại:** **không mở public.** Dashboard chỉ truy cập qua Tailscale
+> (`127.0.0.1:8088` + `tailscale serve`), xem [README](README.md#web-dashboard) và
+> `deploy/crypto-web.service`.
+> **Khi nào mở lại tài liệu này:** khi cần xem dashboard từ thiết bị không cài được Tailscale.
+> **Mục tiêu khi đó:** `app.tytony.link` truy cập được từ mọi nơi, không bật VPN, mà bề mặt
+> public chỉ đọc được số dư, không sửa được cấu hình.
 
 ---
 
-## 1. Triết lý kiến trúc: Mô hình 2 lớp (Defense-in-Depth)
+## 1. Nền đã có sẵn (làm xong ngày 2026-11-26)
 
-Không mở port trực tiếp trên router/VPS. Toàn bộ traffic phải đi qua Cloudflare Tunnel (`cloudflared`) kết hợp 2 lớp xác thực:
+Phần này không phải việc của spec nữa, nhưng là điểm xuất phát:
+
+| Hạng mục | Hiện trạng |
+|---|---|
+| Token | `main.py serve` từ chối bind ngoài loopback khi chưa đặt `PORTFOLIO_WEB_TOKEN`. |
+| Cookie | Phiên đã ký `portfolio_session` (HMAC theo token, 90 ngày, HttpOnly, SameSite=Strict, `Secure` khi https). Không chứa token. |
+| Brute force | Credential sai bị giới hạn 20 lần / 5 phút / client, sau đó 429. |
+| Token trên URL | `/?token=` đã bỏ. |
+| Secret Binance | API chỉ trả bản đã mask (`****wxyz`); secret không bao giờ rời server. |
+| Dữ liệu | `config.yaml` và `portfolio_history.db` mode 0600. |
+| Tunnel | `cloudflared` (remotely-managed) đang chạy cho `api.tytony.link`; thêm hostname chỉ là cấu hình trên dashboard Cloudflare. |
+
+## 2. Kiến trúc đề xuất
 
 ```
 Thiết bị (Safari / Chrome / PWA)
-      │
-      ▼ (HTTPS)
-[Lớp 1: Edge] Cloudflare Zero Trust Access
-      │  • Xác thực Google OAuth (email Jean) + 2FA
-      │  • Phiên 30 ngày (không bị hỏi lại liên tục)
-      │  • Chặn 100% scanner/bot trước khi request chạm máy chủ
-      ▼ (Cloudflare Tunnel - Outbound only)
-FastAPI Backend (127.0.0.1:8088)
-      │  • Xác thực chữ ký JWT (`Cf-Access-Jwt-Assertion`)
+      │ HTTPS
       ▼
-[Lớp 2: App] Passkey / WebAuthn (FIDO2)
-      │  • Chạm Face ID / Touch ID một chạm
-      │  • Cookie phiên HttpOnly, Secure, SameSite=Strict
+Cloudflare Access  ── Google OAuth hoặc OTP email, allowlist đúng 1 email, phiên 30 ngày
+      │ Cloudflare Tunnel (outbound-only, không mở cổng inbound)
       ▼
-[Step-up Auth] Màn hình Settings
-         • Xem/Sửa Binance Key đòi xác thực Face ID lại (thời hạn 5 phút)
+web_api.py  127.0.0.1:8088
+      │  • kiểm chữ ký JWT `Cf-Access-Jwt-Assertion`
+      │  • request đến qua Cloudflare ⇒ CHỈ ĐỌC (chặn mọi ghi vào /api/settings*)
+      ▼
+Tailscale (giữ nguyên) ── đường quản trị: sửa Binance key, ví, và cứu hộ khi mất Cloudflare
 ```
 
----
+Một lớp xác thực ở rìa mạng, cộng với việc bề mặt public không ghi được gì. Kẻ vượt qua
+Cloudflare Access cũng chỉ xem được số dư.
 
-## 2. Chi tiết triển khai từng lớp
+## 3. Việc cần làm
 
-### Lớp 1: Cloudflare Zero Trust Access (Rìa mạng)
-1. **Hostname:** Thêm `app.tytony.link` vào Cloudflare Tunnel trỏ về `http://localhost:8088`.
-2. **Access Policy:**
-   * Chỉ cho phép danh sách trắng: đúng email Gmail cá nhân của Jean.
-   * Phương thức đăng nhập: Google OAuth hoặc One-Time PIN qua email.
-   * Session Duration: **30 ngày**.
-3. **Lưu ý tương thích PWA trên iOS/Android:**
-   * Tạo rule **Bypass** riêng cho các asset tĩnh của PWA: `/manifest.json`, `/sw.js`, `/icons/*` để tính năng *Add to Home Screen* không bị lỗi auth.
-   * Backend FastAPI thêm middleware kiểm tra chữ ký JWT `Cf-Access-Jwt-Assertion` từ Cloudflare gửi xuống để đảm bảo request không bị bypass.
+### 3.1 Cloudflare (không cần code)
+1. Thêm public hostname `app.tytony.link` → `http://127.0.0.1:8088` vào tunnel hiện có.
+2. Tạo Access application cho hostname đó: allowlist đúng một email, phiên 30 ngày.
+3. Rule **Bypass** cho `/manifest.json` và `/static/icons/*` (trình duyệt tải manifest và icon
+   không kèm cookie, thiếu bypass thì *Add to Home Screen* hỏng). Lưu ý đường dẫn icon thật là
+   `/static/icons/*`, không phải `/icons/*`.
 
----
+### 3.2 Backend (`web_api.py`)
+1. **Kiểm JWT:** chữ ký RS256 theo JWKS của team
+   (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`, cache theo `kid`), cùng với
+   `aud` (AUD tag của application), `iss`, `exp` và claim `email` khớp allowlist. Lỗi ở bước
+   nào cũng từ chối (fail closed). Cần thêm dependency `PyJWT[crypto]`.
+2. **Quy tắc vào cửa:** JWT Cloudflare hợp lệ **hoặc** token/cookie phiên hiện có. Nhờ vậy
+   đường Tailscale vẫn chạy khi Cloudflare gặp sự cố.
+3. **Chỉ đọc qua Cloudflare:** request xác thực bằng JWT bị từ chối ở `POST /api/settings`,
+   `/api/settings/allocation`, `/api/settings/test-binance`, `/api/settings/test-wallet`.
+   `GET /api/settings` vẫn cho phép vì đã mask.
+4. **Tắt trên hostname public:** `/api/docs`, `/api/openapi.json`, và `POST /api/auth`.
+5. **`POST /api/portfolio/refresh`:** cho phép nhưng thêm rate limit, vì nó gọi Binance và RPC.
 
-### Lớp 2: Passkey (WebAuthn) tại App & Step-up Settings
-1. **Đăng nhập một chạm:**
-   * Sử dụng chuẩn WebAuthn (FIDO2). Đăng ký thiết bị chính (iPhone, Mac) lưu vào iCloud Keychain / Google Password Manager.
-   * Không lưu mật khẩu trên server, chống phishing tuyệt đối.
-2. **Step-up Authentication cho Settings:**
-   * Màn hình chính xem tài sản: Đã vào app là xem được ngay.
-   * Riêng thao tác vào **Settings để xem / cập nhật Binance API Key & Secret**: Yêu cầu xác thực lại sinh trắc học (Face ID) trong vòng 5 phút gần nhất.
-   * Key lưu trong cơ sở dữ liệu được mã hoá (AES-GCM), giao diện web chỉ hiển thị 4 ký tự cuối (ví dụ: `****a1b2`).
+### 3.3 Frontend (`static/app.js`)
+Khi phiên Access hết hạn, `fetch('/api/…')` nhận redirect sang trang đăng nhập khác origin và
+hỏng ở tầng mạng, app sẽ báo nhầm "server unreachable". Cần cho `api()` nhận ra trường hợp
+này và điều hướng lại toàn trang để Cloudflare hiện màn hình đăng nhập.
 
----
+### 3.4 Phải thử trên máy thật trước khi coi là xong
+- Đăng nhập Google OAuth bên trong PWA đã *Add to Home Screen* trên iOS (chế độ standalone).
+  Nếu trục trặc thì chuyển sang OTP email.
+- Service worker và offline shell vẫn hoạt động sau lớp Access.
+- Hết phiên giữa chừng: app tự đưa về màn hình đăng nhập, không kẹt ở shell đã cache.
 
-### 3. Kênh dự phòng & Cảnh báo an ninh
-1. **Dự phòng (Break-glass):**
-   * Giữ nguyên cổng nội bộ trên mạng Tailscale để truy cập quản trị cứu hộ nếu lỡ mất quyền truy cập Cloudflare.
-   * Hỗ trợ mật khẩu mạnh + TOTP (Google Authenticator) làm phương án đăng nhập phụ.
-2. **Cảnh báo Telegram:**
-   * Bot Telegram tự động gửi thông báo tức thời khi:
-     - Có phiên đăng nhập mới từ IP lạ.
-     - Có yêu cầu mở màn hình Settings hoặc thay đổi API Key.
-     - Có thiết bị Passkey mới được thêm vào.
+## 4. Đã cân nhắc và không làm
 
----
+| Ý tưởng (bản spec cũ) | Lý do bỏ |
+|---|---|
+| Passkey / WebAuthn đăng nhập trong app | Access với Google OAuth + 2FA đã chống phishing. Thêm WebAuthn là nhiều code, một kho credential và một luồng khôi phục riêng, cho đúng một người dùng. |
+| Step-up Face ID cho Settings | Thay bằng "public chỉ đọc" ở mục 3.2: đạt cùng mục tiêu mà không cần code xác thực. |
+| Mã hoá AES-GCM cho Binance key | Khoá giải mã nằm cùng máy với dữ liệu nên gần như không thêm bảo vệ. File 0600 là đủ. |
+| Mật khẩu + TOTP dự phòng | Tailscale đã là đường cứu hộ. Thêm một đường đăng nhập là thêm bề mặt tấn công. |
+| Cảnh báo Telegram | Access đã có log đăng nhập. Có thể thêm sau nếu thấy cần. |
 
-### 4. Nguyên tắc bảo vệ tài sản sống còn (Binance API Key)
-Dù hacker có vượt qua được toàn bộ các lớp bảo mật trên, tài sản vẫn được bảo toàn nhờ 2 nguyên tắc cài đặt tại Binance:
-1. **Chỉ bật quyền `Enable Reading` (Read-only)**.
-2. **Tuyệt đối KHÔNG BẬT `Enable Withdrawals` (Rút tiền)** hay `Enable Spot & Margin Trading`.
-3. **Bật IP Whitelist** trên Binance trỏ về IP tĩnh/IP mạng nhà của máy chủ.
-*Kịch bản xấu nhất xảy ra:* Chỉ bị lộ số dư, **tuyệt đối không ai có thể rút hay di chuyển tiền của anh**.
+Xét lại passkey step-up nếu sau này cần **sửa Settings từ xa mà không có Tailscale**.
+
+## 5. Câu hỏi còn mở (trả lời trước khi bắt tay làm)
+
+1. Có cần sửa Settings từ ngoài Tailscale không? Mặc định của spec này: **không**.
+2. Nút Refresh trên hostname public: cho phép kèm rate limit (mặc định), hay chặn hẳn?
+3. Phương thức đăng nhập Access: Google OAuth hay OTP email? Tuỳ kết quả thử ở mục 3.4.
+
+## 6. Lưới an toàn cuối cùng (áp dụng ngay cả hôm nay)
+
+Cài đặt phía Binance, độc lập với mọi thứ ở trên:
+1. API key chỉ bật **Enable Reading**.
+2. Không bật **Enable Withdrawals** hay **Enable Spot & Margin Trading**.
+3. Bật **IP whitelist** trỏ về IP của máy chủ.
+
+Với ba điều này, kịch bản xấu nhất khi mọi lớp bị vượt qua là lộ số dư và địa chỉ ví, không
+phải mất tiền.

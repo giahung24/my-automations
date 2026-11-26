@@ -64,7 +64,7 @@ store a fake `$0`.
 
 ```bash
 .venv/bin/python main.py serve --port 8080                     # this machine only
-PORTFOLIO_WEB_TOKEN=<long-random> .venv/bin/python main.py serve --host 0.0.0.0 --port 8080
+PORTFOLIO_WEB_TOKEN=<long-random> .venv/bin/python main.py serve --host 0.0.0.0 --port 8080  # needs the token
 .venv/bin/python -m uvicorn web_api:app --port 8080            # same app, plain uvicorn
 ```
 
@@ -83,12 +83,24 @@ clients, aggregation and SQLite history:
 
 On iOS, open it in Safari and use Share > Add to Home Screen.
 
-**Access.** `serve` binds `127.0.0.1` unless told otherwise. Before binding `0.0.0.0`, set
-`PORTFOLIO_WEB_TOKEN` (or `settings.web_token`): every `/api` route then needs it. Open
-`http://<host>:8080/?token=<it>` once per device, or type it on the unlock screen. Either way
-it is stored as an HttpOnly, SameSite=Strict cookie. Without a token, anyone who can reach the
-port can read balances and rewrite the config. Use HTTPS (a reverse proxy) if the traffic
-leaves your LAN.
+**Access.** `serve` binds `127.0.0.1` unless told otherwise, and refuses any other address
+until `PORTFOLIO_WEB_TOKEN` (or `settings.web_token`) is set - without a token, whoever
+reaches the port can read balances and rewrite the config. With a token, every `/api` route
+needs it: type it on the unlock screen once per device (it is traded for a signed, HttpOnly,
+SameSite=Strict session cookie that lasts 90 days and never contains the token), or send it
+as `Authorization: Bearer`. Changing the token signs every device out. Wrong credentials are
+rate limited (20 per 5 minutes per client, then `429`).
+
+**Recommended setup: loopback + Tailscale.** Keep the dashboard on `127.0.0.1` and let
+Tailscale publish it to your own devices over HTTPS (which the PWA's service worker needs):
+
+```bash
+cp deploy/crypto-web.service ~/.config/systemd/user/     # adjust the paths inside first
+systemctl --user daemon-reload && systemctl --user enable --now crypto-web
+sudo tailscale serve --bg 8088                           # https://<machine>.<tailnet>.ts.net
+```
+
+`portfolio_history.db` is created with mode 0600 (and tightened to it if it was wider).
 
 **Data freshness.** `GET /api/portfolio` never touches the network: it serves the last live
 refresh or the newest snapshot. The app refreshes in the background when the data is more
