@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import config as config_module
 import web_api
 from models import (
     BINANCE_EARN,
@@ -455,13 +454,6 @@ def test_coverage_of(actual, requested, expected):
 
 
 # -- report and endpoint (F1.5) ------------------------------------------------------------
-@pytest.fixture(autouse=True)
-def isolated_env(monkeypatch):
-    monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **k: False)
-    for name in (*config_module.ENV_OVERRIDES, "PORTFOLIO_WEB_TOKEN"):
-        monkeypatch.delenv(name, raising=False)
-
-
 def exploding_fetcher(*_args, **_kwargs):
     raise AssertionError("the attribution endpoint must never fetch live data")
 

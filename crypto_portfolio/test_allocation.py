@@ -645,13 +645,6 @@ def test_other_modes_report_no_funding_block():
 
 
 # -- endpoint + switch -------------------------------------------------------------------
-@pytest.fixture(autouse=True)
-def isolated_env(monkeypatch):
-    monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **k: False)
-    for name in (*config_module.ENV_OVERRIDES, "PORTFOLIO_WEB_TOKEN"):
-        monkeypatch.delenv(name, raising=False)
-
-
 def make_client(tmp_path, allocation=None, holdings=None, **sections) -> tuple[TestClient, Path]:
     path = tmp_path / "config.yaml"
     raw = {"settings": {"db_path": str(tmp_path / "history.db"), "stablecoins": STABLES}, **sections}

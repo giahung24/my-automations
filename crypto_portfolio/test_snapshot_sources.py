@@ -42,7 +42,6 @@ from services.db import (
 from services.portfolio import aggregate, fetch_portfolio, portfolio_from_db, stored_errors, to_dict
 from test_all import CHAINS, FakeResponse, FakeSession, StubConfig, make_v0_db, onchain_session
 from test_all import sample_holdings as all_sample_holdings
-from test_api import isolated_env  # noqa: F401  (autouse: no real .env / env overrides)
 
 BINANCE_ALL = [BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING]
 
