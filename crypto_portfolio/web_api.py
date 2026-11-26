@@ -559,6 +559,16 @@ def create_app(
         contribution: float | None = Query(
             None, gt=0, le=1e12, allow_inf_nan=False,
             description="New money to invest (USD): suggest BUY orders only, adding up to it"),
+        source_bucket: str | None = Query(
+            None, min_length=1, max_length=100,
+            description="Partial / DCA funding: the bucket to take the money from"),
+        funding_amount_usd: float | None = Query(
+            None, gt=0, le=1e12, allow_inf_nan=False,
+            description="Partial / DCA funding: USD moved from `source_bucket` to the "
+                        "under-weight buckets (the portfolio value does not change)"),
+        strategy: Literal["greedy", "proportional"] = Query(
+            "greedy", description="Partial funding: deepest deficit first, or in proportion "
+                                  "to each bucket's deficit"),
         include_dry_powder: bool = Query(
             False, description="Count the `allocation.dry_powder` holdings in the weights too"),
     ):
@@ -566,8 +576,17 @@ def create_app(
 
         Off until turned on (`allocation.enabled`, or POST /api/settings/allocation): then the
         answer is `{"enabled": false}`. Invalid targets -> 422 with one message per problem.
-        Suggestions only - nothing is ever traded. Reads SQLite, never the network.
+        `contribution` and partial funding (`source_bucket` + `funding_amount_usd`) exclude
+        each other (422). Suggestions only - nothing is ever traded. Reads SQLite, never the
+        network.
         """
+        funding = source_bucket is not None or funding_amount_usd is not None
+        if funding and contribution is not None:
+            raise HTTPException(422, {"message": "Use either new money (contribution) or partial "
+                                                 "funding (source_bucket + funding_amount_usd), not both."})
+        if funding and (source_bucket is None or funding_amount_usd is None):
+            raise HTTPException(422, {"message": "Partial funding needs both source_bucket and "
+                                                 "funding_amount_usd."})
         cfg = config()
         status = allocation_status(cfg)
         if not status["enabled"]:
@@ -575,8 +594,13 @@ def create_app(
         if status["errors"]:
             raise HTTPException(422, {"message": "The allocation targets in config.yaml are invalid.",
                                       "errors": status["errors"]})
-        report = allocation_report(Database(cfg.db_path), cfg.allocation_settings, cfg.manual,
-                                   contribution=contribution, include_dry_powder=include_dry_powder)
+        try:
+            report = allocation_report(Database(cfg.db_path), cfg.allocation_settings, cfg.manual,
+                                       contribution=contribution, source_bucket=source_bucket,
+                                       funding_amount=funding_amount_usd, strategy=strategy,
+                                       include_dry_powder=include_dry_powder)
+        except ValueError as exc:  # unknown source bucket and the like
+            raise HTTPException(422, {"message": str(exc)}) from exc
         return {**report, "configured": status["configured"], "errors": []}
 
     def allocation_status(cfg: Config) -> dict:

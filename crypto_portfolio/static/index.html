@@ -576,14 +576,70 @@
                     <span>These are example targets. Set yours under <span class="font-mono">allocation.targets</span> in config.yaml.</span>
                   </div>
 
-                  <div class="segmented segmented-2 mx-4 mt-3" role="tablist" aria-label="Suggestion mode">
+                  <div class="segmented segmented-3 alloc-modes mx-4 mt-3" role="tablist" aria-label="Suggestion mode">
                     <button type="button" class="segment" role="tab" :aria-selected="alloc.mode === 'rebalance'" @click="setAllocMode('rebalance')">
                       <span class="seg-label">Rebalance</span><span class="seg-total">buy &amp; sell</span>
                     </button>
                     <button type="button" class="segment" role="tab" :aria-selected="alloc.mode === 'contribution'" @click="setAllocMode('contribution')">
                       <span class="seg-label">New money</span><span class="seg-total">buy only</span>
                     </button>
+                    <button type="button" class="segment" role="tab" :aria-selected="alloc.mode === 'funding'" @click="setAllocMode('funding')">
+                      <span class="seg-label">Partial / DCA</span><span class="seg-total">move part</span>
+                    </button>
                   </div>
+
+                  <!-- Partial / DCA (M7): move part of one bucket into the under-weight ones, V unchanged -->
+                  <form v-if="alloc.mode === 'funding'" class="mx-4 mt-3" @submit.prevent="applyFunding" novalidate>
+                    <template v-if="fundingSources.length">
+                      <label class="label" for="fund-source">Nguồn vốn</label>
+                      <div class="field field-select">
+                        <select id="fund-source" :value="alloc.source" @change="setFundingSource($event.target.value)" aria-describedby="fund-source-hint">
+                          <option v-for="b in fundingSources" :key="b.name" :value="b.name">{{ b.name }}<template v-if="b.symbols.length"> · {{ b.symbols.slice(0, 3).join(', ') }}</template></option>
+                        </select>
+                        <svg class="icon icon-xs" aria-hidden="true"><use href="#i-chevron"/></svg>
+                      </div>
+                      <p id="fund-source-hint" class="field-msg mb-3">
+                        <span v-if="fundingSourceRow">Khả dụng: <span class="priv priv-soft num">{{ fmt.money(fundingSourceRow.liquid_usd) }}</span><template v-if="fundingSourceRow.locked_usd > 0"> · <span class="priv priv-soft num">{{ fmt.money(fundingSourceRow.locked_usd) }}</span> đang khóa, không tính</template></span>
+                      </p>
+
+                      <label class="label" for="fund-amount">Số tiền chuyển đợt này</label>
+                      <div class="flex gap-2">
+                        <div class="field min-w-0 flex-1" :class="{ 'is-invalid': alloc.fundError }">
+                          <span class="field-prefix" aria-hidden="true">$</span>
+                          <input id="fund-amount" v-model="alloc.fundAmount" inputmode="decimal" placeholder="5000" autocomplete="off" enterkeyhint="go"
+                                 class="num" :aria-invalid="alloc.fundError ? 'true' : null" aria-describedby="fund-amount-msg">
+                        </div>
+                        <button type="submit" class="btn btn-secondary min-h-12" :disabled="alloc.loading">Gợi ý lệnh</button>
+                      </div>
+                      <div class="mt-2 flex gap-2" role="group" aria-label="Số tiền nhanh">
+                        <button type="button" class="btn btn-sm btn-secondary num" :disabled="!fundingSourceRow || alloc.loading" @click="quickFunding(0.1)">10%</button>
+                        <button type="button" class="btn btn-sm btn-secondary num" :disabled="!fundingSourceRow || alloc.loading" @click="quickFunding(0.25)">25%</button>
+                        <button type="button" class="btn btn-sm btn-secondary" :disabled="!fundingSourceRow || alloc.loading" @click="quickFunding(1)">Max</button>
+                      </div>
+                      <p id="fund-amount-msg" class="field-msg" :class="{ error: alloc.fundError }" aria-live="polite">
+                        <template v-if="alloc.fundError"><svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ alloc.fundError }}</span></template>
+                        <span v-else>Bán một phần {{ alloc.source || 'nguồn' }}, mua các bucket đang thiếu: tổng mua = tổng bán, giá trị danh mục không đổi.</span>
+                      </p>
+
+                      <p class="label mt-3" id="fund-strategy-label">Cách chia tiền</p>
+                      <div class="segmented segmented-2 fund-strategy" role="radiogroup" aria-labelledby="fund-strategy-label">
+                        <button type="button" class="segment" role="radio" :aria-checked="alloc.strategy === 'greedy'" :aria-selected="alloc.strategy === 'greedy'" @click="setFundingStrategy('greedy')">
+                          <span class="seg-label">Dồn vào coin thiếu nhiều nhất</span><span class="seg-total">greedy</span>
+                        </button>
+                        <button type="button" class="segment" role="radio" :aria-checked="alloc.strategy === 'proportional'" :aria-selected="alloc.strategy === 'proportional'" @click="setFundingStrategy('proportional')">
+                          <span class="seg-label">Chia đều theo tỷ lệ thiếu hụt</span><span class="seg-total">proportional</span>
+                        </button>
+                      </div>
+
+                      <div v-if="fundingProgress" class="mt-3 rounded-2xl bg-surface-2 px-3.5 py-2.5" role="status">
+                        <p v-if="fundingProgress.line" class="text-[13px] font-bold num priv priv-soft">{{ fundingProgress.line }}</p>
+                        <p v-for="(n, i) in fundingProgress.notes" :key="i" class="mt-1 flex items-start gap-1.5 text-[12px] font-semibold text-ink-3">
+                          <svg class="icon icon-xs mt-0.5 flex-none"><use href="#i-alert"/></svg><span class="priv priv-soft">{{ n }}</span>
+                        </p>
+                      </div>
+                    </template>
+                    <p v-else class="text-[13px] font-semibold text-ink-3">Không bucket nào có số dư khả dụng để làm nguồn vốn.</p>
+                  </form>
 
                   <form v-if="alloc.mode === 'contribution'" class="mx-4 mt-3" @submit.prevent="applyContribution" novalidate>
                     <label class="label" for="alloc-amount">Amount to invest</label>
@@ -652,7 +708,7 @@
                     </div>
                     <ul class="alloc-orders mx-4 mt-2">
                       <li v-for="a in allocActions" :key="a.key" class="alloc-order">
-                        <span class="order-side" :class="a.action === 'BUY' ? 'buy' : 'sell'">{{ a.action }}</span>
+                        <span class="order-side" :class="a.side">{{ a.sideLabel }}</span>
                         <span class="min-w-0 flex-1">
                           <span class="block truncate text-[14px] font-extrabold num priv priv-soft">{{ a.what }}</span>
                           <span class="block truncate text-[12px] font-semibold text-ink-3" :title="a.note">{{ a.note }}</span>

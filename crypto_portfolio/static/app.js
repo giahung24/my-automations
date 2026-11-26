@@ -6,7 +6,8 @@
  *   GET  /api/portfolio/history   snapshot totals for the chart
  *   GET  /api/portfolio/attribution  why the total moved: price vs quantity effect per coin
  *   GET  /api/analytics/quant     Analytics: TWR, base 100 vs BTC/ETH, max drawdown, volatility
- *   GET  /api/analytics/allocation  target vs actual weights + suggested orders (?contribution=)
+ *   GET  /api/analytics/allocation  target vs actual weights + suggested orders (?contribution=,
+ *                                   or ?source_bucket=&funding_amount_usd=&strategy= for partial / DCA)
  *   POST /api/settings/allocation   the Allocation assistant's ON/OFF switch
  *   GET  /api/cash-flows            Activity timeline: deposits, withdrawals, transfers, Earn by day
  *   GET  /api/cash-flows/{id}/candidates, PATCH /api/cash-flows/{id}   manual transfer confirmation
@@ -309,9 +310,11 @@
       const benchEl = ref(null);
       const underwaterEl = ref(null);
       let insightSeq = 0;
-      // Allocation card (M7): `applied` is the contribution in force, `amount` what is typed
+      // Allocation card (M7): `applied` is the contribution in force, `amount` what is typed;
+      // the `fund*` fields are the same pair for the Partial / DCA mode (money moved from `source`)
       const alloc = reactive({ data: null, loading: false, error: '', errors: [], toggling: false,
-        mode: 'rebalance', amount: '', applied: null, amountError: '', includeDry: false });
+        mode: 'rebalance', amount: '', applied: null, amountError: '', includeDry: false,
+        source: '', fundAmount: '', fundApplied: null, fundError: '', strategy: 'greedy' });
       let allocSeq = 0;
       let benchChart = null;
       let underwaterChart = null;
@@ -786,6 +789,11 @@
         alloc.loading = true;
         const params = new URLSearchParams();
         if (alloc.mode === 'contribution' && alloc.applied) params.set('contribution', String(alloc.applied));
+        if (alloc.mode === 'funding' && alloc.fundApplied && alloc.source) {
+          params.set('source_bucket', alloc.source);
+          params.set('funding_amount_usd', String(alloc.fundApplied));
+          params.set('strategy', alloc.strategy);
+        }
         if (alloc.includeDry) params.set('include_dry_powder', 'true');
         const query = params.toString();
         try {
@@ -794,9 +802,17 @@
           alloc.data = data;
           alloc.error = '';
           alloc.errors = [];
+          if (!alloc.source) alloc.source = defaultFundingSource(data);
         } catch (error) {
           if (seq !== allocSeq) return;
           handleError(error, { silent: true });
+          // a refused funding request (unknown bucket...): keep the card, show it under the field
+          if (alloc.mode === 'funding' && error.status === 422 && alloc.data
+              && !(error.detail && Array.isArray(error.detail.errors))) {
+            alloc.fundError = error.message;
+            alloc.fundApplied = null;
+            return;
+          }
           alloc.data = null;
           alloc.errors = error.status === 422 && error.detail && Array.isArray(error.detail.errors) ? error.detail.errors : [];
           alloc.error = error.status === 401 ? '' : alloc.errors.length ? error.message : 'Could not load the allocation: ' + error.message;
@@ -824,7 +840,54 @@
         if (alloc.mode === mode) return;
         alloc.mode = mode;
         alloc.amountError = '';
-        if (mode === 'rebalance' || alloc.applied) loadAllocation();
+        alloc.fundError = '';
+        if (mode === 'rebalance' || (mode === 'contribution' && alloc.applied)
+            || (mode === 'funding' && alloc.fundApplied)) loadAllocation();
+      }
+
+      // Partial / DCA: the source defaults to the stablecoin bucket, else the most liquid one
+      function defaultFundingSource(data) {
+        const rows = ((data && data.buckets) || []).filter((b) => b.liquid_usd > 0);
+        const stable = rows.find((b) => b.stablecoin);
+        if (stable) return stable.name;
+        return rows.length ? rows.reduce((a, b) => (b.liquid_usd > a.liquid_usd ? b : a)).name : '';
+      }
+
+      function setFundingSource(name) {
+        if (alloc.source === name) return;
+        alloc.source = name;
+        alloc.fundError = '';
+        if (alloc.fundApplied) loadAllocation();
+      }
+
+      function setFundingStrategy(strategy) {
+        if (alloc.strategy === strategy) return;
+        alloc.strategy = strategy;
+        if (alloc.fundApplied) loadAllocation();
+      }
+
+      function applyFunding() {
+        const raw = String(alloc.fundAmount).replace(/[\s,$]/g, '');
+        const value = Number(raw);
+        if (!alloc.source) {
+          alloc.fundError = 'Chọn nguồn vốn trước.';
+          return;
+        }
+        if (!raw || !Number.isFinite(value) || value <= 0) {
+          alloc.fundError = 'Nhập số tiền USD lớn hơn 0.';
+          return;
+        }
+        alloc.fundError = '';
+        alloc.fundApplied = Math.round(value * 100) / 100;
+        loadAllocation();
+      }
+
+      // 10 % / 25 % / Max of what the source can sell now (liquid, never the locked part)
+      function quickFunding(share) {
+        const row = fundingSourceRow.value;
+        if (!row) return;
+        alloc.fundAmount = String(Math.floor(row.liquid_usd * share * 100) / 100);
+        applyFunding();
       }
 
       function applyContribution() {
@@ -898,15 +961,54 @@
           lockedNote: b.locked_usd > 0 ? (b.locked_reasons.includes('locked_earn') ? 'in locked Earn' : 'not sellable') : '',
         }));
       });
+      const fundingSources = computed(() => (allocReady.value
+        ? alloc.data.buckets.filter((b) => b.liquid_usd > 0) : []));
+      const fundingSourceRow = computed(() => fundingSources.value.find((b) => b.name === alloc.source) || null);
+      // "$5,000 = 21% phần Stablecoin dư · còn khoảng ~4-5 đợt cùng cỡ để về target"
+      const fundingProgress = computed(() => {
+        const f = allocReady.value && alloc.data.mode === 'funding' ? alloc.data.funding : null;
+        if (!f) return null;
+        let line = '';
+        if (f.source_excess_usd <= 0) {
+          line = `${f.source_bucket} đã ở mức hoặc dưới target: không còn phần dư để chuyển.`;
+        } else if (f.progress_pct !== null) {
+          const n = f.remaining_batches_estimate;
+          const lo = Math.floor(n);
+          const hi = Math.ceil(n);
+          const batches = n <= 1 ? 'đợt này là đủ để về target'
+            : `còn khoảng ~${lo === hi ? lo : lo + '-' + hi} đợt cùng cỡ để về target`;
+          line = `${fmt.money(f.applied_usd)} = ${Math.round(f.progress_pct)}% phần ${f.source_bucket} dư · ${batches}`;
+        }
+        const notes = [];
+        if (f.limited_by === 'liquidity') {
+          notes.push(`Chỉ dùng được ${fmt.money(f.applied_usd)} trên ${fmt.money(f.requested_usd)}: phần còn lại của ${f.source_bucket} đang bị khóa (Earn locked / không bán được).`);
+        } else if (f.limited_by === 'room') {
+          notes.push(`Chỉ cần ${fmt.money(f.applied_usd)} trên ${fmt.money(f.requested_usd)}: các bucket khác đã về target, phần dư không được gợi ý bán.`);
+        }
+        if (f.source_below_target) notes.push(`Sau đợt này ${f.source_bucket} sẽ xuống dưới target của nó.`);
+        return { line, notes };
+      });
+      // funding orders only under Partial / DCA, and only funding orders there (no stale list)
+      const allocModeMismatch = computed(() => allocReady.value
+        && (alloc.mode === 'funding') !== (alloc.data.mode === 'funding'));
       const allocActions = computed(() => {
-        if (!allocReady.value) return [];
+        if (!allocReady.value || allocModeMismatch.value) return [];
         return alloc.data.actions.map((a) => {
+          if (a.quote_spend) {  // a stablecoin source: the buys are paid in it, nothing is sold
+            const notes = [a.bucket, 'trả thẳng qua cặp X/' + (a.asset || 'USDC')];
+            if (a.legs.length) notes.push('từ ' + [...new Set(a.legs.map((l) => l.from))].join(', '));
+            if (a.legs.some((l) => l.requires_redeem)) notes.push('redeem Earn trước');
+            if (a.requires_transfer) notes.push('transfer to Binance first');
+            return { ...a, key: 'USE:' + a.bucket, side: 'use', sideLabel: 'DÙNG', note: notes.join(' · '),
+              what: `~${fmt.money(a.usd)} ${a.asset || a.bucket}` };  // read with the badge: "DÙNG ~$X USDC"
+          }
           const notes = [a.bucket];
           if (a.legs.length) notes.push('from ' + [...new Set(a.legs.map((l) => l.from))].join(', '));
           if (a.requires_transfer) notes.push('transfer to Binance first');
           if (a.constrained_by === 'locked_earn') notes.push('capped: the rest is in locked Earn');
           else if (a.constrained_by) notes.push('capped: the rest cannot be sold now');
-          return { ...a, key: a.action + ':' + a.bucket, note: notes.join(' · '),
+          return { ...a, key: a.action + ':' + a.bucket, side: a.action === 'BUY' ? 'buy' : 'sell',
+            sideLabel: a.action, note: notes.join(' · '),
             what: a.est_qty !== null && a.est_qty !== undefined ? fmt.qty(a.est_qty) + ' ' + a.asset : (a.asset || a.bucket) };
         });
       });
@@ -918,7 +1020,9 @@
           return d.reason === 'no_snapshot' ? 'Take a snapshot first: the allocation is read from the newest one.'
             : 'Nothing priced to allocate yet.';
         }
+        if (allocModeMismatch.value) return '';
         if (d.mode === 'contribution') return d.actions.length ? '' : 'Nothing to buy with this amount.';
+        if (d.mode === 'funding') return d.actions.length ? '' : 'Không có bucket nào thiếu tỷ trọng để mua với số tiền này.';
         if (!d.rebalance_needed) return `Every bucket is within ±${d.tolerance_pp} pp of its target. Nothing to do.`;
         if (!d.actions.length) return `Some buckets drifted, but every order would be under the $${d.min_trade_usd} minimum.`;
         return '';
@@ -2159,6 +2263,7 @@
         insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
         alloc, allocEnabled, allocReady, allocRows, allocActions, allocMessage, loadAllocation, toggleAllocation,
         setAllocMode, applyContribution, toggleDryPowder, copyOrder, copyAllOrders,
+        fundingSources, fundingSourceRow, fundingProgress, setFundingSource, setFundingStrategy, applyFunding, quickFunding,
         peek, peekSheet, peekClose, peekReady, peekTrend, peekSpan, peekSpanNote, peekBuckets, peekRows, peekMessage,
         openPeek, closePeek, peekToAnalytics, onPeekKeydown,
         chartWrap, chartEl, sheet, sheetClose, draftEl, manualEl,

@@ -730,6 +730,8 @@ button.flow-row:active { background: var(--surface-2); }
 .order-side { flex: none; width: 42px; padding: 3px 0; border-radius: 7px; text-align: center; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; }
 .order-side.buy { background: rgba(34, 229, 139, 0.14); color: var(--up); }
 .order-side.sell { background: rgba(255, 92, 115, 0.14); color: var(--down); }
+.order-side.use { width: auto; min-width: 42px; padding: 3px 6px; background: var(--surface-2); color: var(--ink-2); }
+.alloc-modes .segment { min-height: 46px; }
 
 /* -- Manual assets form (M6) ---------------------------------------------------------- */
 .kind-badge {
@@ -773,3 +775,4 @@ button.flow-row:active { background: var(--surface-2); }
 .view-switch > button[aria-selected="true"] { background: var(--surface-3); color: var(--ink); }
 @media (hover: hover) { .view-switch > button:hover { color: var(--ink); } }
 .coin.coin-wallet .icon { width: 18px; height: 18px; }
+.fund-strategy .seg-label { text-align: center; line-height: 1.25; }

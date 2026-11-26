@@ -35,7 +35,9 @@ from services.analytics.allocation import (
     band_edge_deltas,
     contribution_deltas,
     finalize_deltas,
+    funding_plan,
     lots_from_rows,
+    proportional_deltas,
     split_dry_powder,
     target_deltas,
     turnover,
@@ -438,6 +440,210 @@ def test_property_contribution_report_cents_add_up():
         assert all(a["action"] == "BUY" for a in report["actions"])
 
 
+# -- partial funding (DCA) ---------------------------------------------------------------
+# V = 26,000: BTC misses 5,000, ETH 2,500, Altcoins 600 (Σ 8,100); Stablecoin is 8,100 over.
+DCA = [
+    spot("BTC", 8000, 100000),
+    spot("ETH", 4000, 4000),
+    spot("USDC", 12000),
+    spot("SOL", 2000, 200),
+]
+
+
+def signed(actions: list[dict]) -> float:
+    return sum(a["usd"] if a["action"] == "BUY" else -a["usd"] for a in actions)
+
+
+def by_bucket(report: dict) -> dict[str, dict]:
+    return {a["bucket"]: a for a in report["actions"]}
+
+
+@pytest.mark.parametrize("strategy", ["greedy", "proportional"])
+def test_funding_is_self_funded_one_sell_in_the_source(strategy):
+    report = allocate(DCA, settings(), source_bucket="Stablecoin", funding_amount=2000,
+                      strategy=strategy)
+    assert report["mode"] == "funding" and report["contribution_usd"] is None
+    sells = [a for a in report["actions"] if a["action"] == "SELL"]
+    buys = [a for a in report["actions"] if a["action"] == "BUY"]
+    assert [a["bucket"] for a in sells] == ["Stablecoin"]
+    assert "Stablecoin" not in {a["bucket"] for a in buys}
+    assert sum(a["usd"] for a in buys) == pytest.approx(2000, abs=1e-9)
+    assert sells[0]["usd"] == pytest.approx(2000, abs=1e-9)
+    assert signed(report["actions"]) == pytest.approx(0, abs=1e-9)
+    funding = report["funding"]
+    assert funding["source_bucket"] == "Stablecoin" and funding["strategy"] == strategy
+    assert funding["requested_usd"] == 2000 and funding["applied_usd"] == 2000
+    assert funding["limited_by"] is None and funding["source_below_target"] is False
+    assert funding["source_excess_usd"] == pytest.approx(8100)
+    assert funding["progress_pct"] == pytest.approx(24.7)          # 2,000 / 8,100
+    assert funding["remaining_batches_estimate"] == pytest.approx(4.0)  # 8,100 / 2,000 = 4.05
+    assert report["total_priced_usd"] == 26000  # V unchanged
+
+
+def test_funding_strategies_differ_on_the_same_input():
+    greedy = allocate(DCA, settings(), source_bucket="Stablecoin", funding_amount=2000)
+    prop = allocate(DCA, settings(), source_bucket="Stablecoin", funding_amount=2000,
+                    strategy="proportional")
+    assert greedy["funding"]["strategy"] == "greedy"  # the default
+    # greedy: BTC is 19.2 pp under, ETH 9.6 pp: all 2,000 go to BTC before ETH gets anything
+    assert {b: a["usd"] for b, a in by_bucket(greedy).items() if a["action"] == "BUY"} == {"BTC": 2000}
+    # proportional: shares of the 8,100 total deficit (5,000 / 2,500 / 600)
+    buys = {b: a["usd"] for b, a in by_bucket(prop).items() if a["action"] == "BUY"}
+    assert buys == {"BTC": pytest.approx(1234.57, abs=0.01), "ETH": pytest.approx(617.28, abs=0.01),
+                    "Altcoins": pytest.approx(148.15, abs=0.01)}
+    assert sum(buys.values()) == pytest.approx(2000, abs=1e-9)
+
+
+def test_proportional_and_greedy_helpers_exclude_the_source():
+    values = {"A": 100.0, "B": 300.0, "S": 600.0}
+    targets = {"A": 40.0, "B": 40.0, "S": 20.0}
+    assert proportional_deltas(values, targets, 200, exclude=("S",)) == {
+        "A": pytest.approx(150), "B": pytest.approx(50), "S": 0.0}
+    greedy = contribution_deltas(values, targets, 200, exclude=("S",))
+    assert greedy["S"] == 0.0 and sum(greedy.values()) == pytest.approx(200)
+    assert contribution_deltas(values, targets, 200, exclude=("A", "B", "S")) == {
+        "A": 0.0, "B": 0.0, "S": 0.0}
+
+
+def test_property_funding_balanced_and_source_never_bought():
+    rng = random.Random(2026)
+    for _ in range(200):
+        values, targets = random_portfolio(rng)
+        source = rng.choice(list(values))
+        liquid = {n: v * rng.choice([1.0, 0.5, 0.0]) for n, v in values.items()}
+        amount = rng.uniform(1, 40000)
+        strategy = rng.choice(["greedy", "proportional"])
+        deltas, info = funding_plan(values, targets, liquid, source, amount, strategy,
+                                    rng.choice([0, 20, 200]))
+        assert all(d > 0 for n, d in deltas.items() if n != source)
+        assert sum(deltas.values()) == pytest.approx(0, abs=1e-6)
+        assert info["applied_usd"] <= round(amount, 2) + 1e-9
+        assert info["applied_usd"] <= liquid[source] + 1e-9
+        assert -deltas.get(source, 0.0) == pytest.approx(info["applied_usd"], abs=1e-9)
+        if info["applied_usd"] < round(amount, 2) - 0.01:
+            assert info["limited_by"] in ("liquidity", "room")
+
+
+def test_funding_capped_by_source_liquidity():
+    lots = [spot("BTC", 8000, 100000), spot("ETH", 4000, 4000), spot("SOL", 2000, 200),
+            spot("USDC", 1500), spot("USDC", 10500, 1, BINANCE_EARN, "locked", LOCKED_EARN)]
+    report = allocate(lots, settings(), source_bucket="Stablecoin", funding_amount=2000)
+    funding = report["funding"]
+    assert funding["limited_by"] == "liquidity"
+    assert funding["requested_usd"] == 2000 and funding["applied_usd"] == 1500
+    sell = by_bucket(report)["Stablecoin"]
+    assert sell["usd"] == 1500 and sell["constrained_by"] == LOCKED_EARN
+    assert [leg["source"] for leg in sell["legs"]] == [BINANCE_SPOT]  # never the locked Earn
+    assert signed(report["actions"]) == pytest.approx(0, abs=1e-9)
+
+
+def test_funding_capped_by_room_and_no_forced_buys():
+    report = allocate(DCA, settings(), source_bucket="Stablecoin", funding_amount=10000)
+    funding = report["funding"]
+    assert funding["limited_by"] == "room"
+    assert funding["applied_usd"] == pytest.approx(8100)
+    rows = {row["name"]: row for row in report["buckets"]}
+    for name in ("BTC", "ETH", "Altcoins", "Stablecoin"):  # every bucket lands on its target
+        assert rows[name]["after_pct"] == pytest.approx(rows[name]["target_pct"], abs=0.01)
+    assert funding["progress_pct"] == pytest.approx(100)
+
+    on_target = [spot("BTC", 13000, 100000), spot("ETH", 6500, 4000), spot("USDC", 3900),
+                 spot("SOL", 2600, 200)]  # nothing misses anything: nothing to buy, nothing sold
+    empty = allocate(on_target, settings(), source_bucket="Stablecoin", funding_amount=500)
+    assert empty["funding"]["limited_by"] == "room"
+    assert empty["funding"]["applied_usd"] == 0 and empty["actions"] == []
+
+
+def test_funding_flags_a_source_falling_under_its_target():
+    # Stablecoin is only 1,100 over its 3,900 target; BTC misses 3,000
+    lots = [spot("BTC", 10000, 100000), spot("ETH", 8000, 4000), spot("USDC", 5000),
+            spot("SOL", 3000, 200)]
+    report = allocate(lots, settings(), source_bucket="Stablecoin", funding_amount=2000)
+    funding = report["funding"]
+    assert funding["applied_usd"] == 2000 and funding["limited_by"] is None
+    assert funding["source_below_target"] is True
+    assert funding["source_excess_usd"] == pytest.approx(1100)
+    assert funding["remaining_batches_estimate"] == pytest.approx(0.6)
+    ok = allocate(lots, settings(), source_bucket="Stablecoin", funding_amount=1000)
+    assert ok["funding"]["source_below_target"] is False
+
+
+@pytest.mark.parametrize("strategy", ["greedy", "proportional"])
+def test_funding_respects_min_trade(strategy):
+    report = allocate(DCA, settings(min_trade_usd=200), source_bucket="Stablecoin",
+                      funding_amount=2000, strategy=strategy)
+    buys = [a for a in report["actions"] if a["action"] == "BUY"]
+    assert all(a["usd"] >= 200 for a in buys)
+    assert sum(a["usd"] for a in buys) == pytest.approx(2000, abs=1e-9)
+    assert signed(report["actions"]) == pytest.approx(0, abs=1e-9)
+    if strategy == "proportional":  # Altcoins' 148.15 share is dropped and shared again
+        assert {a["bucket"] for a in buys} == {"BTC", "ETH"}
+        assert by_bucket(report)["BTC"]["usd"] == pytest.approx(1333.33, abs=0.01)
+
+
+def test_funding_from_a_non_stablecoin_bucket():
+    # ETH is 5,500 over its 6,500 target; Stablecoin is above target too: BTC and Altcoins buy
+    lots = [spot("BTC", 8000, 100000), spot("ETH", 12000, 4000), spot("USDC", 4000),
+            spot("SOL", 2000, 200)]
+    report = allocate(lots, settings(), source_bucket="ETH", funding_amount=3000,
+                      strategy="proportional")
+    sell = by_bucket(report)["ETH"]
+    assert sell["action"] == "SELL" and sell["asset"] == "ETH"
+    assert sell["est_qty"] == pytest.approx(0.75) and "quote_spend" not in sell
+    assert sell["text"].startswith("SELL")
+    buys = {a["bucket"] for a in report["actions"] if a["action"] == "BUY"}
+    assert buys == {"BTC", "Altcoins"}  # Stablecoin has no deficit, ETH is the source
+    assert report["funding"]["source_is_stablecoin"] is False
+    # two real trades (sell ETH, buy BTC/SOL): fees on both sides
+    assert report["est_fees_usd"] == pytest.approx(6000 * 0.001, abs=0.01)
+
+
+def test_funding_from_stablecoin_is_worded_as_spending_it():
+    report = allocate(DCA, settings(), source_bucket="Stablecoin", funding_amount=2000)
+    spend = by_bucket(report)["Stablecoin"]
+    assert spend["action"] == "SELL" and spend["quote_spend"] is True
+    assert spend["text"].startswith("USE ~2,000.00 USDC (~$2,000.00) · Stablecoin")
+    assert report["funding"]["source_is_stablecoin"] is True
+    assert report["est_fees_usd"] == pytest.approx(2000 * 0.001, abs=0.01)  # one trade, not two
+
+
+def test_funding_after_pct_is_measured_on_the_unchanged_total():
+    report = allocate(DCA, settings(), source_bucket="Stablecoin", funding_amount=2000)
+    rows = {row["name"]: row for row in report["buckets"]}
+    assert rows["Stablecoin"]["after_pct"] == pytest.approx(10000 / 26000 * 100, abs=1e-3)
+    assert rows["BTC"]["after_pct"] == pytest.approx(10000 / 26000 * 100, abs=1e-3)
+    assert rows["ETH"]["after_pct"] == pytest.approx(rows["ETH"]["actual_pct"], abs=1e-9)
+    assert sum(row["after_pct"] for row in report["buckets"]) == pytest.approx(100, abs=1e-3)
+    assert rows["Stablecoin"]["order_usd"] == -2000 and rows["BTC"]["order_usd"] == 2000
+
+
+def test_funding_runs_even_when_nothing_breaches():
+    lots = [spot("BTC", 5100, 90000), spot("ETH", 2400, 3000), spot("USDT", 1500), spot("SOL", 1000, 150)]
+    report = allocate(lots, settings(), source_bucket="Stablecoin", funding_amount=100)
+    assert report["rebalance_needed"] is False
+    assert {(a["bucket"], a["action"], a["usd"]) for a in report["actions"]} == {
+        ("ETH", "BUY", 100), ("Stablecoin", "SELL", 100)}
+
+
+def test_funding_structural_errors_raise():
+    with pytest.raises(ValueError, match="Unknown source bucket"):
+        allocate(DCA, settings(), source_bucket="Gold", funding_amount=100)
+    for bad in (0, -5, float("nan")):
+        with pytest.raises(ValueError, match="above 0"):
+            allocate(DCA, settings(), source_bucket="Stablecoin", funding_amount=bad)
+    with pytest.raises(ValueError, match="not both"):
+        allocate(DCA, settings(), contribution=100, source_bucket="Stablecoin", funding_amount=100)
+    with pytest.raises(ValueError, match="needs both"):
+        allocate(DCA, settings(), source_bucket="Stablecoin")
+    with pytest.raises(ValueError, match="strategy"):
+        allocate(DCA, settings(), source_bucket="Stablecoin", funding_amount=100, strategy="random")
+
+
+def test_other_modes_report_no_funding_block():
+    assert allocate(DCA, settings())["funding"] is None
+    assert allocate(DCA, settings(), contribution=500)["funding"] is None
+
+
 # -- endpoint + switch -------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def isolated_env(monkeypatch):
@@ -514,6 +720,35 @@ def test_endpoint_contribution_mode_and_validation(tmp_path):
     assert sum(a["usd"] for a in data["actions"]) == pytest.approx(1000, abs=0.001)
     for bad in ("0", "-5", "abc", "inf", "nan"):
         assert client.get(f"/api/analytics/allocation?contribution={bad}").status_code == 422, bad
+
+
+def test_endpoint_funding_mode(tmp_path):
+    client, _ = make_client(tmp_path, allocation={"enabled": True}, holdings=HOLDINGS)
+    url = "/api/analytics/allocation?source_bucket=Stablecoin&funding_amount_usd=5000"
+    data = client.get(url).json()
+    assert data["mode"] == "funding" and data["funding"]["strategy"] == "greedy"
+    assert data["funding"]["applied_usd"] == 5000
+    assert signed(data["actions"]) == pytest.approx(0, abs=0.001)
+    assert [a["bucket"] for a in data["actions"] if a["action"] == "SELL"] == ["Stablecoin"]
+    prop = client.get(url + "&strategy=proportional").json()
+    assert prop["funding"]["strategy"] == "proportional"
+    assert len([a for a in prop["actions"] if a["action"] == "BUY"]) > \
+        len([a for a in data["actions"] if a["action"] == "BUY"])
+
+
+def test_endpoint_funding_validation(tmp_path):
+    client, _ = make_client(tmp_path, allocation={"enabled": True}, holdings=HOLDINGS)
+    base = "/api/analytics/allocation?"
+    both = client.get(base + "contribution=100&source_bucket=Stablecoin&funding_amount_usd=100")
+    assert both.status_code == 422 and "not both" in both.json()["detail"]["message"]
+    assert client.get(base + "contribution=100&source_bucket=Stablecoin").status_code == 422
+    unknown = client.get(base + "source_bucket=Gold&funding_amount_usd=100")
+    assert unknown.status_code == 422 and "Unknown source bucket" in unknown.json()["detail"]["message"]
+    assert client.get(base + "source_bucket=Stablecoin").status_code == 422
+    assert client.get(base + "funding_amount_usd=100").status_code == 422
+    for bad in ("0", "-5", "abc", "inf"):
+        assert client.get(base + f"source_bucket=Stablecoin&funding_amount_usd={bad}").status_code == 422
+    assert client.get(base + "source_bucket=Stablecoin&funding_amount_usd=100&strategy=x").status_code == 422
 
 
 def test_endpoint_invalid_targets_is_422_and_dashboard_still_runs(tmp_path):

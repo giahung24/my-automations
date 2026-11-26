@@ -4,13 +4,20 @@ From the newest snapshot: the weight of every target bucket, its drift from the 
 orders that would bring the portfolio back in line. **Suggestions only**: nothing here places an
 order, and the Binance key stays read-only.
 
-Three modes of suggestion:
+Four modes of suggestion:
 
 - ``target``    every bucket back to its exact target weight (self-funded, sum of orders = 0);
 - ``band_edge`` only the buckets outside the tolerance band, pulled to the nearest band edge;
                 the gap is covered by the in-band buckets (less turnover than ``target``);
 - contribution  new money only (``?contribution=1000``): BUY orders that add up to exactly the
                 amount, poured into the most under-weight buckets first. Nothing is sold.
+- funding       partial / DCA rebalance (``?source_bucket=Stablecoin&funding_amount_usd=5000``):
+                one SELL in the chosen source bucket, BUY orders in the under-weight buckets,
+                Σ BUY = Σ SELL = the amount, so the portfolio value V does not change. The money
+                goes deepest deficit first (``strategy=greedy``) or in proportion to each
+                bucket's deficit (``strategy=proportional``). The amount is cut to what the source
+                can sell now (``limited_by="liquidity"``) and to what the other buckets still miss
+                to reach their target (``limited_by="room"``). Computed even when nothing breaches.
 
 "Dry powder" (cash kept on purpose to buy a dip, e.g. the USDC in Simple Earn) is set aside by
 `allocation.dry_powder` rules before any weight is computed, so it never shows up as a
@@ -27,6 +34,8 @@ that reads SQLite.
 """
 from __future__ import annotations
 
+import math
+from collections.abc import Collection
 from dataclasses import dataclass, replace
 
 from config import AllocationBucket, AllocationSettings, DryPowderRule, ManualAsset
@@ -39,6 +48,7 @@ ILLIQUID = "illiquid_manual"
 # what one click redeems, then what has to be moved to the exchange first.
 SELL_ORDER = {BINANCE_SPOT: 0, BINANCE_EARN: 1, BINANCE_FUNDING: 2, ONCHAIN: 3, MANUAL: 4}
 OFF_EXCHANGE = (ONCHAIN, MANUAL)
+STRATEGIES = ("greedy", "proportional")
 
 
 @dataclass(frozen=True)
@@ -184,18 +194,20 @@ def band_edge_deltas(values: dict[str, float], targets: dict[str, float],
 
 
 def contribution_deltas(values: dict[str, float], targets: dict[str, float], amount: float,
-                        min_trade_usd: float = 0.0) -> dict[str, float]:
+                        min_trade_usd: float = 0.0, exclude: Collection[str] = ()) -> dict[str, float]:
     """BUY-only orders adding up to exactly `amount`, deepest deficit first (water-filling).
 
     With V' = V + amount, every funded bucket ends at the same drift λ (as low as possible),
     the others are left alone: x_b = max(0, (w*_b + λ)·V' − V_b) and Σ x_b = amount. A
     bucket that would get less than `min_trade_usd` is dropped and the amount shared again
     among the rest; the most under-weight bucket is always kept, so the sum stays exact.
+    Buckets in `exclude` never receive money (the source of a funding trade).
     """
-    if amount <= 0:
+    candidates = [name for name in values if name not in exclude]
+    if amount <= 0 or not candidates:
         return {name: 0.0 for name in values}
     after_total = sum(values.values()) + amount
-    eligible = [name for name in values if targets[name] > 0] or list(values)
+    eligible = [name for name in candidates if targets[name] > 0] or candidates
     while True:
         orders = _water_fill(values, targets, amount, after_total, eligible)
         funded = [n for n in eligible if orders[n] > EPS]
@@ -222,6 +234,105 @@ def _water_fill(values: dict[str, float], targets: dict[str, float], amount: flo
         if lam <= values[following] / after_total - targets[following] / 100:
             break
     return {n: max(0.0, (targets[n] / 100 + lam) * after_total - values[n]) for n in names}
+
+
+def deficits(values: dict[str, float], targets: dict[str, float], total: float,
+             exclude: Collection[str] = ()) -> dict[str, float]:
+    """USD each bucket misses to reach its target at portfolio value `total` (> 0 only)."""
+    out = {}
+    for name in values:
+        if name in exclude:
+            continue
+        room = targets[name] / 100 * total - values[name]
+        if room > EPS:
+            out[name] = room
+    return out
+
+
+def proportional_deltas(values: dict[str, float], targets: dict[str, float], amount: float,
+                        min_trade_usd: float = 0.0, exclude: Collection[str] = ()) -> dict[str, float]:
+    """BUY-only orders adding up to `amount`, shared in proportion to each bucket's deficit.
+
+    The deficits are measured at the current value V = Σ values (a funding trade does not change
+    it). A share under `min_trade_usd` is dropped and the amount shared again among the rest, in
+    the same proportions (they may then pass their target a little, as in `contribution_deltas`);
+    the largest deficit is always kept, so the sum stays exact.
+    """
+    rooms = deficits(values, targets, sum(values.values()), exclude)
+    if amount <= 0 or not rooms:
+        return {name: 0.0 for name in values}
+    while True:
+        shares = _spread(amount, rooms)
+        given = sum(shares.values())
+        if given < amount - 1e-9:  # fewer rooms than the amount once some were dropped
+            shares = {name: share * amount / given for name, share in shares.items()}
+        small = [n for n, share in shares.items() if share < min_trade_usd]
+        if not small or len(shares) <= 1:
+            break
+        del rooms[min(small, key=lambda n: (shares[n], n))]
+    return {name: shares.get(name, 0.0) for name in values}
+
+
+def funding_plan(values: dict[str, float], targets: dict[str, float], liquid: dict[str, float],
+                 source: str, amount: float, strategy: str = "greedy",
+                 min_trade_usd: float = 0.0) -> tuple[dict[str, float], dict]:
+    """Partial / DCA rebalance: sell `amount` of `source`, buy the under-weight buckets with it.
+
+    Returns ``(deltas, info)``: the orders (rounded to cents, Σ = 0, the source the only SELL)
+    and the ``funding`` block of the report. Raises ValueError on a structural mistake (unknown
+    source, amount <= 0, unknown strategy); a too-large amount is cut down, never refused.
+    """
+    if source not in values:
+        raise ValueError(f"Unknown source bucket '{source}'. Choose one of: {', '.join(values)}.")
+    if not amount or amount <= 0 or not math.isfinite(amount):
+        raise ValueError("The funding amount must be a number of USD above 0.")
+    if strategy not in STRATEGIES:
+        raise ValueError(f"Unknown strategy '{strategy}': use {' or '.join(STRATEGIES)}.")
+    total = sum(values.values())
+    room = sum(deficits(values, targets, total, exclude=(source,)).values())
+    can_sell = max(0.0, liquid.get(source, 0.0))
+    cap = min(can_sell, room)
+    limited_by = None
+    if amount > cap + EPS:
+        limited_by = "liquidity" if can_sell <= room else "room"
+    # whole cents; a cap is rounded down so the SELL never outgrows what the source can sell
+    applied = max(0.0, min(round(amount, 2), math.floor(cap * 100 + 1e-6) / 100))
+
+    deltas: dict[str, float] = {}
+    if applied > 0:
+        if strategy == "greedy":
+            # the source's value goes down by what it sells, so V' = Σ values2 + applied = V
+            values2 = dict(values)
+            values2[source] -= applied
+            raw = contribution_deltas(values2, targets, applied, min_trade_usd, exclude=(source,))
+        else:
+            raw = proportional_deltas(values, targets, applied, min_trade_usd, exclude=(source,))
+        deltas = finalize_deltas({n: d for n, d in raw.items() if n != source}, 0.0,
+                                 keep_sum=applied)
+        bought = round(sum(deltas.values()), 2)
+        if bought > 0:
+            deltas[source] = -bought
+        else:
+            deltas = {}
+    applied = round(sum(d for d in deltas.values() if d > 0), 2)
+
+    source_target = targets[source] / 100 * total
+    excess = max(0.0, values[source] - source_target)
+    has_progress = excess > EPS and applied > 0
+    info = {
+        "source_bucket": source,
+        "requested_usd": round(amount, 2),
+        "applied_usd": applied,
+        "strategy": strategy,
+        "limited_by": limited_by,
+        "source_below_target": values[source] - applied < source_target - EPS,
+        "source_liquid_usd": round(can_sell, 2),
+        "room_usd": round(room, 2),
+        "source_excess_usd": round(excess, 2),
+        "progress_pct": round(applied / excess * 100, 1) if has_progress else None,
+        "remaining_batches_estimate": round(excess / applied, 1) if has_progress else None,
+    }
+    return deltas, info
 
 
 # -- liquidity ----------------------------------------------------------------------------
@@ -398,10 +509,29 @@ def sell_order(bucket: AllocationBucket, usd: float, lots: list[Lot],
     }
 
 
+def _as_quote_spend(order: dict) -> dict:
+    """A stablecoin "SELL" that funds buys is not a trade of its own: the buys are paid in it
+    directly (X/USDC pairs). Same order, flagged and worded as money spent."""
+    text = "USE" + order["text"].removeprefix("SELL") + " · pay the buys with it"
+    return {**order, "quote_spend": True, "text": text}
+
+
 # -- engine -------------------------------------------------------------------------------
 def allocate(lots: list[Lot], settings: AllocationSettings, *, contribution: float | None = None,
-             include_dry_powder: bool = False, unpriced_assets: int = 0) -> dict:
-    """Weights, drift and suggested orders for `lots` (pure; see the module docstring)."""
+             source_bucket: str | None = None, funding_amount: float | None = None,
+             strategy: str = "greedy", include_dry_powder: bool = False,
+             unpriced_assets: int = 0) -> dict:
+    """Weights, drift and suggested orders for `lots` (pure; see the module docstring).
+
+    Raises ValueError when the funding request is malformed (see `funding_plan`) or mixed with
+    a `contribution`.
+    """
+    funding_requested = source_bucket is not None or funding_amount is not None
+    if funding_requested and contribution:
+        raise ValueError("Use either new money (contribution) or partial funding "
+                         "(source_bucket + funding_amount_usd), not both.")
+    if funding_requested and (source_bucket is None or funding_amount is None):
+        raise ValueError("Partial funding needs both source_bucket and funding_amount_usd.")
     all_value = sum(lot.value_usd for lot in lots)
     if include_dry_powder:
         kept, dry = list(lots), split_dry_powder(lots, settings.dry_powder)[1]
@@ -440,12 +570,20 @@ def allocate(lots: list[Lot], settings: AllocationSettings, *, contribution: flo
             "locked_reasons": sorted({lot.lock_reason for lot in locked}),
             "symbols": sorted({lot.symbol for lot in grouped[name]}),
             "catch_all": bucket.catch_all,
+            "stablecoin": bucket.stablecoins,
         })
 
-    mode = "contribution" if contribution else "rebalance"
+    mode = "funding" if funding_requested else "contribution" if contribution else "rebalance"
     cut: dict[str, float] = {}
     unfilled = 0.0
-    if contribution:
+    funding = None
+    if funding_requested:
+        deltas, funding = funding_plan(values, targets, liquid, source_bucket, funding_amount,
+                                       strategy, settings.min_trade_usd)
+        funding["source_is_stablecoin"] = buckets[source_bucket].stablecoins
+        if funding["limited_by"] == "liquidity":
+            cut[source_bucket] = funding["requested_usd"] - funding["applied_usd"]
+    elif contribution:
         raw = contribution_deltas(values, targets, contribution, settings.min_trade_usd)
         deltas = finalize_deltas(raw, 0.0, keep_sum=round(contribution, 2))
     elif breached and total > 0:
@@ -470,9 +608,13 @@ def allocate(lots: list[Lot], settings: AllocationSettings, *, contribution: flo
             if bucket.name in cut:
                 reasons = {lot.lock_reason for lot in grouped[bucket.name] if not lot.liquid}
                 reason = LOCKED_EARN if LOCKED_EARN in reasons else (ILLIQUID if reasons else LOCKED_EARN)
-            actions.append(sell_order(bucket, -usd, grouped[bucket.name], reason))
+            order = sell_order(bucket, -usd, grouped[bucket.name], reason)
+            if funding and bucket.stablecoins and bucket.name == source_bucket:
+                order = _as_quote_spend(order)
+            actions.append(order)
 
-    after_total = total + (contribution or 0.0)
+    # a funding trade moves money between buckets: V does not change (only new money adds to it)
+    after_total = total + (contribution or 0.0) if mode == "contribution" else total
     for row in rows:
         after = values[row["name"]] + deltas.get(row["name"], 0.0)
         row["after_pct"] = round(after / after_total * 100, 4) if after_total > 0 else None
@@ -489,7 +631,8 @@ def allocate(lots: list[Lot], settings: AllocationSettings, *, contribution: flo
         "available": total > 0 or bool(contribution),
         "reason": None if total > 0 or contribution else "no_priced_assets",
         "mode": mode,
-        "contribution_usd": round(contribution, 2) if contribution else None,
+        "contribution_usd": round(contribution, 2) if contribution and mode == "contribution" else None,
+        "funding": funding,
         "rebalance_to": settings.rebalance_to,
         "tolerance_pp": tol,
         "min_trade_usd": settings.min_trade_usd,
@@ -554,13 +697,16 @@ def lots_from_rows(rows: list[dict], manual_assets: list[ManualAsset] = ()) -> t
 
 
 def allocation_report(database, settings: AllocationSettings, manual_assets: list[ManualAsset] = (),
-                      *, contribution: float | None = None, include_dry_powder: bool = False) -> dict:
+                      *, contribution: float | None = None, source_bucket: str | None = None,
+                      funding_amount: float | None = None, strategy: str = "greedy",
+                      include_dry_powder: bool = False) -> dict:
     """`allocate` over the newest snapshot in SQLite. Never touches the network."""
     snapshot = database.latest()
     if snapshot is None:
         return {"enabled": True, "available": False, "reason": "no_snapshot", "as_of": None,
                 "snapshot_id": None, "buckets": [], "actions": [], "rebalance_needed": False}
     lots, unpriced = lots_from_rows(database.assets(snapshot.id), list(manual_assets))
-    report = allocate(lots, settings, contribution=contribution,
+    report = allocate(lots, settings, contribution=contribution, source_bucket=source_bucket,
+                      funding_amount=funding_amount, strategy=strategy,
                       include_dry_powder=include_dry_powder, unpriced_assets=unpriced)
     return {"enabled": True, "as_of": snapshot.timestamp, "snapshot_id": snapshot.id, **report}
