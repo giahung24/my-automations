@@ -176,7 +176,7 @@
                @lostpointercapture="onChartRelease" @contextmenu.prevent>
             <div class="chart" ref="chartEl" aria-hidden="true"></div>
             <div v-if="scrub" class="chart-tip num" :style="{ left: scrub.tipX + 'px' }">
-              <div class="text-[11px] font-bold text-ink-3">{{ scrub.when }}</div>
+              <div class="text-[12px] font-bold text-ink-3">{{ scrub.when }}</div>
               <div class="priv priv-soft text-[13px] font-extrabold">{{ fmt.money(scrub.value) }}</div>
             </div>
             <div v-if="chartMessage" class="chart-empty">
@@ -494,9 +494,9 @@
 
                   <ul class="insight-tiles mt-3 px-4" aria-label="Performance and risk metrics">
                     <li v-for="t in insightTiles" :key="t.id" class="insight-tile" :class="{ insufficient: !t.sufficient }" :title="t.hint">
-                      <span class="block text-[11px] font-semibold leading-tight text-ink-3">{{ t.label }}</span>
+                      <span class="block text-[12px] font-semibold leading-snug text-ink-3">{{ t.label }}</span>
                       <span class="pnl num mt-0.5 block text-[17px] font-extrabold" :class="t.trend">{{ t.text }}</span>
-                      <span class="block text-[11px] font-semibold leading-tight text-ink-3 num">{{ t.note }}</span>
+                      <span class="block text-[12px] font-semibold leading-snug text-ink-3 num">{{ t.note }}</span>
                     </li>
                   </ul>
 
@@ -591,7 +591,7 @@
                   <!-- Partial / DCA (M7): move part of one bucket into the under-weight ones, V unchanged -->
                   <form v-if="alloc.mode === 'funding'" class="mx-4 mt-3" @submit.prevent="applyFunding" novalidate>
                     <template v-if="fundingSources.length">
-                      <label class="label" for="fund-source">Nguồn vốn</label>
+                      <label class="label" for="fund-source">Source</label>
                       <div class="field field-select">
                         <select id="fund-source" :value="alloc.source" @change="setFundingSource($event.target.value)" aria-describedby="fund-source-hint">
                           <option v-for="b in fundingSources" :key="b.name" :value="b.name">{{ b.name }}<template v-if="b.symbols.length"> · {{ b.symbols.slice(0, 3).join(', ') }}</template></option>
@@ -599,35 +599,35 @@
                         <svg class="icon icon-xs" aria-hidden="true"><use href="#i-chevron"/></svg>
                       </div>
                       <p id="fund-source-hint" class="field-msg mb-3">
-                        <span v-if="fundingSourceRow">Khả dụng: <span class="priv priv-soft num">{{ fmt.money(fundingSourceRow.liquid_usd) }}</span><template v-if="fundingSourceRow.locked_usd > 0"> · <span class="priv priv-soft num">{{ fmt.money(fundingSourceRow.locked_usd) }}</span> đang khóa, không tính</template></span>
+                        <span v-if="fundingSourceRow">Available: <span class="priv priv-soft num">{{ fmt.money(fundingSourceRow.liquid_usd) }}</span><template v-if="fundingSourceRow.locked_usd > 0"> · <span class="priv priv-soft num">{{ fmt.money(fundingSourceRow.locked_usd) }}</span> locked, not counted</template></span>
                       </p>
 
-                      <label class="label" for="fund-amount">Số tiền chuyển đợt này</label>
+                      <label class="label" for="fund-amount">Amount to move</label>
                       <div class="flex gap-2">
                         <div class="field min-w-0 flex-1" :class="{ 'is-invalid': alloc.fundError }">
                           <span class="field-prefix" aria-hidden="true">$</span>
                           <input id="fund-amount" v-model="alloc.fundAmount" inputmode="decimal" placeholder="5000" autocomplete="off" enterkeyhint="go"
                                  class="num" :aria-invalid="alloc.fundError ? 'true' : null" aria-describedby="fund-amount-msg">
                         </div>
-                        <button type="submit" class="btn btn-secondary min-h-12" :disabled="alloc.loading">Gợi ý lệnh</button>
+                        <button type="submit" class="btn btn-secondary min-h-12" :disabled="alloc.loading">Suggest orders</button>
                       </div>
-                      <div class="mt-2 flex gap-2" role="group" aria-label="Số tiền nhanh">
+                      <div class="mt-2 flex gap-2" role="group" aria-label="Quick amounts">
                         <button type="button" class="btn btn-sm btn-secondary num" :disabled="!fundingSourceRow || alloc.loading" @click="quickFunding(0.1)">10%</button>
                         <button type="button" class="btn btn-sm btn-secondary num" :disabled="!fundingSourceRow || alloc.loading" @click="quickFunding(0.25)">25%</button>
                         <button type="button" class="btn btn-sm btn-secondary" :disabled="!fundingSourceRow || alloc.loading" @click="quickFunding(1)">Max</button>
                       </div>
                       <p id="fund-amount-msg" class="field-msg" :class="{ error: alloc.fundError }" aria-live="polite">
                         <template v-if="alloc.fundError"><svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ alloc.fundError }}</span></template>
-                        <span v-else>Bán một phần {{ alloc.source || 'nguồn' }}, mua các bucket đang thiếu: tổng mua = tổng bán, giá trị danh mục không đổi.</span>
+                        <span v-else>Sells part of {{ alloc.source || 'the source' }} to buy the under-weight buckets. Buys equal sells, so the total stays the same.</span>
                       </p>
 
-                      <p class="label mt-3" id="fund-strategy-label">Cách chia tiền</p>
+                      <p class="label mt-3" id="fund-strategy-label">Split</p>
                       <div class="segmented segmented-2 fund-strategy" role="radiogroup" aria-labelledby="fund-strategy-label">
                         <button type="button" class="segment" role="radio" :aria-checked="alloc.strategy === 'greedy'" :aria-selected="alloc.strategy === 'greedy'" @click="setFundingStrategy('greedy')">
-                          <span class="seg-label">Dồn vào coin thiếu nhiều nhất</span><span class="seg-total">greedy</span>
+                          <span class="seg-label">Most under-weight first</span><span class="seg-total">greedy</span>
                         </button>
                         <button type="button" class="segment" role="radio" :aria-checked="alloc.strategy === 'proportional'" :aria-selected="alloc.strategy === 'proportional'" @click="setFundingStrategy('proportional')">
-                          <span class="seg-label">Chia đều theo tỷ lệ thiếu hụt</span><span class="seg-total">proportional</span>
+                          <span class="seg-label">Pro rata to the gap</span><span class="seg-total">proportional</span>
                         </button>
                       </div>
 
@@ -638,7 +638,7 @@
                         </p>
                       </div>
                     </template>
-                    <p v-else class="text-[13px] font-semibold text-ink-3">Không bucket nào có số dư khả dụng để làm nguồn vốn.</p>
+                    <p v-else class="text-[13px] font-semibold text-ink-3">No bucket has an available balance to move.</p>
                   </form>
 
                   <form v-if="alloc.mode === 'contribution'" class="mx-4 mt-3" @submit.prevent="applyContribution" novalidate>
@@ -682,7 +682,7 @@
                         </span>
                         <span class="num text-ink-3 priv priv-soft">{{ fmt.money(row.value_usd) }}</span>
                       </div>
-                      <p v-if="row.lockedNote" class="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-ink-3">
+                      <p v-if="row.lockedNote" class="mt-0.5 flex items-center gap-1 text-[12px] font-semibold text-ink-3">
                         <svg class="icon icon-xs"><use href="#i-lock"/></svg>
                         <span><span class="priv priv-soft num">{{ fmt.money(row.locked_usd) }}</span> {{ row.lockedNote }}</span>
                       </p>
@@ -709,12 +709,12 @@
                     <ul class="alloc-orders mx-4 mt-2">
                       <li v-for="a in allocActions" :key="a.key" class="alloc-order">
                         <span class="order-side" :class="a.side">{{ a.sideLabel }}</span>
-                        <span class="min-w-0 flex-1">
+                        <span class="order-info min-w-0 flex-1">
                           <span class="block truncate text-[14px] font-extrabold num priv priv-soft">{{ a.what }}</span>
                           <span class="block truncate text-[12px] font-semibold text-ink-3" :title="a.note">{{ a.note }}</span>
                         </span>
-                        <span class="whitespace-nowrap text-[14px] font-extrabold num priv priv-soft">~{{ fmt.money(a.usd) }}</span>
-                        <button type="button" class="icon-btn -mr-2" @click="copyOrder(a)" :aria-label="'Copy order: ' + a.text">
+                        <span class="order-usd whitespace-nowrap text-[14px] font-extrabold num priv priv-soft">~{{ fmt.money(a.usd) }}</span>
+                        <button type="button" class="order-copy icon-btn -mr-2" @click="copyOrder(a)" :aria-label="'Copy order: ' + a.text">
                           <svg class="icon icon-sm"><use href="#i-copy"/></svg>
                         </button>
                       </li>

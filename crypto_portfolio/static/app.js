@@ -89,9 +89,9 @@
     { id: 'onchain', label: 'On-chain' },
   ];
   const ACTIVITY_KINDS = [
-    { id: 'deposit', label: 'Nạp', hint: 'Deposits' },
-    { id: 'withdrawal', label: 'Rút', hint: 'Withdrawals' },
-    { id: 'transfer', label: 'Chuyển', hint: 'Transfers between your own accounts' },
+    { id: 'deposit', label: 'Deposits', hint: 'Money coming in' },
+    { id: 'withdrawal', label: 'Withdrawals', hint: 'Money going out' },
+    { id: 'transfer', label: 'Transfers', hint: 'Between your own accounts' },
     { id: 'reward', label: 'Earn', hint: 'Simple Earn interest' },
   ];
   // Direction is always carried by an arrow or a sign, never by colour alone (M4.4 AC3).
@@ -870,11 +870,11 @@
         const raw = String(alloc.fundAmount).replace(/[\s,$]/g, '');
         const value = Number(raw);
         if (!alloc.source) {
-          alloc.fundError = 'Chọn nguồn vốn trước.';
+          alloc.fundError = 'Pick a source first.';
           return;
         }
         if (!raw || !Number.isFinite(value) || value <= 0) {
-          alloc.fundError = 'Nhập số tiền USD lớn hơn 0.';
+          alloc.fundError = 'Enter an amount in USD above 0.';
           return;
         }
         alloc.fundError = '';
@@ -964,28 +964,28 @@
       const fundingSources = computed(() => (allocReady.value
         ? alloc.data.buckets.filter((b) => b.liquid_usd > 0) : []));
       const fundingSourceRow = computed(() => fundingSources.value.find((b) => b.name === alloc.source) || null);
-      // "$5,000 = 21% phần Stablecoin dư · còn khoảng ~4-5 đợt cùng cỡ để về target"
+      // "$5,000 = 21% of the Stablecoin excess · ~4-5 more batches this size to target"
       const fundingProgress = computed(() => {
         const f = allocReady.value && alloc.data.mode === 'funding' ? alloc.data.funding : null;
         if (!f) return null;
         let line = '';
         if (f.source_excess_usd <= 0) {
-          line = `${f.source_bucket} đã ở mức hoặc dưới target: không còn phần dư để chuyển.`;
+          line = `${f.source_bucket} is at or under its target: no excess left to move.`;
         } else if (f.progress_pct !== null) {
           const n = f.remaining_batches_estimate;
           const lo = Math.floor(n);
           const hi = Math.ceil(n);
-          const batches = n <= 1 ? 'đợt này là đủ để về target'
-            : `còn khoảng ~${lo === hi ? lo : lo + '-' + hi} đợt cùng cỡ để về target`;
-          line = `${fmt.money(f.applied_usd)} = ${Math.round(f.progress_pct)}% phần ${f.source_bucket} dư · ${batches}`;
+          const batches = n <= 1 ? 'this batch reaches target'
+            : `~${lo === hi ? lo : lo + '-' + hi} more batches this size to target`;
+          line = `${fmt.money(f.applied_usd)} = ${Math.round(f.progress_pct)}% of the ${f.source_bucket} excess · ${batches}`;
         }
         const notes = [];
         if (f.limited_by === 'liquidity') {
-          notes.push(`Chỉ dùng được ${fmt.money(f.applied_usd)} trên ${fmt.money(f.requested_usd)}: phần còn lại của ${f.source_bucket} đang bị khóa (Earn locked / không bán được).`);
+          notes.push(`Only ${fmt.money(f.applied_usd)} of ${fmt.money(f.requested_usd)} can move: the rest of ${f.source_bucket} is locked (locked Earn or not sellable).`);
         } else if (f.limited_by === 'room') {
-          notes.push(`Chỉ cần ${fmt.money(f.applied_usd)} trên ${fmt.money(f.requested_usd)}: các bucket khác đã về target, phần dư không được gợi ý bán.`);
+          notes.push(`Only ${fmt.money(f.applied_usd)} of ${fmt.money(f.requested_usd)} is needed: the other buckets are at target, so the rest is not sold.`);
         }
-        if (f.source_below_target) notes.push(`Sau đợt này ${f.source_bucket} sẽ xuống dưới target của nó.`);
+        if (f.source_below_target) notes.push(`After this batch ${f.source_bucket} drops below its target.`);
         return { line, notes };
       });
       // funding orders only under Partial / DCA, and only funding orders there (no stale list)
@@ -995,12 +995,12 @@
         if (!allocReady.value || allocModeMismatch.value) return [];
         return alloc.data.actions.map((a) => {
           if (a.quote_spend) {  // a stablecoin source: the buys are paid in it, nothing is sold
-            const notes = [a.bucket, 'trả thẳng qua cặp X/' + (a.asset || 'USDC')];
-            if (a.legs.length) notes.push('từ ' + [...new Set(a.legs.map((l) => l.from))].join(', '));
-            if (a.legs.some((l) => l.requires_redeem)) notes.push('redeem Earn trước');
+            const notes = [a.bucket, 'pay directly on X/' + (a.asset || 'USDC') + ' pairs'];
+            if (a.legs.length) notes.push('from ' + [...new Set(a.legs.map((l) => l.from))].join(', '));
+            if (a.legs.some((l) => l.requires_redeem)) notes.push('redeem from Earn first');
             if (a.requires_transfer) notes.push('transfer to Binance first');
-            return { ...a, key: 'USE:' + a.bucket, side: 'use', sideLabel: 'DÙNG', note: notes.join(' · '),
-              what: `~${fmt.money(a.usd)} ${a.asset || a.bucket}` };  // read with the badge: "DÙNG ~$X USDC"
+            return { ...a, key: 'USE:' + a.bucket, side: 'use', sideLabel: 'USE', note: notes.join(' · '),
+              what: a.asset || a.bucket };  // read with the badge and the amount: "USE USDC ~$X"
           }
           const notes = [a.bucket];
           if (a.legs.length) notes.push('from ' + [...new Set(a.legs.map((l) => l.from))].join(', '));
@@ -1022,7 +1022,7 @@
         }
         if (allocModeMismatch.value) return '';
         if (d.mode === 'contribution') return d.actions.length ? '' : 'Nothing to buy with this amount.';
-        if (d.mode === 'funding') return d.actions.length ? '' : 'Không có bucket nào thiếu tỷ trọng để mua với số tiền này.';
+        if (d.mode === 'funding') return d.actions.length ? '' : 'No bucket is under target, so there is nothing to buy.';
         if (!d.rebalance_needed) return `Every bucket is within ±${d.tolerance_pp} pp of its target. Nothing to do.`;
         if (!d.actions.length) return `Some buckets drifted, but every order would be under the $${d.min_trade_usd} minimum.`;
         return '';
