@@ -6,6 +6,7 @@
 # Google Calendar credentials and tokens
 credentials/
 *.json
+!crypto_portfolio/static/manifest.json
 *.pickle
 token.pickle
 client_secret_*.json
