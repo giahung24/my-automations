@@ -52,14 +52,6 @@ chains:
   polygon:
     tokens:
       - { symbol: USDC, address: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", decimals: 6 }
-  # A staking pool whose shares are not priced anywhere (Kiln pooled staking, used by Trust
-  # Wallet and Ledger Live): `underlying: true` reads the position in ETH, rewards included
-  # (`balanceOfUnderlying`) instead of the share count, and `price_id` prices it as ETH.
-  # With `symbol: ETH` it is counted together with the wallet's own ETH.
-  # ethereum:
-  #   tokens:
-  #     - { symbol: ETH, address: "0x2401c39d7ba9e283668a53fcc7b8f5fd9e716fdf", decimals: 18,
-  #         underlying: true, price_id: "coingecko:ethereum" }
   # Each chain also accepts `rpcs: [...]` to replace the built-in public endpoints,
   # e.g. your own Alchemy/Infura/QuickNode URL for higher rate limits:
   # ethereum:
