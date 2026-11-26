@@ -1,8 +1,10 @@
-# User unit for the web dashboard (`main.py serve`, 127.0.0.1:8088, behind `tailscale serve`).
+# User unit for the web dashboard (`main.py serve`, 0.0.0.0:8088, LAN + Tailscale).
 #
-# The process binds loopback only; Tailscale terminates HTTPS and is the only way in:
+# The process binds all interfaces so phones on the home LAN can reach it directly
+# (http://<lan-ip>:8088), and Tailscale also terminates HTTPS for access from anywhere:
 #     sudo tailscale serve --bg 8088        # https://<machine>.<tailnet>.ts.net -> 127.0.0.1:8088
-# HTTPS is what lets the PWA register its service worker and marks the session cookie Secure.
+# PORTFOLIO_WEB_TOKEN is REQUIRED for a non-loopback bind (main.py refuses to start otherwise);
+# this is the only thing standing between "anyone on the LAN" and your balances.
 #
 # Access token: put  PORTFOLIO_WEB_TOKEN=<long random>  in the project's .env (mode 0600,
 # git-ignored; config.py loads it). Generate one with:
@@ -12,13 +14,13 @@
 #           systemctl --user daemon-reload && systemctl --user enable --now crypto-web
 #           loginctl enable-linger "$USER"     # once: keep user units running without a login
 [Unit]
-Description=Crypto portfolio web dashboard (PWA + JSON API, tailnet only)
+Description=Crypto portfolio web dashboard (PWA + JSON API, LAN + tailnet)
 After=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/home/jean/projects/my-automations/crypto_portfolio
-ExecStart=/home/jean/projects/my-automations/crypto_portfolio/.venv/bin/python main.py serve --host 127.0.0.1 --port 8088
+ExecStart=/home/jean/projects/my-automations/crypto_portfolio/.venv/bin/python main.py serve --host 0.0.0.0 --port 8088
 Restart=on-failure
 RestartSec=5
 UMask=0077
