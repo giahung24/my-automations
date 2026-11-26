@@ -709,11 +709,9 @@
                     <ul class="alloc-orders mx-4 mt-2">
                       <li v-for="a in allocActions" :key="a.key" class="alloc-order">
                         <span class="order-side" :class="a.side">{{ a.sideLabel }}</span>
-                        <span class="order-info min-w-0 flex-1">
-                          <span class="block truncate text-[14px] font-extrabold num priv priv-soft">{{ a.what }}</span>
-                          <span class="block truncate text-[12px] font-semibold text-ink-3" :title="a.note">{{ a.note }}</span>
-                        </span>
+                        <span class="order-what text-[14px] font-extrabold num priv priv-soft">{{ a.what }}</span>
                         <span class="order-usd whitespace-nowrap text-[14px] font-extrabold num priv priv-soft">~{{ fmt.money(a.usd) }}</span>
+                        <span class="order-note text-[12px] font-semibold text-ink-3">{{ a.note }}</span>
                         <button type="button" class="order-copy icon-btn -mr-2" @click="copyOrder(a)" :aria-label="'Copy order: ' + a.text">
                           <svg class="icon icon-sm"><use href="#i-copy"/></svg>
                         </button>
