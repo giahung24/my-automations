@@ -374,6 +374,31 @@ def test_onchain_evm_native_and_token():
     assert all(h.source == ONCHAIN for h in holdings)
 
 
+def test_onchain_staking_pool_reads_the_underlying_and_prices_it_as_eth():
+    """Kiln pooled staking: shares have no market, the position is read in ETH from the pool."""
+    pool = "0x2401C39d7ba9E283668a53fcC7B8F5FD9e716fdf"
+    calls = []
+
+    def evm(payload):
+        if payload["method"] == "eth_call":
+            calls.append(payload["params"][0])
+            data = payload["params"][0]["data"]
+            # 1.0 share, worth 1.05 ETH once rewards are counted
+            return {"result": hex(105 * 10 ** 16) if data.startswith("0x3af9e669") else hex(10 ** 18)}
+        return {"result": hex(2 * 10 ** 18)}
+
+    chains = {"ethereum": {**CHAINS["ethereum"], "tokens": [
+        {"symbol": "ETH", "address": pool, "decimals": 18, "underlying": True, "price_id": "coingecko:ethereum"}]}}
+    client = OnChainClient(chains, session=FakeSession({"rpc-a.test": evm}))
+    holdings = client.fetch_evm("ethereum", {"address": "0xdead", "label": "main", "chains": [], "tokens": {}})
+
+    assert [(h.symbol, h.quantity, h.price_id) for h in holdings] == [
+        ("ETH", pytest.approx(2.0), "coingecko:ethereum"),           # the wallet's own ETH
+        ("ETH", pytest.approx(1.05), "coingecko:ethereum"),          # staked, rewards included
+    ]
+    assert calls == [{"to": pool, "data": "0x3af9e669" + "dead".rjust(64, "0")}]
+
+
 def test_onchain_rpc_failover_to_second_endpoint():
     client = OnChainClient(CHAINS, session=onchain_session(fail_rpcs=["rpc-a.test"]))
     assert client.evm_native("ethereum", "0xdead") == pytest.approx(2.0)

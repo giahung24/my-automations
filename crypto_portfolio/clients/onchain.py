@@ -24,6 +24,7 @@ RATE_LIMIT_PAUSE = 0.5    # seconds to wait before retrying a throttled endpoint
 
 # ERC-20 function selectors (first 4 bytes of keccak256 of the signature).
 SEL_BALANCE_OF = "0x70a08231"
+SEL_BALANCE_OF_UNDERLYING = "0x3af9e669"  # balanceOfUnderlying(address)
 SEL_DECIMALS = "0x313ce567"
 SEL_SYMBOL = "0x95d89b41"
 
@@ -93,8 +94,13 @@ class OnChainClient:
         wei = _hex_to_int(self.rpc(chain, "eth_getBalance", [address, "latest"]))
         return wei / 1e18  # every supported EVM chain uses an 18-decimal native coin
 
-    def evm_token_balance(self, chain: str, address: str, token: str, decimals: int) -> float:
-        data = SEL_BALANCE_OF + address.lower().removeprefix("0x").rjust(64, "0")
+    def evm_token_balance(self, chain: str, address: str, token: str, decimals: int,
+                          *, underlying: bool = False) -> float:
+        """ERC-20 balance of `address`. With `underlying`, ask the contract what the position
+        is worth in the asset it wraps (`balanceOfUnderlying`), e.g. the ETH behind the shares
+        of a staking pool, rewards included, instead of the number of shares."""
+        selector = SEL_BALANCE_OF_UNDERLYING if underlying else SEL_BALANCE_OF
+        data = selector + address.lower().removeprefix("0x").rjust(64, "0")
         raw = _hex_to_int(self.rpc(chain, "eth_call", [{"to": token, "data": data}, "latest"]))
         return raw / (10 ** decimals)
 
@@ -148,14 +154,18 @@ class OnChainClient:
                 symbol = symbol or discovered_symbol
                 decimals = discovered_decimals if decimals is None else decimals
             try:
-                quantity = self.evm_token_balance(chain, address, token_address, int(decimals))
+                quantity = self.evm_token_balance(chain, address, token_address, int(decimals),
+                                                  underlying=bool(token.get("underlying")))
             except (RpcError, requests.RequestException) as exc:
                 self.errors.append(f"{label} {symbol}: {exc}")
                 continue
             if quantity > 0:
+                # `price_id` overrides the contract's own price: pool shares have no market,
+                # but the underlying they are counted in (ETH) does.
+                price_id = str(token.get("price_id") or "").strip() or f"{llama_chain}:{token_address.lower()}"
                 holdings.append(
                     Holding(symbol=str(symbol).upper(), source=ONCHAIN, quantity=quantity,
-                            detail=label, price_id=f"{llama_chain}:{token_address.lower()}")
+                            detail=label, price_id=price_id)
                 )
         return holdings
 
