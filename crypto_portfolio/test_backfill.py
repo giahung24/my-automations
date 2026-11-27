@@ -46,7 +46,7 @@ from services.db import (
 )
 from services.portfolio import aggregate, portfolio_from_db
 from test_all import FakeResponse, FakeSession, make_v0_db
-from test_api import isolated_env, write_config  # noqa: F401  (autouse: no real .env)
+from test_api import write_config
 
 BASE_PRICES = {"BTC": 20000.0, "ETH": 1500.0, "SOL": 100.0, "BNB": 300.0}
 NOW_PRICES = {"BTC": 60000.0, "ETH": 3000.0, "SOL": 150.0, "BNB": 600.0, "LINK": 15.0,

@@ -36,15 +36,6 @@ SECRET = "s3cr3t-value-that-must-never-leak-9f3a"
 API_KEY = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
 
 
-# -- fixtures ------------------------------------------------------------------
-@pytest.fixture(autouse=True)
-def isolated_env(monkeypatch):
-    """No real .env, no env overrides, no access token unless a test sets one."""
-    monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **k: False)
-    for name in (*config_module.ENV_OVERRIDES, "PORTFOLIO_WEB_TOKEN"):
-        monkeypatch.delenv(name, raising=False)
-
-
 def write_config(path: Path, **sections) -> Path:
     base = {"settings": {"db_path": str(path.parent / "history.db")}}
     base.update(sections)

@@ -49,7 +49,6 @@ from services.cash_flows import (
 from services.db import CASH_FLOWS_SCHEMA_VERSION, SCHEMA_VERSION, Database, migrate, schema_version
 from services.portfolio import aggregate
 from test_all import FakeResponse
-from test_api import isolated_env  # noqa: F401  (autouse: no real .env, no env overrides)
 
 EVM_MAIN = "0xAbCdEf0123456789abcdef0123456789ABCDEF01"
 EVM_COLD = "0x1111111111111111111111111111111111111111"

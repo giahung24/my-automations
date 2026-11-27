@@ -19,7 +19,6 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import config as config_module
 from config import load_config, read_raw_config, write_raw_config
 from test_api import EVM_A, EVM_B, SOL_A, make_client
 
@@ -32,13 +31,6 @@ WALLETS = {
 }
 LEDGER_BTC = {"label": "My Ledgy", "kind": "cold_wallet", "linked_wallet": "My Ledgy",
               "updated_at": "2026-11-25", "holdings": [{"symbol": "BTC", "quantity": 0.02540344}]}
-
-
-@pytest.fixture(autouse=True)
-def isolated_env(monkeypatch):
-    monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **k: False)
-    for name in (*config_module.ENV_OVERRIDES, "PORTFOLIO_WEB_TOKEN"):
-        monkeypatch.delenv(name, raising=False)
 
 
 def saved_manual(tmp_path) -> list[dict]:

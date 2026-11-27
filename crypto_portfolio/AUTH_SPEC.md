@@ -1,10 +1,16 @@
 # AUTH_SPEC — Mở dashboard ra Internet (để dành, chưa triển khai)
 
-> **Trạng thái:** `[ ] BACKLOG`. Cập nhật 2026-11-26 sau khi rà lại với code thực tế.
-> **Quyết định hiện tại:** **không mở public.** Dashboard chỉ truy cập qua Tailscale
-> (`127.0.0.1:8088` + `tailscale serve`), xem [README](README.md#web-dashboard) và
-> `deploy/crypto-web.service`.
-> **Khi nào mở lại tài liệu này:** khi cần xem dashboard từ thiết bị không cài được Tailscale.
+> **Trạng thái:** `[ ] BACKLOG`. Cập nhật 2026-11-26 sau khi deploy thật.
+> **Quyết định hiện tại:** **không mở public.** Dashboard bind `0.0.0.0:8088` (qua
+> `crypto-web.service`), truy cập bằng token qua 2 đường, không cần `tailscale serve`
+> /`ts.net` (sẽ đụng mapping cổng 443 đang dùng cho hermes gateway ở 9119):
+>   - **LAN nhà:** `http://192.168.1.66:8088`
+>   - **Tailscale (mọi nơi, không cần ở nhà):** `http://100.123.246.52:8088`
+>   Cả 2 đều là HTTP thường (không TLS) + token Bearer/session — chấp nhận được vì cả LAN
+>   lẫn tailnet là mạng riêng tin cậy, không phải Internet mở. Xem [README](README.md#web-dashboard)
+>   và `deploy/crypto-web.service`.
+> **Khi nào mở lại tài liệu này:** khi cần xem dashboard từ thiết bị không cài được Tailscale
+> và không ở nhà (khách, điện thoại công ty, v.v.).
 > **Mục tiêu khi đó:** `app.tytony.link` truy cập được từ mọi nơi, không bật VPN, mà bề mặt
 > public chỉ đọc được số dư, không sửa được cấu hình.
 
@@ -16,13 +22,15 @@ Phần này không phải việc của spec nữa, nhưng là điểm xuất ph�
 
 | Hạng mục | Hiện trạng |
 |---|---|
-| Token | `main.py serve` từ chối bind ngoài loopback khi chưa đặt `PORTFOLIO_WEB_TOKEN`. |
+| Token | `main.py serve` từ chối bind ngoài loopback khi chưa đặt `PORTFOLIO_WEB_TOKEN`. Đã đặt trong `.env` (0600, git-ignored). |
+| Service | `crypto-web.service` (systemd --user, `linger` bật), bind `0.0.0.0:8088`, `Restart=on-failure`. |
+| Truy cập | LAN (`192.168.1.66:8088`) và Tailscale IP (`100.123.246.52:8088`) trực tiếp — không dùng `tailscale serve`/HTTPS `ts.net` để không đụng mapping cổng 443 hiện có của hermes gateway (`127.0.0.1:9119`). |
 | Cookie | Phiên đã ký `portfolio_session` (HMAC theo token, 90 ngày, HttpOnly, SameSite=Strict, `Secure` khi https). Không chứa token. |
 | Brute force | Credential sai bị giới hạn 20 lần / 5 phút / client, sau đó 429. |
 | Token trên URL | `/?token=` đã bỏ. |
 | Secret Binance | API chỉ trả bản đã mask (`****wxyz`); secret không bao giờ rời server. |
 | Dữ liệu | `config.yaml` và `portfolio_history.db` mode 0600. |
-| Tunnel | `cloudflared` (remotely-managed) đang chạy cho `api.tytony.link`; thêm hostname chỉ là cấu hình trên dashboard Cloudflare. |
+| Gateway công khai | `api.tytony.link`/`api.tito.dpdns.org` là **service riêng** (`crypto-api-gateway.service`, cổng 8090, đọc thẳng `portfolio_history.db`) — không đi qua `web_api.py`/8088, không bị ảnh hưởng bởi auth ở trên. |
 
 ## 2. Kiến trúc đề xuất
 

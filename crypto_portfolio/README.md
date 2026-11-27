@@ -91,14 +91,24 @@ SameSite=Strict session cookie that lasts 90 days and never contains the token),
 as `Authorization: Bearer`. Changing the token signs every device out. Wrong credentials are
 rate limited (20 per 5 minutes per client, then `429`).
 
-**Recommended setup: loopback + Tailscale.** Keep the dashboard on `127.0.0.1` and let
-Tailscale publish it to your own devices over HTTPS (which the PWA's service worker needs):
+**Recommended setup: systemd + LAN + Tailscale.** Run the dashboard as a user service bound to
+`0.0.0.0` so it's reachable both from the home LAN and over Tailscale (no `tailscale serve`
+needed - it would collide with the hermes gateway's existing mapping on port 443/9119):
 
 ```bash
 cp deploy/crypto-web.service ~/.config/systemd/user/     # adjust the paths inside first
 systemctl --user daemon-reload && systemctl --user enable --now crypto-web
-sudo tailscale serve --bg 8088                           # https://<machine>.<tailnet>.ts.net
+loginctl enable-linger "$USER"                            # once: keep it running without a login
+
+# Open from either address, token required on both:
+#   http://<lan-ip>:8088        (home wifi, no Tailscale needed)
+#   http://<tailscale-ip>:8088  (from anywhere, via Tailscale)
 ```
+
+Both are plain HTTP + Bearer/session token (no TLS) - acceptable because the LAN and the
+tailnet are both private networks, not the open internet. If a device needs HTTPS (e.g. for
+the PWA's service worker from outside the LAN), `tailscale serve` on a *different* port
+(e.g. `--https=8443`) would do it without disturbing the existing 443 mapping; not set up yet.
 
 `portfolio_history.db` is created with mode 0600 (and tightened to it if it was wider).
 

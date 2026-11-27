@@ -14,19 +14,11 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import config as config_module
 import web_api
 from services.cash_flows import CashFlow, upsert_flows
 from services.db import Database
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
-
-
-@pytest.fixture(autouse=True)
-def isolated_env(monkeypatch):
-    monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **k: False)
-    for name in (*config_module.ENV_OVERRIDES, "PORTFOLIO_WEB_TOKEN"):
-        monkeypatch.delenv(name, raising=False)
 
 
 def no_fetch(config, min_value):
