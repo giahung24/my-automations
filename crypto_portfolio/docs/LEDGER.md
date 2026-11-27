@@ -111,7 +111,7 @@ phần `53b4309` (2026-11-26).
 | M8.1–M8.3 | Gateway `/summary`, mô hình bảo mật, widget iOS | P2 | DEFERRED | D16, wave W8 |
 | M8.4, M8.5 | Sparkline, Shortcut / Android | P3 | TODO | Bị chặn bởi W8 |
 
-**Phase 3 (N1–N9):** N4–N9 `TODO`. Bảng xếp hạng và thẻ ý tưởng nằm ở ROADMAP §2.
+**Phase 3 (N1–N9):** N6–N9 `TODO`. Bảng xếp hạng và thẻ ý tưởng nằm ở ROADMAP §2.
 
 | Task | Việc | Trạng thái | Ghi chú |
 |---|---|---|---|
@@ -121,6 +121,8 @@ phần `53b4309` (2026-11-26).
 | N1.3–N1.4 | Thu nhập luỹ kế, `GET /api/analytics/earn` + thẻ "Earn income" | DONE | `earn_backfill_days` mặc định 1827 |
 | N2.1–N2.4 | Phần dư, trade suy luận, dòng "Unexplained", sức khoẻ dữ liệu trên dòng trạng thái | DONE | `services/reconcile.py`; chỉ Binance; AC 25–27/11 PASS trên dữ liệu thật (2026-11-27) |
 | N3.1–N3.3 | Peg check: bảng `peg_checks`, ghi mỗi snapshot, pill cảnh báo | DONE | `services/peg.py`; schema v6; AC PASS trên máy chủ thật (2026-11-27) |
+| N4.1–N4.6 | Sổ lệnh `trades`, giá vốn bình quân, PnL chưa thực hiện, thẻ "Cost basis" | DONE | `services/trades.py`, `services/analytics/cost_basis.py`, `GET /api/analytics/cost-basis`; schema v8; chưa chạy trên dữ liệu thật |
+| N5.1–N5.3 | Analyst kit: 6 view SQL, `main.py export`, notebook mẫu | DONE | schema v9; `v_daily_returns` có test khớp `quant.py`; notebook chưa chạy thử |
 
 **Ghi chú N1.2 (kiểm 2026-11-27, `PARTIAL`):**
 - Công thức: `earned / mean_balance × 365 / span_days`, `earned` chỉ gồm reward có
@@ -196,3 +198,4 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | 2026-11-27 | Xong code W4: A1, N1, N2, N3. Schema v6 (`snapshot_assets.listed_apr`, `peg_checks`). `earn_backfill_days` mặc định 365 → 1827. N2 thu hẹp về Binance (on-chain chờ F2.5). Test 595 → 613. |
 | 2026-11-27 | Tách `ROADMAP_LEDGER.md` thành ROADMAP / LEDGER / SPEC (D18); đối soát toàn bộ trạng thái với code. Sửa các dòng sai của bảng cũ: F3.B1 không phải DONE; F2.2–F2.4, F2.10, F2.11, M4.1–M4.6, M6.1–M6.4, M7.1–M7.5 thực tế đã xong. Dời test vào `tests/`, script một lần vào `scripts/archive/`. |
 | 2026-11-27 | Kiểm W4 trên máy chủ thật: A1, N2, N3 PASS; **N1.2 PARTIAL** (realised 7d USDC = `None` do 5.42/7 ngày + hố 25.35 giờ; bỏ qua điều kiện ra 3.34%; cửa sổ đủ điều kiện sớm nhất ~2026-12-01 07:33 UTC, dự kiến ~2.0–2.4%), D20. Schema v7 (`listed_base_apr`, `listed_tiers`): `listed_apr` gồm bonus tier Binance theo số dư. Test 613 → 619. Cập nhật ARCHITECTURE theo v7. |
+| 2026-11-27 | Xong code W5: N4 (bảng `trades`, giá vốn, thẻ "Cost basis", trade thật trong đối soát và Activity) và N5 (view SQL, `export`, notebook). Schema v7 → v9. Dòng tiền cũ hơn snapshot đầu tiên được định giá lại theo giá đóng cửa ngày. AC đối soát N4 thu hẹp về từ 11/2026. Test 619 → 629. |

@@ -33,6 +33,7 @@ environment or in a `.env` (see `.env.example`) override it. Both files are git-
 .venv/bin/python main.py history --days 30       # recorded snapshots
 .venv/bin/python main.py backfill               # 60 monthly checkpoints 2021-11..2026-10 (see below)
 .venv/bin/python main.py pnl                     # profit and loss net of deposits/withdrawals
+.venv/bin/python main.py export --out ./export   # one CSV per analyst view (docs/notebooks/analyst_kit.ipynb reads the same views)
 .venv/bin/python main.py serve --port 8080       # mobile web dashboard (see below)
 ```
 

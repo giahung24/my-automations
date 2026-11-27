@@ -584,6 +584,15 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 .earn-list > li { min-height: 52px; padding-top: 7px; padding-bottom: 7px; }
 .earn-list > li + li { border-top: 1px solid var(--line); }
 
+/* Cost basis (N4): asset, entry over current price, unrealised amount over percent */
+.basis-grid { display: grid; align-items: center; gap: 8px; grid-template-columns: minmax(0, 1fr) 92px 100px; text-align: right; }
+.basis-grid > :first-child { text-align: left; }
+.basis-head { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.basis-none { grid-column: 2 / -1; text-wrap: balance; }
+.basis-note { grid-column: 1 / -1; margin-top: -5px; padding-left: 40px; text-align: left; font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.pnl.block { display: block; }
+.basis-grid > .pnl { justify-content: flex-end; }   /* .pnl is a flex row: text-align does not reach it */
+
 /* The period selector pinned under the Analytics title */
 .period-pills .pill { height: 40px; }
 

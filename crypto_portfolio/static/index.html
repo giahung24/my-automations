@@ -372,6 +372,15 @@
                       <dd class="priv priv-soft font-bold">{{ fmt.money(row.value) }}</dd>
                     </template>
                   </dl>
+                  <!-- N4: what this coin cost, where the ledger knows -->
+                  <dl v-if="basisBy[asset.symbol] && basisBy[asset.symbol].known" class="num mt-2 border-t border-line pt-2">
+                    <dt>Average entry <span v-if="basisBy[asset.symbol].estimated" class="flow-tag ml-1 align-middle">est.</span></dt>
+                    <dd class="text-ink-2">{{ basisBy[asset.symbol].trackedText }}</dd>
+                    <dd class="font-bold">{{ basisBy[asset.symbol].entryText }}</dd>
+                    <dt>Unrealised</dt>
+                    <dd class="pnl" :class="basisBy[asset.symbol].trend">{{ basisBy[asset.symbol].pctText }}</dd>
+                    <dd class="pnl" :class="basisBy[asset.symbol].trend"><span class="priv priv-soft">{{ basisBy[asset.symbol].pnlText }}</span></dd>
+                  </dl>
                   <p v-if="asset.locations.length" class="mt-2 break-words text-[12px] text-ink-3">
                     {{ asset.locations.join(' · ') }}
                   </p>
@@ -569,7 +578,86 @@
 
             <p class="day-head mt-5">Right now</p>
             <div class="card fold-group mt-1.5">
-            <!-- 4. Earn income (N1): what Simple Earn really pays -->
+            <!-- 4. Cost basis (N4): am I up or down on what I hold, and how did each buy do -->
+            <section class="fold" aria-labelledby="basis-title" :aria-busy="basis.loading">
+              <h2 class="m-0">
+                <button type="button" class="fold-head" :aria-expanded="folds.basis" aria-controls="fold-basis" @click="toggleFold('basis')">
+                  <span id="basis-title" class="fold-title section-title">Cost basis</span>
+                  <span v-if="!folds.basis" class="fold-sum num" :class="foldSums.basis.trend ? 'pnl ' + foldSums.basis.trend : ''">
+                    <span v-if="foldSums.basis.money" class="priv priv-soft">{{ foldSums.basis.money }}</span>{{ foldSums.basis.text }}
+                  </span>
+                  <svg class="icon icon-sm fold-chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+                </button>
+              </h2>
+              <div v-show="folds.basis" id="fold-basis">
+                <p class="section-sub px-5">Average entry and unrealised P&amp;L, from your trades and deposits</p>
+                <div v-if="basis.loading && !basis.data && !basis.error" class="space-y-3 px-5 pb-5 pt-3">
+                  <div v-for="n in 3" :key="n" class="skeleton h-9 w-full"></div>
+                </div>
+                <template v-else>
+                  <template v-if="basisRows.length">
+                    <div class="px-5 pt-3" v-if="basis.data.unrealised_usd !== null">
+                      <p class="delta-figure num pnl" :class="basisTrend">
+                        <span class="priv">{{ fmt.signedMoney(basis.data.unrealised_usd) }}</span>
+                      </p>
+                      <p class="mt-0.5 text-[12px] font-semibold text-ink-3 num">unrealised · the ledger explains {{ basis.data.tracked_pct }}% of what you hold</p>
+                    </div>
+                    <div class="basis-grid basis-head mt-3 px-5" aria-hidden="true">
+                      <span>Asset</span><span>Entry · now</span><span>Unrealised</span>
+                    </div>
+                    <ul class="earn-list num" aria-label="Average entry and unrealised profit per coin">
+                      <li v-for="r in basisRows" :key="r.symbol" class="basis-grid px-5">
+                        <span class="flex min-w-0 items-center gap-2.5">
+                          <span class="coin coin-sm" :style="{ '--hue': fmt.hue(r.symbol) }" aria-hidden="true">
+                            <img v-if="coinIcon(r.symbol)" :src="coinIcon(r.symbol)" alt="" @error="iconFailed[r.symbol] = true">
+                            <span v-else>{{ fmt.badge(r.symbol) }}</span>
+                          </span>
+                          <span class="truncate text-[14px] font-extrabold tracking-tight">{{ r.symbol }}</span>
+                        </span>
+                        <template v-if="r.known">
+                          <span>
+                            <span class="block text-[14px] font-extrabold"><span class="sr-only">Average entry: </span>{{ r.entryText }}</span>
+                            <span class="block whitespace-nowrap text-[12px] font-semibold text-ink-3"><span class="sr-only">Price now: </span>{{ r.nowText }}</span>
+                          </span>
+                          <span class="pnl block" :class="r.trend">
+                            <span class="block text-[14px] font-extrabold"><span class="priv priv-soft">{{ r.pnlText }}</span></span>
+                            <span class="block text-[12px] font-bold">{{ r.pctText }}</span>
+                          </span>
+                        </template>
+                        <span v-else class="basis-none text-[12px] font-semibold text-ink-3">No cost basis: nothing on record explains this balance</span>
+                        <!-- the caveat gets its own line: beside the symbol it would be cut on a phone -->
+                        <span v-if="r.note" class="basis-note">{{ r.note }}</span>
+                      </li>
+                    </ul>
+                  </template>
+
+                  <template v-if="basisBuys.length">
+                    <h3 class="block-sub mt-4 px-5">Your buys</h3>
+                    <p class="legend-note px-5">Since: price change since the buy. {{ basisBenchNote }}</p>
+                    <div class="basis-grid basis-head mt-2 px-5" aria-hidden="true">
+                      <span>Buy</span><span>Since</span><span>vs USDC Earn</span>
+                    </div>
+                    <ul class="earn-list num" aria-label="How each buy did since">
+                      <li v-for="b in basisBuys" :key="b.key" class="basis-grid px-5">
+                        <span class="min-w-0">
+                          <span class="block truncate text-[14px] font-extrabold tracking-tight">{{ b.symbol }} <span class="font-semibold text-ink-3">· {{ b.day }}</span></span>
+                          <span class="block truncate text-[12px] font-semibold text-ink-3">{{ b.priceText }} × <span class="priv priv-soft">{{ b.qtyText }}</span></span>
+                        </span>
+                        <span class="pnl text-[14px] font-extrabold" :class="b.sinceTrend"><span class="sr-only">Since the buy: </span>{{ b.sinceText }}</span>
+                        <span class="pnl text-[14px] font-extrabold" :class="b.vsTrend"><span class="sr-only">Against USDC Earn: </span>{{ b.vsText }}</span>
+                      </li>
+                    </ul>
+                    <button v-if="basisMoreBuys" type="button" class="btn btn-ghost btn-sm mx-3 mt-1" @click="basis.allBuys = true">
+                      Show all {{ basisMoreBuys }} buys
+                    </button>
+                  </template>
+                  <p v-if="basisMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ basisMessage }}</p>
+                  <div class="h-4"></div>
+                </template>
+              </div>
+            </section>
+
+            <!-- 5. Earn income (N1): what Simple Earn really pays -->
             <section class="fold" aria-labelledby="earn-title" :aria-busy="earn.loading">
               <h2 class="m-0">
                 <button type="button" class="fold-head" :aria-expanded="folds.earn" aria-controls="fold-earn" @click="toggleFold('earn')">

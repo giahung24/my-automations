@@ -75,7 +75,8 @@
     period: 'portfolio.analytics.period', actPeriod: 'portfolio.activity.period',
     actSource: 'portfolio.activity.source', actKind: 'portfolio.activity.kind', assetView: 'portfolio.assetView',
     folds: 'portfolio.analytics.folds' };
-  const FOLDS = ['why', 'perf', 'risk', 'earn', 'alloc'];   // Analytics cards, in page order (A1)
+  const FOLDS = ['why', 'perf', 'risk', 'basis', 'earn', 'alloc'];
+  const BUYS_SHOWN = 5;   // buys listed before "Show all" (N4)   // Analytics cards, in page order (A1)
   const STALE_MS = 130 * 60 * 1000;   // two missed hourly snapshots, plus slack (N2.4)
   const SECTIONS = ['portfolio', 'analytics', 'activity'];
   const SECTION_TITLES = { portfolio: 'Portfolio', analytics: 'Analytics', activity: 'Activity' };
@@ -96,7 +97,7 @@
     { id: 'withdrawal', label: 'Withdrawals', hint: 'Money going out', icon: '#i-up' },
     { id: 'transfer', label: 'Transfers', hint: 'Between your own accounts', icon: '#i-swap' },
     { id: 'reward', label: 'Earn', hint: 'Simple Earn interest', icon: '#i-sparkle' },
-    { id: 'trade', label: 'Trades', hint: 'Inferred from the change between two snapshots', icon: '#i-swap' },
+    { id: 'trade', label: 'Trades', hint: 'Spot trades and conversions; inferred from the snapshots where Binance history has none', icon: '#i-swap' },
     { id: 'unexplained', label: 'Unexplained', hint: 'Quantity changes no recorded flow accounts for', icon: '#i-alert' },
   ];
   // Direction is always carried by an arrow or a sign, never by colour alone (M4.4 AC3).
@@ -315,6 +316,7 @@
       let whySeq = 0;
       const insights = reactive({ data: null, loading: false, error: '' });
       const earn = reactive({ data: null, loading: false, error: '' });
+      const basis = reactive({ data: null, loading: false, error: '', allBuys: false });
       const openFolds = storage.get(STORE.folds, 'why').split(',');
       const folds = reactive(Object.fromEntries(FOLDS.map((id) => [id, openFolds.includes(id)])));
       const benchEl = ref(null);
@@ -795,9 +797,70 @@
         }
       }
 
+      async function loadBasis() {
+        basis.loading = true;
+        try {
+          basis.data = await api('/api/analytics/cost-basis');
+          basis.error = '';
+        } catch (error) {
+          handleError(error, { silent: true });
+          basis.data = null;
+          basis.error = error.status === 401 ? '' : 'Could not load the cost basis: ' + error.message;
+        } finally {
+          basis.loading = false;
+        }
+      }
+
+      // A unit price: no cents above $1,000 (they are noise there), significant digits under $1.
+      const unitPrice = (v) => (num(v) >= 1000 ? fmt.compactMoney(v) : fmt.price(v));
+      const basisRows = computed(() => ((basis.data && basis.data.assets) || []).map((a) => {
+        const known = a.avg_entry !== null && a.unrealised_usd !== null;
+        const share = Math.round(num(a.tracked) * 100);
+        return {
+          symbol: a.symbol, known, estimated: a.estimated,
+          trackedText: !known || share >= 100 ? '' : `${share}% tracked`,
+          note: !known ? '' : [a.estimated ? 'deposits priced at that day\'s market' : '', share < 100 ? `${share}% tracked` : ''].filter(Boolean).join(' · '),
+          entryText: known ? unitPrice(a.avg_entry) : '', nowText: unitPrice(a.price),
+          pnlText: known ? fmt.signedMoney(a.unrealised_usd) : '', pctText: known ? fmt.signedPct(a.unrealised_pct) : '',
+          trend: known ? trendOf(num(a.unrealised_usd)) : 'flat',
+        };
+      }));
+      const basisBy = computed(() => Object.fromEntries(basisRows.value.map((r) => [r.symbol, r])));
+      const basisTrend = computed(() => (basis.data && basis.data.unrealised_usd !== null ? trendOf(num(basis.data.unrealised_usd)) : 'flat'));
+      const basisBuys = computed(() => {
+        const buys = (basis.data && basis.data.buys) || [];
+        const pp = (v) => (num(v) < 0 ? '−' : '+') + Math.abs(num(v)).toFixed(1) + ' pp';
+        return (basis.allBuys ? buys : buys.slice(0, BUYS_SHOWN)).map((b) => ({
+          key: b.timestamp + b.symbol, symbol: b.symbol,
+          day: new Date(b.timestamp).toLocaleDateString(undefined, { day: 'numeric', month: 'short',
+            ...(new Date(b.timestamp).getFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' }) }),
+          qtyText: fmt.qty(b.quantity), priceText: (b.estimated ? '≈ ' : '') + unitPrice(b.price),
+          sinceText: b.since_pct === null ? '—' : fmt.signedPct(b.since_pct),
+          sinceTrend: b.since_pct === null ? 'flat' : trendOf(num(b.since_pct)),
+          vsText: b.vs_stable_pp === null ? '—' : pp(b.vs_stable_pp),
+          vsTrend: b.vs_stable_pp === null ? 'flat' : trendOf(num(b.vs_stable_pp)),
+        }));
+      });
+      const basisMoreBuys = computed(() => {
+        const n = ((basis.data && basis.data.buys) || []).length;
+        return !basis.allBuys && n > BUYS_SHOWN ? n : 0;
+      });
+      const basisBenchNote = computed(() => (basis.data && basis.data.benchmark_apr !== null
+        ? `vs USDC Earn: against leaving the same dollars in Earn at today's ${(num(basis.data.benchmark_apr) * 100).toFixed(2)}%.`
+        : 'vs USDC Earn needs a stablecoin position in Earn with a listed rate.'));
+      const basisMessage = computed(() => {
+        if (basis.error) return basis.error;
+        if (!basis.data) return '';
+        if (!basis.data.trades && !basisRows.value.some((r) => r.known)) {
+          return 'No trade is synced yet. The collector (`python main.py record`) reads your Binance trade history after each snapshot; the first run takes a few minutes.';
+        }
+        return basisRows.value.length ? '' : 'Nothing but stablecoins to price.';
+      });
+
       function loadAnalytics() {
         loadAttribution();
         loadInsights();
+        loadBasis();
         loadEarn();
         loadAllocation();
       }
@@ -873,6 +936,9 @@
         } else if (earnLife.value) {
           out.earn = { money: fmt.money(earnLife.value.total), text: ' received', trend: '' };
         } else out.earn = none(earn.loading);
+        out.basis = basis.data && basis.data.unrealised_usd !== null
+          ? { money: fmt.signedMoney(basis.data.unrealised_usd), trend: basisTrend.value, text: ` · ${Math.round(num(basis.data.tracked_pct))}% tracked` }
+          : (basis.data ? { money: '', text: 'No cost basis yet', trend: '' } : none(basis.loading));
         if (alloc.data && !alloc.data.enabled) out.alloc = { money: '', text: 'Off', trend: '' };
         else if (allocReady.value) {
           const off = allocRows.value.filter((r) => r.breach).length;
@@ -1426,12 +1492,14 @@
         }
         const sign = isTransfer ? '' : out ? '−' : '+';
         const value = num(item.value_usd);
-        if (item.inferred) {   // an estimate: "≈", no gain/loss colour, signed only when it is a net change
+        if (item.kind === 'trade' || item.kind === 'unexplained') {
+          // no gain/loss colour: a trade moves value, it does not add any. "≈" marks an estimate.
+          const label = item.kind === 'trade' && !item.inferred ? 'Trade' : meta.label;
           return {
-            ...item, icon: meta.icon, kindLabel: meta.label, tone: 'flat', title, route, time,
-            amountText: item.kind === 'trade' ? '≈ ' + fmt.money(value) : fmt.signedMoney(value),
+            ...item, icon: meta.icon, kindLabel: label, tone: 'flat', title, route, time,
+            amountText: item.kind === 'trade' ? (item.inferred || item.estimated ? '≈ ' : '') + fmt.money(value) : fmt.signedMoney(value),
             feeText: '', pending: false, reviewText: '', canPair: false, txShort: '',
-            sr: `${meta.label}, ${title}, ${route}`,
+            sr: `${label}, ${title}, ${route}`,
           };
         }
         return {
@@ -2383,6 +2451,7 @@
         periods: ANALYTICS_PERIODS, periodId, analyticsPeriod, setPeriod,
         why, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
         folds, toggleFold, foldSums, earn, earnRows, earnGapNote, earnLife, earnMessage, dataStale,
+        basis, basisRows, basisBy, basisTrend, basisBuys, basisMoreBuys, basisBenchNote, basisMessage,
         insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
         alloc, allocEnabled, allocReady, allocRows, allocActions, allocMessage, loadAllocation, toggleAllocation,
         setAllocMode, applyContribution, toggleDryPowder, copyOrder, copyAllOrders,

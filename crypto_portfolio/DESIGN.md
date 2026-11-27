@@ -229,7 +229,7 @@ bottom sheet that becomes a centred dialog from 640px up. Toasts float just abov
 | Tab | Its question | What lives there today |
 |---|---|---|
 | **Portfolio** | What is it worth right now? | Hero (total, 24h chip, chart, range pills), status line (origin, age), failed-sources notice, source filter, asset list with expandable rows |
-| **Analytics** | Why, and how well? | One period selector pinned under the title, then two groups of folding cards: "Over the period" (Why it moved, Performance, Risk) and "Right now" (Earn income, Allocation & rebalancing) |
+| **Analytics** | Why, and how well? | One period selector pinned under the title, then two groups of folding cards: "Over the period" (Why it moved, Performance, Risk) and "Right now" (Cost basis, Earn income, Allocation & rebalancing) |
 | **Activity** | What happened to the money? | Period select, source and kind filter chips, review banner, one card per day of flows |
 
 ### Named Rules
@@ -246,7 +246,7 @@ warn about. No "all good" chips.
 ### Phase 3 placement (N1-N9)
 
 Where each roadmap idea lands. Detailed design happens per wave, on real data; this map only
-fixes location so nine features do not become nine cards. Net result: **one** new card, and
+fixes location so nine features do not become nine cards. Net result: **two** new cards (Earn income, Cost basis), and
 the Analytics tab folds (see Folding card) so its length no longer grows with its content.
 
 | ID | Idea | Lands in | Form |
@@ -255,7 +255,7 @@ the Analytics tab folds (see Folding card) so its length no longer grows with it
 | N2 | Inferred trades | Activity timeline | A new kind with a filter chip; neutral icon; an "inferred" tag on every such row; one "Unexplained" row per day when a residue remains. |
 | N2 | Data health | Portfolio status line (existing) | The age text turns amber past 130 min; the existing failed-sources notice stays the place for source errors; gap count joins the line only when above zero. No new badge. |
 | N3 | Peg check | Portfolio status line | One amber status pill ("USDC -0.4%" or "peg unchecked"), absent when on peg. |
-| N4 | Cost basis | Portfolio asset row, expanded detail | Average entry and unrealised PnL as two more lines of the existing detail list; "no cost basis" stated in words where unknown. Real trades replace the inferred rows in Activity. |
+| N4 | Cost basis | Analytics, group "Right now", new card "Cost basis" before Earn income; Portfolio asset row, expanded detail | Card: total unrealised, then per coin entry over current price and unrealised amount over percent, then "Your buys" (since, vs USDC Earn). A caveat ("72% tracked", deposits priced at market) sits on its own line under the row. Asset row: two more lines of the detail list. Real trades replace the inferred rows in Activity. Folded: total unrealised and the share tracked. |
 | N5 | Analyst kit | none | CLI and SQL only. |
 | N6 | Disbursement plan and stress | Analytics: Allocation card (plan), Risk card (stress) | Plan progress and the next order reuse the suggested-orders rows; the stress line and its slider join Risk. |
 | N7 | EUR lens | Hero label row; "Why it moved" buckets | A two-option switch (USD / EUR) beside the privacy eye; the FX effect is one more bucket tile. |

@@ -78,7 +78,7 @@ là atomic, mode 0600, giữ bản `.bak`; comment YAML mất sau khi ghi từ U
 
 ### 3.3 Lưu trữ — `services/db.py`
 
-SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v7**);
+SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v9**; v8: bảng `trades`, v9: sáu view `v_*` cho phân tích);
 migration chạy trong một transaction và sao lưu file trước. v6 (N1.1, N3.1): `listed_apr`,
 `peg_checks`. v7: `listed_base_apr`, `listed_tiers` (dòng cũ NULL; `listed_apr` của chúng là base).
 
@@ -102,9 +102,11 @@ migration chạy trong một transaction và sao lưu file trước. v6 (N1.1, N
 | `pnl.py` | Lãi/lỗ sau khi trừ nạp/rút, theo cửa sổ | `GET /api/portfolio/pnl` |
 | `quant.py` | TWR, Base 100 so với BTC/ETH, drawdown, volatility | `GET /api/analytics/quant` |
 | `allocation.py` | Lệch mục tiêu bao nhiêu, cần mua/bán gì (`target`, `band_edge`, `contribution`, góp vốn một phần) | `GET /api/analytics/allocation` |
-| `earn.py` (N1) | Mỗi tài sản Earn: APR niêm yết, APR thực nhận 7d/30d (`earned / mean_balance × 365 / span_days`, kèm `n_obs`, `sufficient`; không đủ ≥ 90% cửa sổ hoặc có hố > 6 giờ thì `None`), $/ngày, thu nhập luỹ kế theo năm | `GET /api/analytics/earn` |
+| `earn.py` (N1) | Mỗi tài sản Earn: APR niêm yết, APR thực nhận 7d/30d (`earned / mean_balance × 365 / span_days`, kèm `n_obs`, `sufficient`; không đủ ≥ 90% cửa sổ hoặc có hố > 6 giờ thì `None`), $/ngày, thu nhập luỹ kế theo năm | `GET /api/analytics/earn` · `GET /api/analytics/cost-basis` |
 | `cash_flows.py` | Đồng bộ lịch sử Binance, ghép chuyển khoản nội bộ (địa chỉ → `tx_hash` → heuristic) | chạy sau mỗi `record` |
-| `reconcile.py` (N2) | Phần dư số lượng Binance giữa hai snapshot không flow nào giải thích → trade suy luận hoặc "Unexplained"; tính lúc đọc, không lưu | qua `GET /api/cash-flows` |
+| `reconcile.py` (N2, N4) | Phần dư số lượng Binance giữa hai snapshot sau khi trừ flow và trade thật → trade suy luận hoặc "Unexplained" (tính lúc đọc, không lưu); cộng item cho trade thật, gộp theo lệnh | qua `GET /api/cash-flows` |
+| `trades.py` (N4) | Sau mỗi `record`: fill Spot (`myTrades` theo cặp) và Convert vào bảng `trades`; lần đầu định giá lại dòng tiền cũ theo giá đóng cửa ngày | collector |
+| `cost_basis.py` (N4) | Giá vào bình quân theo coin trên toàn danh mục, PnL chưa thực hiện trên phần sổ giải thích được (`tracked`), cờ `estimated`, bảng điểm các lần mua | `GET /api/analytics/cost-basis` |
 | `activity.py` | Dòng thời gian đọc được và sửa được của `cash_flows`, cộng item suy luận của `reconcile.py` | `GET`/`PATCH /api/cash-flows` |
 
 Mọi engine là hàm thuần trên dữ liệu thường; chỉ các loader chạm SQLite. Chỉ dùng numpy và stdlib.

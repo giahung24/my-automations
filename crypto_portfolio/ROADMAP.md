@@ -12,7 +12,7 @@
 |---|---|---|
 | **Phase 1** (P0, F1–F3) | Dữ liệu sạch nhịp 1h, backfill 5 năm, attribution, dòng tiền Binance, TWR / Base 100 / drawdown / volatility | Phần lõi xong. Còn lại ở §4. |
 | **Phase 2, W1–W3** (M4, M6, M7) | Tab Activity, tài sản manual (ví lạnh, staking), trợ lý Allocation | Xong. |
-| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | W4 xong code/test (2026-11-27, 619 test, schema v7): A1, N2, N3 PASS; **N1.2 PARTIAL** (APR thực nhận 7d chưa đủ dữ liệu), xem "Kết quả kiểm" cuối mục W4. W5 là việc kế tiếp. |
+| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | W4 xong code/test (2026-11-27, 619 test, schema v7): A1, N2, N3 PASS; **N1.2 PARTIAL** (APR thực nhận 7d chưa đủ dữ liệu), xem "Kết quả kiểm" cuối mục W4. W5 là việc kế tiếp. **W5 (N4, N5) đã code (schema v9, 629 test), chưa chạy trên dữ liệu thật**: xem "Còn phải kiểm" cuối mục W5. W6 là việc kế tiếp. |
 | **W7, W8** (M5, M8) | Telegram, widget mobile | Hoãn (D16), §3. |
 
 Nguyên tắc không đổi cho mọi việc bên dưới: app chỉ **mô tả** hiện trạng, không phát tín hiệu
@@ -162,6 +162,42 @@ lệch peg > 0.3% có chip cảnh báo.
   dependency (D2).
 - **AC:** `main.py export` sinh một CSV cho mỗi view; notebook mẫu dựng lại đường NAV và return ngày
   khớp `GET /api/analytics/quant`; `requirements.txt` không đổi.
+
+**Phạm vi đã chốt cho W5 (2026-11-27):**
+- Giá vốn **bình quân theo coin trên toàn danh mục** (không tách ví: chuyển Binance → ví lạnh không
+  đổi giá vốn). Stablecoin không theo dõi (giá vốn $1).
+- Giá của từng nguồn vào: trade = giá khớp; mua thẻ/P2P = giá đã trả; **nạp crypto từ ngoài = giá
+  thị trường ngày nạp, gắn cờ "est."**; reward Earn = giá lúc nhận.
+- Phần số dư mà sổ không giải thích (đổi bụi, airdrop, cặp đã huỷ niêm yết) **không có giá vốn**:
+  PnL chỉ tính trên phần `tracked`. Coin `tracked` < 1% không hiện con số nào.
+- AC đối soát thu hẹp: chỉ yêu cầu khớp **từ snapshot đầu tiên (11/2026)**: "Unexplained" của N2 về
+  gần 0 ở những khoảng đã có trade thật. Lịch sử cũ hơn chỉ dùng để tính giá vốn.
+- Không hiện PnL đã thực hiện, không làm báo cáo thuế.
+- "vs USDC Earn" trong bảng điểm dùng APR niêm yết hôm nay của vị thế stablecoin Earn lớn nhất, không
+  dùng con số 5% cũ.
+- View SQL nằm trong migration v9 (không tạo lại mỗi lần mở DB: `GET` không được ghi). Đổi view =
+  migration mới.
+
+| Task | Nội dung | AC |
+|---|---|---|
+| N4.1 | Migration v8: bảng `trades` (fill Spot và Convert; `side` theo `base`; `quote_usd`, `estimated`). | Migrate DB v7 sạch; đọc lại một fill không tạo dòng trùng. |
+| N4.2 | `services/trades.py`, chạy sau mỗi `record`: `myTrades` theo từng cặp (mọi tài sản Binance từng giữ × USDT/FDUSD/USDC/BUSD/TUSD/BTC/ETH/BNB đang niêm yết), `convert/tradeFlow` theo cửa sổ 30 ngày. Cặp đã có lệnh đọc mỗi lần; cả danh sách mỗi ngày một lần. | Lần hai chỉ hỏi từ id kế tiếp; cặp quote không phải stablecoin được định giá từ chuỗi giá và gắn `estimated`; lỗi API không làm hỏng snapshot. |
+| N4.3 | Định giá lại một lần các dòng tiền cũ hơn snapshot đầu tiên theo giá đóng cửa ngày (kline công khai), thay cho giá của snapshot cũ nhất. | Nạp LINK năm 2024 mang giá ngày đó; chạy lần hai không đổi gì. |
+| N4.4 | `services/analytics/cost_basis.py` + `GET /api/analytics/cost-basis`: giá vào bình quân, PnL chưa thực hiện, `tracked`, cờ `estimated`, bảng điểm 20 lần mua gần nhất. | Bán một phần giữ nguyên giá bình quân; chuyển nội bộ không đổi giá vốn; coin không có giá vốn trả `null`, không ra số giả. |
+| N4.5 | Trade thật trừ vào phần dư của N2 và hiện ở Activity (`inferred = false`); trade suy luận chỉ còn ở khoảng sổ chưa có. | Khoảng đã có fill: không còn dòng "inferred"; item gộp theo lệnh, mở ra thấy từng vế. |
+| N4.6 | UI: thẻ gập "Cost basis" (nhóm "Right now", trước Earn income) gồm bảng theo coin và "Your buys"; hai dòng giá vốn trong phần mở rộng của dòng tài sản ở Portfolio. | Số tiền mang `.priv`; chú thích "est."/"% tracked" nằm trên dòng riêng, không bị cắt ở 360px; chưa đồng bộ trade → thẻ nói rõ, không lỗi. |
+| N5.1 | Migration v9: view `v_nav_daily`, `v_positions_daily`, `v_external_flows`, `v_daily_returns`, `v_earn_income_daily`, `v_trades`. | `v_daily_returns` khớp `daily_returns()` của `quant.py` (có test). |
+| N5.2 | `main.py export --out DIR`: một CSV cho mỗi view. | Sáu file, có dòng tiêu đề; `requirements.txt` không đổi. |
+| N5.3 | Notebook mẫu `docs/notebooks/analyst_kit.ipynb` đọc các view (pandas, matplotlib cài riêng). | Mở được; chưa chạy thử trong repo (không có pandas). |
+
+**Còn phải kiểm trên máy chủ thật (W5):**
+- Lần `record` đầu sau khi nâng cấp tải toàn bộ lịch sử lệnh: ~60 lượt gọi Convert cách nhau 1.5 giây
+  và một lượt `myTrades` cho mỗi cặp. Lỗi (nếu có) in ra stderr dạng `warning: binance spot trades: …`.
+- Giới hạn API chưa kiểm trên tài khoản thật: `myTrades` 1000 fill/trang, `convert/tradeFlow` 30 ngày
+  và 1000 dòng mỗi lượt, tên trường của hai response (`services/trades.py`, `clients/binance.py`).
+- AC N4: lệnh mua 25–27/11 hiện đúng số lượng và giá; tỷ lệ "tracked" của từng coin có hợp lý không.
+  Cặp đã huỷ niêm yết (BUSD cũ) không được đọc: coin mua bằng BUSD sẽ thiếu giá vốn.
+- 33 lần nạp crypto: giá ngày nạp lấy từ kline `<COIN>USDT`; coin không có cặp USDT giữ giá cũ.
 
 ### W6 — Kế hoạch & góc nhìn
 
