@@ -402,7 +402,8 @@
       "Do state the caveat where the number is: sample size in the card sub-line, \"inferred\" or \"estimate\" as a tag on the row, missing data in words instead of a zero.",
       "Do keep touch targets at 44px, extending the hit area invisibly when the drawn control is smaller.",
       "Do extend an existing card, the status line or an asset row before adding a card.",
-      "Do give every card a loading skeleton, an empty state that says what is missing, and an error state that leaves the rest of the tab usable."
+      "Do give every card a loading skeleton, an empty state that says what is missing, and an error state that leaves the rest of the tab usable.",
+      "Do give every Analytics card a folded summary line; a card that cannot say its answer in one line is two cards."
     ],
     "donts": [
       "Don't use green or red for anything but a signed amount or a pass/fail state.",

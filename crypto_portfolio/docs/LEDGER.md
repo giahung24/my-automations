@@ -167,4 +167,5 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | 2026-11-26 | Bảo mật dashboard (P0.6): token bắt buộc ngoài loopback, cookie phiên đã ký, rate limit, DB 0600, unit systemd. Thêm góp vốn một phần cho Allocation. |
 | 2026-11-27 | Thêm Phase 3 (N1–N9), gộp từ 7 đề xuất của Fable 5.2 và 6 gợi ý của Jean/assistant. |
 | 2026-11-27 | Mở W4: tách N1.1–N1.4, N2.1–N2.4, N3.1–N3.3 trong ROADMAP §2. Chốt: N1 không dựng lại số dư Earn quá khứ (chỉ tổng thu nhập); N2 tính trade suy luận lúc đọc, gộp Binance theo symbol; thứ tự N3 → N1 → N2. |
+| 2026-11-27 | Thêm `DESIGN.md` (rút từ `static/`) và sơ đồ vị trí UI cho N1–N9. Thêm A1 (Analytics gập được, hai nhóm). Sửa N1.4 (thẻ Earn sang Analytics) và N2.4 (dùng dòng trạng thái sẵn có, không thêm badge). UI giữ tiếng Anh. |
 | 2026-11-27 | Tách `ROADMAP_LEDGER.md` thành ROADMAP / LEDGER / SPEC (D18); đối soát toàn bộ trạng thái với code. Sửa các dòng sai của bảng cũ: F3.B1 không phải DONE; F2.2–F2.4, F2.10, F2.11, M4.1–M4.6, M6.1–M6.4, M7.1–M7.5 thực tế đã xong. Dời test vào `tests/`, script một lần vào `scripts/archive/`. |

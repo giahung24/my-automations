@@ -229,7 +229,7 @@ bottom sheet that becomes a centred dialog from 640px up. Toasts float just abov
 | Tab | Its question | What lives there today |
 |---|---|---|
 | **Portfolio** | What is it worth right now? | Hero (total, 24h chip, chart, range pills), status line (origin, age), failed-sources notice, source filter, asset list with expandable rows |
-| **Analytics** | Why, and how well? | One period selector pinned under the title, then cards: Why it moved, Performance, Risk, Allocation & rebalancing |
+| **Analytics** | Why, and how well? | One period selector pinned under the title, then two groups of folding cards: "Over the period" (Why it moved, Performance, Risk) and "Right now" (Earn income, Allocation & rebalancing) |
 | **Activity** | What happened to the money? | Period select, source and kind filter chips, review banner, one card per day of flows |
 
 ### Named Rules
@@ -246,11 +246,12 @@ warn about. No "all good" chips.
 ### Phase 3 placement (N1-N9)
 
 Where each roadmap idea lands. Detailed design happens per wave, on real data; this map only
-fixes location so nine features do not become nine cards. Net result: **one** new card.
+fixes location so nine features do not become nine cards. Net result: **one** new card, and
+the Analytics tab folds (see Folding card) so its length no longer grows with its content.
 
 | ID | Idea | Lands in | Form |
 |---|---|---|---|
-| N1 | Earn yield | Analytics, new card "Earn income" between Risk and Allocation | Table per asset (listed APR, realised 7d / 30d, per day) and one line of lifetime income by year. Like Allocation, it ignores the period selector and says so. |
+| N1 | Earn yield | Analytics, group "Right now", new card "Earn income" before Allocation | Table per asset (listed APR, realised 7d / 30d, per day) and one line of lifetime income by year. Folded: income per day and the APR of the largest Earn position. |
 | N2 | Inferred trades | Activity timeline | A new kind with a filter chip; neutral icon; an "inferred" tag on every such row; one "Unexplained" row per day when a residue remains. |
 | N2 | Data health | Portfolio status line (existing) | The age text turns amber past 130 min; the existing failed-sources notice stays the place for source errors; gap count joins the line only when above zero. No new badge. |
 | N3 | Peg check | Portfolio status line | One amber status pill ("USDC -0.4%" or "peg unchecked"), absent when on peg. |
@@ -320,6 +321,17 @@ one stroke set: 1.85px, round caps and joins, 20px (16px and 14px variants).
 - **Metric tile:** Surface Raised, 14px corners, 10px padding: label, 17px 800 figure, note. A
   tile without enough data goes grey at 55% opacity and keeps its explanation.
 
+### Folding card (Analytics)
+- **Folded:** one 56px row: title on the left, a one-line summary on the right (the figure
+  that answers the card's question, or the reason there is none), then a chevron. The whole
+  row is the button. A folded tab fits one phone screen.
+- **Open:** the row stays as the header and the card's content appears below it; the chevron
+  turns. Several cards can be open at once; which ones is remembered on the device.
+- **Groups:** an uppercase 12px label above each run of cards: "Over the period" follows the
+  period selector, "Right now" does not.
+- **Summary:** tabular, 13px 700; a money amount keeps its privacy blur and its gain/loss
+  colour, sign and arrow.
+
 ### Inputs / Fields
 - **Style:** Surface Raised, Hairline Strong outline, 14px corners, 48px tall, 16px text (so
   iOS does not zoom).
@@ -369,6 +381,8 @@ all of it off.
 - **Do** keep touch targets at 44px, extending the hit area invisibly when the drawn control
   is smaller.
 - **Do** extend an existing card, the status line or an asset row before adding a card.
+- **Do** give every Analytics card a folded summary line; a card that cannot say its answer in
+  one line is two cards.
 - **Do** give every card a loading skeleton, an empty state that says what is missing, and an
   error state that leaves the rest of the tab usable.
 
