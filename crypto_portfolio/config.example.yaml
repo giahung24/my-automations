@@ -73,7 +73,7 @@ settings:
 cash_flows:
   enabled: true
   backfill_days: 1827       # deposits/withdrawals/fiat/P2P: synced this far back (5 years max)
-  earn_backfill_days: 365   # Earn rewards: synced AND kept only this far back (older rows pruned)
+  earn_backfill_days: 1827  # Earn rewards: synced AND kept this far back (older rows pruned); feeds lifetime Earn income
   overlap_days: 2           # later syncs re-read this much (pending -> completed)
   sync_fiat: true           # bank deposits/withdrawals and card purchases
   sync_p2p: true            # P2P buy/sell orders

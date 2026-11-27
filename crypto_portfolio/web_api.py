@@ -75,6 +75,7 @@ from services.analytics.attribution import (
     coverage_of,
     reference_snapshot,
 )
+from services.analytics.earn import earn_report
 from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
@@ -641,6 +642,15 @@ def create_app(
         `flow_adjusted: false` means no deposit/withdrawal history was synced yet.
         """
         return pnl_report(Database(config().db_path))
+
+    @app.get("/api/analytics/earn")
+    def analytics_earn():
+        """Simple Earn: listed vs realised APR per asset (7d / 30d) and lifetime income by year.
+
+        Reads SQLite only. A window the snapshots do not cover has `apr: null`, `sufficient: false`.
+        """
+        cfg = config()
+        return earn_report(Database(cfg.db_path), cfg.stablecoins)
 
     @app.get("/api/analytics/quant")
     def analytics_quant(

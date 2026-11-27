@@ -214,8 +214,8 @@ def make_config(tmp_path, cash_flows=None, binance=True, wallets=None):
         "binance": {"enabled": binance, "api_key": "k" * 64 if binance else "",
                     "api_secret": "s" * 64 if binance else ""},
     }
-    if cash_flows is not None:
-        raw["cash_flows"] = cash_flows
+    # these tests exercise a one-year Earn retention; the default is now five (N1.3)
+    raw["cash_flows"] = {"earn_backfill_days": 365, **(cash_flows or {})}
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
     return load_config(path)
@@ -531,9 +531,10 @@ def earn_only_config(tmp_path, **extra):
     return make_config(tmp_path, cash_flows={"sync_fiat": False, "sync_p2p": False, **extra})
 
 
-def test_default_settings_keep_5_years_but_only_1_year_of_earn():
-    settings = CashFlowSettings()
-    assert settings.backfill_days == FIVE_YEARS and settings.earn_backfill_days == EARN_DAYS
+def test_default_settings_keep_5_years_earn_included_and_earn_can_be_shortened():
+    assert CashFlowSettings().earn_backfill_days == FIVE_YEARS  # N1.3: lifetime Earn income
+    settings = CashFlowSettings(earn_backfill_days=EARN_DAYS)
+    assert settings.backfill_days == FIVE_YEARS
     for stream in cf.EARN_STREAMS:
         assert cf.stream_backfill_days(settings, stream) == EARN_DAYS
     for stream in (*cf.CRYPTO_STREAMS, *cf.FIAT_STREAMS, *cf.P2P_STREAMS):
@@ -910,14 +911,14 @@ def test_reprice_missing_fills_unknown_prices(tmp_path):
 
 # == config ==============================================================================================
 def test_cash_flow_settings_defaults_and_validation(tmp_path):
-    assert make_config(tmp_path).cash_flow_settings == CashFlowSettings()
+    assert make_config(tmp_path).cash_flow_settings == CashFlowSettings(earn_backfill_days=365)
     odd = make_config(tmp_path, cash_flows={"backfill_days": "lots", "overlap_days": 99,
                                             "enabled": "no", "sync_p2p": 0})
     settings = odd.cash_flow_settings
     assert settings.backfill_days == CashFlowSettings().backfill_days and settings.overlap_days == 30
     assert settings.enabled is False and settings.sync_p2p is False and settings.sync_fiat is True
     assert CashFlowSettings.from_raw(None) == CashFlowSettings()
-    assert CashFlowSettings.from_raw({"earn_backfill_days": "x"}).earn_backfill_days == 365
+    assert CashFlowSettings.from_raw({"earn_backfill_days": "x"}).earn_backfill_days == 1827
     assert CashFlowSettings.from_raw({"earn_backfill_days": 0}).earn_backfill_days == 1
     assert CashFlowSettings.from_raw({"earn_backfill_days": 99999}).earn_backfill_days == 1827
 
