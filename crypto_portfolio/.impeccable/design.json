@@ -1,0 +1,416 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-27T09:44:22+00:00",
+  "title": "Design System: Crypto Portfolio",
+  "extensions": {
+    "colorMeta": {
+      "signal-green": {
+        "role": "primary",
+        "displayName": "Signal Green",
+        "canonical": "#22E58B",
+        "tonalRamp": [
+          "#0A452A",
+          "#117246",
+          "#18A061",
+          "#1ECA7A",
+          "#3DE899",
+          "#64EDAE",
+          "#90F2C5",
+          "#C8F8E2"
+        ]
+      },
+      "signal-red": {
+        "role": "primary",
+        "displayName": "Signal Red",
+        "canonical": "#FF5C73",
+        "tonalRamp": [
+          "#4C1C22",
+          "#802E3A",
+          "#B24050",
+          "#E05165",
+          "#FF7084",
+          "#FF8D9D",
+          "#FFAEB9",
+          "#FFD6DC"
+        ]
+      },
+      "caution-amber": {
+        "role": "secondary",
+        "displayName": "Caution Amber",
+        "canonical": "#F5B84B",
+        "tonalRamp": [
+          "#4A3716",
+          "#7A5C26",
+          "#AC8134",
+          "#D8A242",
+          "#F6C161",
+          "#F8CD81",
+          "#FADCA5",
+          "#FCEDD2"
+        ]
+      },
+      "focus-blue": {
+        "role": "tertiary",
+        "displayName": "Focus Blue",
+        "canonical": "#8AB4FF",
+        "tonalRamp": [
+          "#29364C",
+          "#455A80",
+          "#617EB2",
+          "#799EE0",
+          "#98BDFF",
+          "#ADCAFF",
+          "#C4DAFF",
+          "#E2ECFF"
+        ]
+      },
+      "night": {
+        "role": "neutral",
+        "displayName": "Night",
+        "canonical": "#0B0E14",
+        "tonalRamp": [
+          "#030406",
+          "#06070A",
+          "#080A0E",
+          "#0A0C12",
+          "#282B30",
+          "#54565A",
+          "#85868A",
+          "#C2C3C4"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface",
+        "canonical": "#161B22",
+        "tonalRamp": [
+          "#07080A",
+          "#0B0E11",
+          "#0F1318",
+          "#13181E",
+          "#32363D",
+          "#5C5F64",
+          "#8A8D90",
+          "#C5C6C8"
+        ]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Surface Raised",
+        "canonical": "#1C222B",
+        "tonalRamp": [
+          "#080A0D",
+          "#0E1116",
+          "#14181E",
+          "#191E26",
+          "#373D44",
+          "#60646B",
+          "#8E9095",
+          "#C6C8CA"
+        ]
+      },
+      "surface-pressed": {
+        "role": "neutral",
+        "displayName": "Surface Pressed",
+        "canonical": "#232A34",
+        "tonalRamp": [
+          "#0A0D10",
+          "#12151A",
+          "#181D24",
+          "#1F252E",
+          "#3D444C",
+          "#656A71",
+          "#91949A",
+          "#C8CACC"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#252C36",
+        "tonalRamp": [
+          "#0B0D10",
+          "#12161B",
+          "#1A1F26",
+          "#212730",
+          "#3F454E",
+          "#666B72",
+          "#92969A",
+          "#C8CACD"
+        ]
+      },
+      "hairline-strong": {
+        "role": "neutral",
+        "displayName": "Hairline Strong",
+        "canonical": "#323B47",
+        "tonalRamp": [
+          "#0F1215",
+          "#191E24",
+          "#232932",
+          "#2C343E",
+          "#4B535D",
+          "#70767E",
+          "#989DA3",
+          "#CCCED1"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#E9EDF2",
+        "tonalRamp": [
+          "#464749",
+          "#747679",
+          "#A3A6A9",
+          "#CDD1D5",
+          "#ECEFF4",
+          "#F0F2F6",
+          "#F4F6F8",
+          "#FAFAFC"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Ink Muted",
+        "canonical": "#A3ADBA",
+        "tonalRamp": [
+          "#313438",
+          "#52565D",
+          "#727982",
+          "#8F98A4",
+          "#AEB7C2",
+          "#BFC6CF",
+          "#D1D6DC",
+          "#E8EAEE"
+        ]
+      },
+      "ink-faint": {
+        "role": "neutral",
+        "displayName": "Ink Faint",
+        "canonical": "#8590A0",
+        "tonalRamp": [
+          "#282B30",
+          "#424850",
+          "#5D6570",
+          "#757F8D",
+          "#949DAB",
+          "#AAB1BC",
+          "#C2C8D0",
+          "#E0E3E7"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The net-worth figure only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The one lead figure of a card."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Card titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Running text."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Captions, column heads, tile labels, chips."
+      }
+    },
+    "shadows": [
+      {
+        "name": "sheet-lift",
+        "value": "0 -12px 40px rgba(0,0,0,0.5)",
+        "purpose": "The bottom sheet."
+      },
+      {
+        "name": "toast-lift",
+        "value": "0 10px 30px rgba(0,0,0,0.5)",
+        "purpose": "Toasts."
+      },
+      {
+        "name": "tip-lift",
+        "value": "0 6px 18px rgba(0,0,0,0.45)",
+        "purpose": "Chart scrub tooltip."
+      },
+      {
+        "name": "knob",
+        "value": "0 2px 6px rgba(0,0,0,0.4)",
+        "purpose": "Switch thumb."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Sheets, toasts, reveals, the privacy blur."
+      },
+      {
+        "name": "state",
+        "value": "0.2s ease",
+        "purpose": "Colour and background changes on controls."
+      },
+      {
+        "name": "press",
+        "value": "0.12s ease",
+        "purpose": "Scale on press."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "360px"
+      },
+      {
+        "name": "dialog",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single main action of a sheet or form.",
+      "html": "<button class=\"ds-btn-primary\">Save changes</button>",
+      "css": ".ds-btn-primary { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; min-height: 44px; padding: 0 16px; border: 1px solid transparent; border-radius: 14px; background: var(--ink); color: #0B0E14; font-size: 14px; font-weight: 700; transition: background-color .2s ease, transform .12s ease; } .ds-btn-primary:hover { background: #fff; } .ds-btn-primary:active { transform: scale(.98); } .ds-btn-primary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Supporting actions next to a primary one.",
+      "html": "<button class=\"ds-btn-secondary\">Test connection</button>",
+      "css": ".ds-btn-secondary { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; min-height: 44px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-2); color: var(--ink); font-size: 14px; font-weight: 700; transition: background-color .2s ease, transform .12s ease; } .ds-btn-secondary:hover { background: var(--surface-3); } .ds-btn-secondary:active { transform: scale(.98); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }"
+    },
+    {
+      "name": "Card with metric tiles",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "One question per card: title, scope line, then tiles.",
+      "html": "<section class=\"ds-card\"><h2 class=\"ds-card-title\">Performance</h2><p class=\"ds-card-sub\">2026-11-01 → 2026-11-27 · 26 daily returns</p><ul class=\"ds-tiles\"><li><span class=\"ds-tile-l\">Return (TWR)</span><span class=\"ds-tile-v ds-up\">+4.2%</span><span class=\"ds-tile-l\">flow-adjusted</span></li><li><span class=\"ds-tile-l\">Max drawdown</span><span class=\"ds-tile-v ds-down\">−7.9%</span><span class=\"ds-tile-l\">from peak</span></li><li><span class=\"ds-tile-l\">Volatility</span><span class=\"ds-tile-v\">2.1%</span><span class=\"ds-tile-l\">daily</span></li></ul></section>",
+      "css": ".ds-card { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 16px 16px 16px; color: var(--ink); max-width: 420px; } .ds-card-title { margin: 0 4px; font-size: 16px; font-weight: 800; letter-spacing: -.015em; } .ds-card-sub { margin: 1px 4px 12px; font-size: 12px; font-weight: 600; color: var(--ink-3); font-variant-numeric: tabular-nums; } .ds-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; } .ds-tiles li { padding: 10px; border-radius: 14px; background: var(--surface-2); } .ds-tile-l { display: block; font-size: 12px; font-weight: 600; color: var(--ink-3); } .ds-tile-v { display: block; margin-top: 2px; font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; } .ds-up { color: var(--up); } .ds-down { color: var(--down); }"
+    },
+    {
+      "name": "Move chip",
+      "kind": "chip",
+      "refersTo": "",
+      "description": "A signed money move: arrow, amount, percent. Never colour alone.",
+      "html": "<span class=\"ds-pnl ds-pnl-up\"><svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 19V5M5 12l7-7 7 7\"/></svg>+$412.08 (+1.3%)</span> <span class=\"ds-pnl ds-pnl-down\"><svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 5v14M19 12l-7 7-7-7\"/></svg>−$96.40 (−0.3%)</span>",
+      "css": ".ds-pnl { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 6px; border-radius: 999px; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; } .ds-pnl-up { background: rgba(34,229,139,.12); color: var(--up); } .ds-pnl-down { background: rgba(255,92,115,.13); color: var(--down); }"
+    },
+    {
+      "name": "Status pill",
+      "kind": "chip",
+      "refersTo": "status-pill",
+      "description": "A dot and a word; appears only when there is something to say.",
+      "html": "<span class=\"ds-status ds-ok\">Connected</span> <span class=\"ds-status ds-warn\">USDC −0.4%</span> <span class=\"ds-status ds-err\">RPC failed</span>",
+      "css": ".ds-status { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: var(--surface-3); color: var(--ink-2); } .ds-status::before { content: \"\"; width: 7px; height: 7px; border-radius: 50%; background: currentColor; } .ds-ok { background: rgba(34,229,139,.12); color: var(--up); } .ds-warn { background: rgba(245,184,75,.12); color: var(--warn); } .ds-err { background: rgba(255,92,115,.13); color: var(--down); }"
+    },
+    {
+      "name": "Filter chip",
+      "kind": "chip",
+      "refersTo": "filter-chip",
+      "description": "Timeline filters with a count; selected inverts to ink.",
+      "html": "<button class=\"ds-chip\" aria-pressed=\"true\">Deposits <i>12</i></button> <button class=\"ds-chip\" aria-pressed=\"false\">Rewards <i>48</i></button>",
+      "css": ".ds-chip { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line-strong); color: var(--ink-2); font-size: 13px; font-weight: 700; transition: background-color .2s ease, color .2s ease, border-color .2s ease; } .ds-chip i { font-style: normal; min-width: 20px; height: 18px; padding: 0 6px; border-radius: 999px; display: inline-grid; place-items: center; background: var(--surface-3); color: var(--ink-3); font-size: 11px; font-weight: 800; } .ds-chip:hover { color: var(--ink); border-color: var(--ink-3); } .ds-chip[aria-pressed=\"true\"] { background: var(--ink); border-color: var(--ink); color: var(--bg); } .ds-chip[aria-pressed=\"true\"] i { background: rgba(11,14,20,.14); color: var(--bg); } .ds-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "16px text so iOS does not zoom; blue halo on focus.",
+      "html": "<label class=\"ds-label\">Wallet address</label><div class=\"ds-field\"><input placeholder=\"0x…\"></div>",
+      "css": ".ds-label { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; display: block; margin-bottom: 6px; font-size: 13px; font-weight: 700; color: var(--ink-2); } .ds-field { display: flex; min-height: 48px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--line-strong); transition: border-color .2s ease, box-shadow .2s ease; } .ds-field:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(138,180,255,.16); } .ds-field input { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; flex: 1; min-width: 0; height: 46px; padding: 0 14px; border: 0; background: transparent; outline: none; color: var(--ink); font-size: 16px; } .ds-field input::placeholder { color: var(--ink-3); }"
+    },
+    {
+      "name": "Notice",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "A caveat placed directly under the number it qualifies.",
+      "html": "<div class=\"ds-notice\"><svg viewBox=\"0 0 24 24\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.85\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/><path d=\"M12 9v4M12 17h.01\"/></svg><span>1 source failed, so the total may be incomplete</span></div>",
+      "css": ".ds-notice { font-family: Manrope, ui-sans-serif, system-ui, sans-serif; display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 16px; font-size: 13px; font-weight: 700; background: rgba(245,184,75,.08); border: 1px solid rgba(245,184,75,.22); color: #F2D59C; } .ds-notice svg { flex: none; margin-top: 1px; color: var(--warn); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Night Ledger",
+    "overview": "A ledger opened on a phone, several times a day, usually in a dim room. The screen is nearly black and the numbers are the brightest thing on it. Nothing glows for decoration: the only saturated colour on a healthy screen is the sign of a money move. Surfaces are told apart by a half-step of tone and a hairline, never by shadow.\n\nThe system is dense but calm. One column, 560px at most, built from rounded cards stacked with even gaps. Each card answers one question and states its own caveats (how many observations, which source failed, which figure is an estimate) next to the number it qualifies. Type is one family, Manrope, pushed to its heavy weights for figures and titles and kept at semibold for everything that explains them.",
+    "keyCharacteristics": [
+      "Near-black canvas, tonal surfaces, hairline borders, no resting shadows.",
+      "One typeface; weight and size carry hierarchy; all figures are tabular.",
+      "Green and red mean \"money went up / down\" and nothing else.",
+      "Every caveat sits beside its number; nothing fails silently.",
+      "Mobile first: 44px touch targets, one thumb-reachable tab bar, bottom sheets.",
+      "Interface copy is English."
+    ],
+    "rules": [
+      {
+        "name": "The Colour Is Data Rule",
+        "body": "Green and red appear only on a signed amount or a pass/fail state. A screen with no move and no failure is entirely grey.",
+        "section": "colors"
+      },
+      {
+        "name": "The Never Colour Alone Rule",
+        "body": "A gain or loss always carries a sign and an arrow as well as its colour; a status always carries a word.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tint Rule",
+        "body": "A signal colour used as a background is the same hue at 7-14% opacity over the surface, with the full-strength hue as text. Solid signal fills do not exist.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Every number that can change is set with tabular figures, so columns line up and a refreshing value does not jitter.",
+        "section": "typography"
+      },
+      {
+        "name": "The Money Is Never Cut Rule",
+        "body": "A balance is never ellipsised. The column widens, the figure shrinks, or the unit drops to a second line.",
+        "section": "typography"
+      },
+      {
+        "name": "The One-Second Rule",
+        "body": "The Portfolio tab must stay readable in one second: total, 24h move, chart. It receives no new cards. New facts about the present either join the status line under the hero (and hide themselves when healthy) or go inside an asset row.",
+        "section": "layout"
+      },
+      {
+        "name": "The One Question Rule",
+        "body": "A card answers one question, named in its title. A new feature extends the card that already owns its question before it earns a card of its own.",
+        "section": "layout"
+      },
+      {
+        "name": "The Quiet When Healthy Rule",
+        "body": "A warning element takes no space while there is nothing to warn about. No \"all good\" chips.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat At Rest Rule",
+        "body": "Nothing that scrolls with the page casts a shadow. A card that needs emphasis gets a tinted wash at its top edge (the hero) or a tinted border (a notice).",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do wrap every dollar amount in the privacy blur and set it in tabular figures.",
+      "Do pair every gain or loss colour with a sign and an arrow.",
+      "Do state the caveat where the number is: sample size in the card sub-line, \"inferred\" or \"estimate\" as a tag on the row, missing data in words instead of a zero.",
+      "Do keep touch targets at 44px, extending the hit area invisibly when the drawn control is smaller.",
+      "Do extend an existing card, the status line or an asset row before adding a card.",
+      "Do give every card a loading skeleton, an empty state that says what is missing, and an error state that leaves the rest of the tab usable."
+    ],
+    "donts": [
+      "Don't use green or red for anything but a signed amount or a pass/fail state.",
+      "Don't add resting shadows, gradients as decoration, or a second typeface.",
+      "Don't add a card to the Portfolio tab.",
+      "Don't show a healthy-state chip; warnings appear only when there is something to say.",
+      "Don't ellipsise money, or annualise a return over a period shorter than a year.",
+      "Don't go below 11px text or Ink Faint for contrast."
+    ]
+  }
+}
