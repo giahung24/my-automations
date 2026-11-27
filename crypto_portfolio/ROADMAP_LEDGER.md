@@ -29,6 +29,7 @@
 7. [Nhật ký quyết định (decision log)](#7-nhật-ký-quyết-định)
 8. [Changelog của Ledger](#8-changelog-của-ledger)
 9. [Phase 2: Next Milestones (M4–M8)](#9-phase-2-next-milestones)
+10. [Phase 3: Backlog sau khi vận hành (N1–N9)](#10-phase-3-backlog-sau-khi-vận-hành)
 
 ---
 
@@ -42,6 +43,7 @@
 | `[~]` | **IN PROGRESS** | Đang làm, đã có branch hoặc commit dở dang. Ghi tên branch. |
 | `[x]` | **DONE** | Đạt **toàn bộ** Acceptance Criteria (AC) và Definition of Done (§0.3). |
 | `[-]` | **DROPPED** | Bỏ, kèm một dòng lý do. Không xoá dòng khỏi Ledger. |
+| `[ ] ⏸` | **DEFERRED** | Tạm hoãn, **chưa bỏ**: giữ nguyên spec và AC, không triển khai cho tới khi có quyết định mở lại. Đuôi dòng ghi `⏸ DEFERRED <ngày> (<decision>)`. |
 
 Độ ưu tiên: **P0** = chặn mọi thứ phía sau · **P1** = giá trị cốt lõi, làm ngay sau P0 ·
 **P2** = quan trọng, cần thêm dữ liệu hoặc phụ thuộc P1 · **P3** = nice-to-have.
@@ -1220,6 +1222,8 @@ P0.7 ─► P0.5
 | D13 | Tài sản manual khai báo trong `config.yaml`, lịch sử nằm ở `snapshot_assets` | Bảng DB riêng `manual_assets` | Cùng chỗ với `wallets`, sửa được qua `/api/settings` sẵn có, không thêm schema; đổi số lượng được ghi thành `cash_flows` (M6.3) |
 | D14 | Ví lạnh có địa chỉ EVM/Solana theo dõi bằng watch-only, không dùng manual | Khai báo tay mọi ví lạnh | Số dư tự cập nhật và flow tự phát hiện; manual chỉ dành cho BTC, staking ngoài, sàn khác |
 | D15 | Watchdog chạy bằng cron riêng `*/15`, tách khỏi job `record` | Kiểm tra sức khoẻ ngay trong `record` | Job `record` chết thì không thể tự báo mình chết; máy tắt hẳn cần thêm M5.7 |
+| D16 | **Tạm hoãn** wave Telegram **W7** (M5.1–M5.5: digest, cảnh báo biến động, heartbeat; trước là phần Telegram của W1) và wave **W8** (M8.1–M8.3: gateway `/summary` + widget mobile; trước là W4) — ⏸ DEFERRED, không DROPPED | Triển khai theo thứ tự §9.6 | Chưa cần: Jean tạm hoãn ngày 2026-11-26. Spec/AC giữ nguyên. M4.1–M4.4 (nay là toàn bộ W1) không bị hoãn. Các task phụ thuộc (M5.6, M5.7, M7.6, M8.4, M8.5) giữ trạng thái nhưng bị chặn cho tới khi mở lại. D11 chưa có hiệu lực thực tế: gateway vẫn chỉ có `/total`. Số wave đổi cùng ngày (§8); **phạm vi task của D16 không đổi** |
+| D17 | Lần sửa tài liệu 2026-11-26 **không lật trạng thái nào**, dù bảng Master §5 và §9.7 đang trễ so với code (ví dụ `/api/cash-flows` GET/PATCH/`candidates`, `/api/analytics/allocation`, `test_activity.py`, `test_allocation.py` đã có trong repo nhưng các dòng M4.x/M7.x vẫn TODO; dòng "0 DONE" của §5 cũng lệch với chính bảng) | Lật trạng thái theo code ngay trong lần sửa này | Chuyển sang `[x]` cần ngày, SHA và test chứng minh AC (§0.2 quy tắc 3): phải là một lượt đối soát riêng, không làm kèm việc sắp xếp roadmap |
 
 ---
 
@@ -1231,6 +1235,8 @@ P0.7 ─► P0.5
 | 2026-11-25 | F1.att: F1.1–F1.5 DONE, F1.7 IN PROGRESS (card thay cho sheet). Grain §2.2.2 đổi thành `(symbol, source_key)` (on-chain tách theo ví) để `data_gap` khớp nguồn lỗi; AC F1.1 sửa theo. Payload §2.4 thêm `insufficient_history`, `gainers`/`losers` (chi tiết của top); `summary` (F1.6) chưa có. | Claude (Opus 5.5) |
 | 2026-11-25 | F3.quant: F3.S1, F3.T1, F3.B3 (BTC/ETH), F3.R1, F3.R2 gộp vào một module `services/analytics/quant.py` (thay cho `series.py`/`returns.py`/`risk.py`) + `GET /api/analytics/quant?period=` + thẻ "Insights" (tiles, chart base 100, underwater `BaselineSeries`). Lệch spec: giá BTC/ETH cho base 100 lấy từ `snapshot_assets` của snapshot đóng cửa ngày (BTC > WBTC/BTCB, ETH > WETH/BETH), chưa có bảng `benchmark_prices` (F3.B1 thực tế chưa có trong code); benchmark không có giá → `available: false`. Chưa làm: SPX, rolling σ, max_close_staleness_hours. Test: `test_quant.py`. | Claude (Opus 5.5) |
 | 2026-11-25 | Thêm **§9 Phase 2: Next Milestones**: Epic M4 (7 task), M5 (7), M6 (5), M7 (7), M8 (5), tổng 31 task, tất cả TODO; Master riêng ở §9.7. Milestone "M4: Hoàn thiện" (§6.1) đổi nhãn thành "MX". Thêm D11–D15; D11 sửa đổi D9 và §0.3 (một route gateway mới, tắt mặc định). M4/M5/M7 kế thừa F2.10, F2.11, F3.U2, F3.A1–A4 (§9.0). | Claude (Fable 5.2) cho Jean |
+| 2026-11-26 | ⏸ DEFERRED theo yêu cầu Jean ("chưa cần"): W1 phần Telegram (M5.1–M5.5; **nay là W7**) và W4 (M8.1–M8.3; **nay là W8**). Thêm ký hiệu `⏸ DEFERRED` vào §0.1, decision D16, banner ở §9.2/§9.5, đánh dấu ở checklist, §9.6, §9.7. Không đổi AC, không bỏ task, không đụng code. | Claude (Opus 5.5) cho Jean |
+| 2026-11-26 | **Đánh số lại Wave** để wave đang chạy đứng trước, wave hoãn xuống cuối (ghi sổ ngày 2026-11-27). Cũ → mới: W1 phần M4.1–M4.4 → **W1** · W2 → **W2** · W3 → **W3** · (mới) → **W4, W5, W6** = Phase 3 · W1 phần Telegram M5.1–M5.5 → **W7** ⏸ · W4 (M8.1–M8.3) → **W8** ⏸ · MX-2 giữ nguyên. **ID task không đổi**; D16 vẫn phủ đúng 8 task M5.1–M5.5 và M8.1–M8.3, vẫn ⏸ DEFERRED. Đã sửa tham chiếu ở §9.0, §9.2, §9.5, §9.6, §9.7, D16 và dòng changelog phía trên. Thêm **§10 Phase 3: Backlog** (N1–N9): gộp 7 đề xuất của Fable 5.2 và 6 gợi ý của Jean/assistant thành 9 ý không trùng, xếp theo giá trị/công sức. Thêm D17 (bảng Master trễ so với code; không lật trạng thái nào). Chỉ sửa tài liệu này, không đụng code/config/DB. | Claude (Fable 5.2) cho Jean |
 
 ---
 
@@ -1255,7 +1261,8 @@ P0.7 ─► P0.5
 
 1. **ID:** `M<epic>.<n>` (`M4.1`, `M5.3`…), cố định, không tái sử dụng (§0.2). Tiền tố `M4…M8` ở đây là
    **Epic**. Để tránh trùng tên, milestone "M4: Hoàn thiện" của Phase 1 (§6.1) được đổi nhãn thành
-   **"MX"**; lộ trình Phase 2 dùng **Wave** (`W1…W4`, §9.6).
+   **"MX"**; lộ trình Phase 2 và Phase 3 dùng **Wave** (`W1…W8`, §9.6; đánh số lại ngày 2026-11-26, bảng
+   đối chiếu số cũ → mới ở §9.6 và §8).
 2. **Master Summary của Phase 2 nằm ở §9.7** (không nối vào §5). Quy tắc "cập nhật cả hai chỗ" áp dụng
    cho checklist của Epic và bảng §9.7.
 3. **Kế thừa task Phase 1.** Một số task M hiện thực hoá đúng phần việc còn `[ ] TODO` của Phase 1. Khi
@@ -1368,6 +1375,8 @@ PATCH /api/cash-flows/{id}                     # {"is_internal_transfer": true, 
 
 ### 9.2 Epic M5: Telegram Bot & Automation Alerts
 
+> ⏸ **DEFERRED (W7: M5.1–M5.5; trước là phần Telegram của W1)** — chưa cần, Jean tạm hoãn ngày 2026-11-26 (decision **D16**). Spec giữ nguyên để mở lại sau; không triển khai.
+
 **Mục tiêu.** Hệ thống tự nói khi có chuyện, thay vì chờ Jean mở app. Ba loại tin: định kỳ, biến động,
 sức khoẻ.
 
@@ -1417,26 +1426,26 @@ Dữ liệu: 24/24 snapshot · nguồn OK
 
 **Checklist M5**
 
-- [ ] **M5.1** `clients/telegram.py` (`send_message`, `send_photo`, timeout, retry 429 theo `retry_after`) + block `notifications` trong `config.py` + lệnh `main.py notify --test` — **P1**
+- [ ] **M5.1** `clients/telegram.py` (`send_message`, `send_photo`, timeout, retry 429 theo `retry_after`) + block `notifications` trong `config.py` + lệnh `main.py notify --test` — **P1** · ⏸ DEFERRED 2026-11-26 (D16)
   - AC1: thiếu token/chat_id hoặc `enabled: false` → mọi lời gọi là no-op, exit 0, một dòng stderr.
   - AC2: test offline với HTTP mock: đúng URL `api.telegram.org/bot<token>/…`, token **không** xuất hiện trong log/stderr/exception.
   - AC3: `.env.telegram` có quyền khác 0600 → từ chối chạy, báo rõ.
-- [ ] **M5.2** `services/notifier.py` + migration bảng `alert_state(key PK, state, first_seen, last_sent, payload)`: dedupe, cooldown, tin "đã hồi phục" — **P1**
+- [ ] **M5.2** `services/notifier.py` + migration bảng `alert_state(key PK, state, first_seen, last_sent, payload)`: dedupe, cooldown, tin "đã hồi phục" — **P1** · ⏸ DEFERRED 2026-11-26 (D16)
   - AC1: cùng một sự cố kéo dài 5 giờ chỉ gửi **1** tin (và nhắc lại sau `repeat_hours`); khi hết sự cố gửi đúng **1** tin hồi phục.
   - AC2: Telegram lỗi → `alert_state` không đánh dấu đã gửi, lần chạy sau gửi lại.
   - AC3: gateway (`mode=ro`) vẫn đọc được DB sau migrate.
-- [ ] **M5.3** Daily Digest `main.py digest [--dry-run]` + cron 08:00 — **P1** (kế thừa phần text của F3.U2)
+- [ ] **M5.3** Daily Digest `main.py digest [--dry-run]` + cron 08:00 — **P1** (kế thừa phần text của F3.U2) · ⏸ DEFERRED 2026-11-26 (D16)
   - AC1: nội dung gồm Net worth, biến động 24h (USD + %), dòng "lãi/lỗ thật" đã trừ nạp/rút khi có `cash_flows`, top movers lấy từ engine attribution (F1), kèm PNG từ `services/visualizer.py` gửi bằng `sendPhoto`.
   - AC2: **chỉ đọc SQLite**, không gọi Binance/RPC (test bằng fetcher raise).
   - AC3: snapshot mới nhất cũ hơn `snapshot_max_age_minutes` → digest vẫn gửi nhưng có dòng "⚠ dữ liệu cũ từ HH:MM".
   - AC4: crontab có `CRON_TZ=Europe/Paris` + `0 8 * * *`; chạy hai lần trong cùng ngày chỉ gửi một tin (khoá `digest:<YYYY-MM-DD>` trong `alert_state`); `--dry-run` in ra stdout, không gửi.
   - AC5: `mask_amounts: true` → không có ký tự `$` nào trong tin.
-- [ ] **M5.4** Cảnh báo biến động mạnh (> 5% trong ngày), chạy ngay sau mỗi `record` — **P1**
+- [ ] **M5.4** Cảnh báo biến động mạnh (> 5% trong ngày), chạy ngay sau mỗi `record` — **P1** · ⏸ DEFERRED 2026-11-26 (D16)
   - AC1: so NAV mới nhất với snapshot cách `window_hours`, **đã trừ dòng tiền ngoài** trong cửa sổ: nạp $5,000 vào danh mục $50k khi thị trường đứng yên **không** bắn tin.
   - AC2: cặp snapshot có nguồn `error` (P0.2) **không** kích hoạt cảnh báo (RPC sập không phải thị trường sập).
   - AC3: bậc thang chống spam: vượt 5% bắn một tin; chỉ bắn tiếp khi vượt thêm mỗi `step_pct` (10%, 15%…) hoặc đổi chiều; reset khi về dưới ngưỡng.
   - AC4: tin kèm top 3 tài sản đóng góp (attribution) và độ trễ ≤ một nhịp cron (1h).
-- [ ] **M5.5** Heartbeat `main.py watchdog` (cron `*/15`, **tách khỏi** job `record`) — **P1**
+- [ ] **M5.5** Heartbeat `main.py watchdog` (cron `*/15`, **tách khỏi** job `record`) — **P1** · ⏸ DEFERRED 2026-11-26 (D16)
   - AC1: snapshot mới nhất cũ hơn `snapshot_max_age_minutes` → tin "🛑 Cron dừng: snapshot cuối HH:MM".
   - AC2: một nguồn (`binance_*` hoặc `onchain:<chain>/<ví>`) có `status = error` trong `source_error_streak` snapshot liên tiếp → tin nêu **tên nguồn + lỗi cuối**; lỗi lẻ một lần không báo.
   - AC3: Binance trả 401 / `-2014` / `-2015` → báo ngay (không chờ streak), kèm gợi ý kiểm tra key/IP whitelist.
@@ -1553,6 +1562,8 @@ Mục tiêu mặc định trong `config.example.yaml`: **BTC 50% · ETH 25% · S
 
 ### 9.5 Epic M8: Ecosystem & Mobile Widgets
 
+> ⏸ **DEFERRED (W8: M8.1–M8.3; trước là W4)** — chưa cần, Jean tạm hoãn ngày 2026-11-26 (decision **D16**). Spec giữ nguyên để mở lại sau; gateway giữ nguyên chỉ có `/total`.
+
 **Mục tiêu.** Một lần liếc màn hình chính là đủ. Gateway public `api.tytony.link` hiện chỉ có
 `GET /v1/crypto/portfolio/total`.
 
@@ -1575,15 +1586,15 @@ GET https://api.tytony.link/v1/crypto/portfolio/summary?currency=USD      // hea
 
 **Checklist M8**
 
-- [ ] **M8.1** `GET /v1/crypto/portfolio/summary` trong `api_gateway.py` — **P2**
+- [ ] **M8.1** `GET /v1/crypto/portfolio/summary` trong `api_gateway.py` — **P2** · ⏸ DEFERRED 2026-11-26 (D16)
   - AC1: tắt mặc định: không có `GATEWAY_ENABLE_SUMMARY=1` → 404 giống mọi path lạ; `/total` không đổi một byte (test hồi quy `test_api_gateway.py`).
   - AC2: cùng cơ chế key, rate limit, kiểm tra host như `/total`; sai key → cùng mã lỗi như `/total`.
   - AC3: `change_24h` và `top` tính **trong gateway bằng SQL chỉ đọc** trên `snapshots` / `snapshot_assets`; gateway vẫn **không** import `config.py`, không đọc `config.yaml`, kết nối `query_only`.
   - AC4: test khẳng định payload không chứa: địa chỉ, tx hash, `quantity`, tên nhãn ví, bất kỳ trường nào của `cash_flows`.
   - AC5: chưa đủ 2 snapshot trong 24h → `change_24h: null`, vẫn 200.
-- [ ] **M8.2** Cập nhật mô hình bảo mật: `SYSTEM_ARCHITECTURE.md` §4.1 (T3), D11, `deploy/crypto-api-gateway.service`, README gateway — **P2**
+- [ ] **M8.2** Cập nhật mô hình bảo mật: `SYSTEM_ARCHITECTURE.md` §4.1 (T3), D11, `deploy/crypto-api-gateway.service`, README gateway — **P2** · ⏸ DEFERRED 2026-11-26 (D16)
   - AC: tài liệu nêu đúng blast radius mới; có mục "cách xoay key" và "cách tắt `/summary`"; `GATEWAY_STALE_AFTER_SECONDS` được nâng lên 4500 cho khớp nhịp 1h (§1.3).
-- [ ] **M8.3** Scriptable widget iOS `widgets/portfolio.scriptable.js` (**< 60 dòng JS**) — **P2**
+- [ ] **M8.3** Scriptable widget iOS `widgets/portfolio.scriptable.js` (**< 60 dòng JS**) — **P2** · ⏸ DEFERRED 2026-11-26 (D16)
   - AC1: `wc -l` < 60 (có test đếm dòng); một file, không phụ thuộc ngoài.
   - AC2: API key đọc từ **Keychain** của Scriptable (`Keychain.get`), không nằm trong mã nguồn; README có 3 bước cài.
   - AC3: hiển thị Net worth, ▲/▼ 24h (màu + mũi tên), giờ cập nhật; hỗ trợ cỡ small và medium (medium thêm top 3 tỷ trọng).
@@ -1598,13 +1609,23 @@ GET https://api.tytony.link/v1/crypto/portfolio/summary?currency=USD      // hea
 
 ### 9.6 Lộ trình Wave & phụ thuộc
 
-| Wave | Nội dung | Điều kiện hoàn thành | Vì sao theo thứ tự này |
-|---|---|---|---|
-| **W1: Thấy & được báo** | M5.1–M5.5, M4.1–M4.4 (cần P0.6) | Sáng nào cũng có digest 08:00; cron chết thì có tin trong ≤ 30 phút; tab Activity hiện lịch sử Binance | M5 rẻ nhất và bảo vệ mọi thứ còn lại: dữ liệu mất do cron dừng là mất vĩnh viễn |
-| **W2: Đủ 100% Net Worth** | M6.1–M6.3, M4.5–M4.6 (cần F2.5, F2.6, F2.8), M5.6 | Net Worth gồm ví lạnh; chuyển Binance → Ledger không hiện thành lỗ; hàng chờ xác nhận về 0 | Allocation (W3) vô nghĩa nếu thiếu một phần tài sản |
-| **W3: Hành động** | M7.1–M7.5, M6.4 | Thẻ Allocation gợi ý lệnh, có chế độ "tiền mới" | Cần M6 để tỷ trọng đúng |
-| **W4: Ra ngoài PWA** | M8.1–M8.3 | Widget iOS chạy trên màn hình chính | Đổi bất biến bảo mật: làm sau cùng, khi dữ liệu đã ổn |
-| **MX-2: Hoàn thiện** | M4.7, M5.7, M6.5, M7.6, M7.7, M8.4, M8.5 | — | Toàn bộ P3 |
+> Wave đang chạy mang số `W1…W6` theo thứ tự ưu tiên; hai wave ⏸ DEFERRED (D16) đứng cuối, **không** xếp
+> hạng như việc đang làm. Số wave đổi ngày 2026-11-26 (cột "Số cũ"); **ID task không đổi**.
+
+| Wave | Số cũ | Nội dung | Điều kiện hoàn thành | Vì sao theo thứ tự này |
+|---|---|---|---|---|
+| **W1: Thấy dòng tiền** | W1 (phần M4) | M4.1–M4.4 (cần P0.6) | Tab Activity hiện lịch sử Binance | Vòng phản hồi chất lượng dữ liệu: mỗi lần xác nhận tay làm PnL/TWR đúng hơn |
+| **W2: Đủ 100% Net Worth** | W2 | M6.1–M6.3, M4.5–M4.6 (cần F2.5, F2.6, F2.8), M5.6 (bị chặn bởi W7, D16) | Net Worth gồm ví lạnh; chuyển Binance → Ledger không hiện thành lỗ; hàng chờ xác nhận về 0 | Allocation (W3) vô nghĩa nếu thiếu một phần tài sản |
+| **W3: Hành động** | W3 | M7.1–M7.5, M6.4 | Thẻ Allocation gợi ý lệnh, có chế độ "tiền mới" | Cần M6 để tỷ trọng đúng |
+| **W4: Quick win trên dữ liệu sẵn có** | mới | N1, N2, N3 (§10) | Thấy APR thực nhận từng tài sản Earn; biến động số lượng 25–27/11 được giải thích; lệch peg > 0.3% có chip | Công sức nhỏ, dữ liệu đã nằm trong DB; N2 chữa một lỗi đang làm sai PnL |
+| **W5: Giá vốn & phân tích** | mới | N4, N5 (§10) | Có giá vào bình quân + PnL chưa thực hiện; `main.py export` ra CSV | N4 giá trị cao nhất nhưng tốn công nhất; N5 chốt view sau khi có bảng `trades` |
+| **W6: Kế hoạch & góc nhìn** | mới | N6, N7, N8, N9 (§10) | Thẻ kế hoạch giải ngân + stress; toggle EUR; đường vốn đã nạp; ghi chú theo ngày | Hữu ích nhưng không chặn việc nào; làm khi W4–W5 đã cho số liệu đáng tin |
+| **W7: Được báo qua Telegram** — ⏸ DEFERRED (D16) | W1 (phần Telegram) | ~~M5.1–M5.5~~ ⏸ | Sáng nào cũng có digest 08:00; cron chết thì có tin trong ≤ 30 phút | Hoãn theo D16. Khi mở lại vẫn nên làm sớm: dữ liệu mất do cron dừng là mất vĩnh viễn (N2 chỉ báo trong app, không thay heartbeat) |
+| **W8: Ra ngoài PWA** — ⏸ DEFERRED (D16) | W4 | ~~M8.1–M8.3~~ ⏸ | Widget iOS chạy trên màn hình chính | Hoãn theo D16. Đổi bất biến bảo mật: làm sau cùng, khi dữ liệu đã ổn |
+| **MX-2: Hoàn thiện** | MX-2 | M4.7, M5.7, M6.5, M7.6, M7.7, M8.4, M8.5 | — | Toàn bộ P3 |
+
+**Điểm chờ Jean quyết:** W4 không phụ thuộc W2/W3 và toàn việc nhỏ, nên có thể làm song song hoặc chen lên
+trước W2. Thứ tự trong bảng giữ nguyên trình tự Phase 2 đã chốt cho tới khi có quyết định khác.
 
 ```
 P0.6 ─────────────► M4.4
@@ -1636,11 +1657,11 @@ M8.1 ─► M8.2            M8.1 ─► M8.3 ─► M8.4            M8.1 ─► 
 | M4.5 | Chip lọc nguồn / loại flow | M4 | P2 | `[ ] TODO` | `static/*` | M4.4 (F2.5, F2.8 cho dữ liệu) | |
 | M4.6 | Hàng chờ + nút xác nhận thủ công | M4 | P2 | `[ ] TODO` | `static/*` | M4.2, M4.4 (F2.6) | |
 | M4.7 | Badge `needs_review` trên tab | M4 | P3 | `[ ] TODO` | `web_api.py`, `static/*` | M4.1 | |
-| M5.1 | Client Telegram + config + `notify --test` | M5 | P1 | `[ ] TODO` | `clients/telegram.py`, `config.py`, `main.py` | — | |
-| M5.2 | Notifier + `alert_state` (dedupe, hồi phục) | M5 | P1 | `[ ] TODO` | `services/notifier.py`, `services/db.py` | M5.1, P0.1 | |
-| M5.3 | Daily Digest 08:00 + PNG | M5 | P1 | `[ ] TODO` | `main.py`, `services/notifier.py`, `services/visualizer.py`, crontab | M5.2, F1.2 | |
-| M5.4 | Cảnh báo biến động > 5% | M5 | P1 | `[ ] TODO` | `services/alerts.py`, `main.py` | M5.2, P0.2, F2.3 | |
-| M5.5 | Heartbeat `watchdog` (cron, RPC, 401) | M5 | P1 | `[ ] TODO` | `services/alerts.py`, `main.py`, crontab | M5.2, P0.2 | |
+| M5.1 | Client Telegram + config + `notify --test` | M5 | P1 | `[ ] TODO` ⏸ DEFERRED (D16) | `clients/telegram.py`, `config.py`, `main.py` | — | |
+| M5.2 | Notifier + `alert_state` (dedupe, hồi phục) | M5 | P1 | `[ ] TODO` ⏸ DEFERRED (D16) | `services/notifier.py`, `services/db.py` | M5.1, P0.1 | |
+| M5.3 | Daily Digest 08:00 + PNG | M5 | P1 | `[ ] TODO` ⏸ DEFERRED (D16) | `main.py`, `services/notifier.py`, `services/visualizer.py`, crontab | M5.2, F1.2 | |
+| M5.4 | Cảnh báo biến động > 5% | M5 | P1 | `[ ] TODO` ⏸ DEFERRED (D16) | `services/alerts.py`, `main.py` | M5.2, P0.2, F2.3 | |
+| M5.5 | Heartbeat `watchdog` (cron, RPC, 401) | M5 | P1 | `[ ] TODO` ⏸ DEFERRED (D16) | `services/alerts.py`, `main.py`, crontab | M5.2, P0.2 | |
 | M5.6 | Cảnh báo hạn API key Binance | M5 | P2 | `[ ] TODO` | `clients/binance.py`, `services/alerts.py` | M5.5 | |
 | M5.7 | Dead-man's switch ngoài máy | M5 | P3 | `[ ] TODO` | `main.py` | M5.5 | |
 | M6.1 | Config `manual_assets` + validate | M6 | P1 | `[ ] TODO` | `config.py`, `config.example.yaml` | — | |
@@ -1655,10 +1676,115 @@ M8.1 ─► M8.2            M8.1 ─► M8.3 ─► M8.4            M8.1 ─► 
 | M7.5 | Chế độ `contribution` (chỉ MUA) | M7 | P2 | `[ ] TODO` | `services/analytics/allocation.py`, `static/*` | M7.2 | |
 | M7.6 | Cảnh báo drift qua Telegram | M7 | P3 | `[ ] TODO` | `services/alerts.py` | M7.2, M5.2 | |
 | M7.7 | Sửa mục tiêu trong Settings + lịch sử drift | M7 | P3 | `[ ] TODO` | `static/*`, `web_api.py` | M7.4 | |
-| M8.1 | Gateway `GET /v1/crypto/portfolio/summary` | M8 | P2 | `[ ] TODO` | `api_gateway.py`, `test_api_gateway.py` | — | |
-| M8.2 | Cập nhật mô hình bảo mật + deploy | M8 | P2 | `[ ] TODO` | `SYSTEM_ARCHITECTURE.md`, `deploy/*` | M8.1 | |
-| M8.3 | Scriptable widget iOS (< 60 dòng) | M8 | P2 | `[ ] TODO` | `widgets/portfolio.scriptable.js` | M8.1 | |
+| M8.1 | Gateway `GET /v1/crypto/portfolio/summary` | M8 | P2 | `[ ] TODO` ⏸ DEFERRED (D16) | `api_gateway.py`, `test_api_gateway.py` | — | |
+| M8.2 | Cập nhật mô hình bảo mật + deploy | M8 | P2 | `[ ] TODO` ⏸ DEFERRED (D16) | `SYSTEM_ARCHITECTURE.md`, `deploy/*` | M8.1 | |
+| M8.3 | Scriptable widget iOS (< 60 dòng) | M8 | P2 | `[ ] TODO` ⏸ DEFERRED (D16) | `widgets/portfolio.scriptable.js` | M8.1 | |
 | M8.4 | Sparkline 7 ngày (`spark`) | M8 | P3 | `[ ] TODO` | `api_gateway.py`, `widgets/*` | M8.3 | |
 | M8.5 | Apple Shortcut + ví dụ Android | M8 | P3 | `[ ] TODO` | `widgets/*` | M8.1 | |
 
-**Tổng hợp Phase 2:** 12 task P1 · 12 task P2 · 7 task P3 · **31 task**, 0 DONE.
+**Tổng hợp Phase 2:** 12 task P1 · 12 task P2 · 7 task P3 · **31 task**, 0 DONE. ⏸ 8 task DEFERRED (D16): M5.1–M5.5 (wave **W7**, trước là phần Telegram của W1), M8.1–M8.3 (wave **W8**, trước là W4).
+
+> Bảng này đang trễ so với code (D17). Không dòng nào được lật trạng thái trong lần đánh số lại wave
+> ngày 2026-11-26.
+
+---
+
+## 10. Phase 3: Backlog sau khi vận hành
+
+> **Bối cảnh:** gộp hai bộ đề xuất — bộ A (7 ý của Fable 5.2, dựa trên dữ liệu thật trong DB) và bộ B
+> (6 gợi ý của Jean/assistant) — thành **9 ý không trùng nhau**, xếp theo giá trị trên công sức.
+> **Chưa triển khai gì.** Mỗi ý là một mục backlog, chưa tách task.
+>
+> **Ngày lập:** 2026-11-27 · Áp dụng nguyên vẹn §0 (trạng thái, quy tắc cập nhật, Definition of Done).
+
+### 10.0 Quy ước riêng của Phase 3
+
+1. **ID:** `N<k>` (`N1…N9`), cố định, không tái sử dụng (§0.2). Khi mở một ý, tách task con `N<k>.<n>`
+   kèm AC chi tiết ngay trong §10.2.
+2. **Bảng §10.1 là Master của Phase 3** (không nối vào §5 hay §9.7).
+3. **Effort** là ước lượng thô: **S** ≈ 1 ngày · **M** ≈ vài ngày · **L** ≈ một tuần trở lên.
+4. **Hạng** = giá trị trên công sức, số nhỏ làm trước. Wave tương ứng nằm ở §9.6.
+5. Mọi ý chỉ **mô tả** hiện trạng: không tín hiệu mua/bán, không đặt lệnh. Key Binance vẫn chỉ đọc.
+
+### 10.1 Bảng xếp hạng (Master Phase 3)
+
+| Hạng | ID | Ý tưởng | Effort | Wave | Trạng thái | Vì sao ở hạng này | Gộp từ |
+|---|---|---|---|---|---|---|---|
+| 1 | N1 | Earn Yield Lens | S | W4 | `[ ] TODO` | ≈ 93% NAV nằm ở Earn và dữ liệu đã có sẵn: chỉ cần tính rồi hiển thị | A1 + B "Earn Yield Radar" |
+| 2 | N2 | Đối soát số lượng + sức khoẻ dữ liệu | S/M | W4 | `[ ] TODO` | Đang sai thật: 25–27/11 app ghi 0 trade dù số lượng đổi 38–71%; mọi con số PnL dựa vào chỗ này | A2 + B "data-health badge" |
+| 3 | N3 | Peg check | S | W4 | `[ ] TODO` | Rẻ nhất danh sách (ticker đã tải sẵn), che một rủi ro hiện đang vô hình | A4 |
+| 4 | N4 | Trade ledger & giá vốn | M/L | W5 | `[ ] TODO` | Giá trị cao nhất (lãi/lỗ theo từng lần mua) nhưng tốn công nhất; chữa tận gốc cho N2 | A3 |
+| 5 | N5 | Analyst kit | S | W5 | `[ ] TODO` | Rẻ, nhưng view là hợp đồng schema: nên chốt sau khi bảng `trades` của N4 ổn định | A6 |
+| 6 | N6 | Kế hoạch giải ngân + stress | M | W6 | `[ ] TODO` | Hữu ích lúc đang giải ngân stablecoin, nhưng cần config mới và một thẻ UI riêng | A5 + B "Stress-test card" |
+| 7 | N7 | EUR lens | M | W6 | `[ ] TODO` | Tách được hiệu ứng tỷ giá, nhưng đụng nhiều chỗ UI và cần backfill klines | A7 + B "EUR toggle" |
+| 8 | N8 | NAV vs vốn đã nạp | S/M* | W6 | `[ ] TODO` | Tách lãi thị trường khỏi tiền mới; trùng một phần với PnL đã khử dòng tiền đang có | B |
+| 9 | N9 | Nhật ký đầu tư | S/M* | W6 | `[ ] TODO` | Giá trị tích luỹ dần, không gấp; là đường ghi dữ liệu người dùng đầu tiên của app | B |
+
+\* Effort của N8 và N9 do Fable 5.2 ước lượng khi gộp; đề xuất gốc không ghi.
+
+### 10.2 Thẻ ý tưởng
+
+**N1 · Earn Yield Lens** — S · hạng 1 · W4
+- **Vấn đề:** app không cho biết mỗi tài sản Earn thực nhận bao nhiêu %/năm, và APR niêm yết lệch APR thực nhận bao nhiêu.
+- **Dữ liệu:** 2 521 dòng reward Earn đã đồng bộ ÷ số dư Earn trong `snapshot_assets`; thêm trường APR mà API vị thế Flexible đã trả nhưng app chưa lưu. Đo thử 7 ngày: USDC ≈ 5.0% · SOL ≈ 2.1% · ETH ≈ 1.1% · BTC ≈ 0.03%.
+- **Lưu ý:** cửa sổ ngắn thì nhiễu (bonus tier, số dư đổi giữa kỳ): ghi rõ cửa sổ đo, kèm `n_obs`/`sufficient`.
+- **AC:** bảng theo tài sản hiện APR niêm yết, APR thực nhận 7d/30d và thu nhập USD/ngày; USDC 7d ra ≈ 5.0% (±0.2 pp) trên dữ liệu hiện tại.
+
+**N2 · Đối soát số lượng + sức khoẻ dữ liệu** — S/M · hạng 2 · W4
+- **Vấn đề:** 25–27/11 số lượng đổi mạnh (BTC +46%, SOL +57%, PEPE +71%, LINK +38%, USDC −12%, USDT −100%; không có nạp, reward < 0.02%) nhưng app ghi **0 trade**; app cũng không báo khi snapshot cũ hay một nguồn lỗi.
+- **Dữ liệu:** Δ số lượng theo `(symbol, source)` từ `snapshot_assets`, reward và flow từ `cash_flows`, `snapshot_sources` (P0.2), cursor trong `sync_state`.
+- **Cách làm:** phần dư = Δ số lượng − reward − flow; hai phần dư ngược dấu trong cùng giờ ⇒ "trade suy luận" theo giá snapshot. Badge sức khoẻ: tuổi snapshot, OK/lỗi theo nguồn, hố trên chart.
+- **Lưu ý:** trade suy luận chỉ là ước lượng, phải gắn nhãn và nhường chỗ cho trade thật của N4; badge chỉ thấy khi mở app nên không thay heartbeat của W7.
+- **AC:** chạy lại 25–27/11 → các cặp stablecoin ↔ BTC/SOL/PEPE/LINK hiện thành trade suy luận, phần còn lại gom vào một dòng "chưa giải thích"; snapshot cũ quá 130 phút hoặc một nguồn lỗi → badge đổi trạng thái.
+
+**N3 · Peg check** — S · hạng 3 · W4
+- **Vấn đề:** stablecoin luôn hiện $1.00 nên một lần lệch peg sẽ không ai thấy.
+- **Dữ liệu:** ticker `USDCUSDT` đã tải ở mỗi snapshot (chưa lưu) + giá USD từ DefiLlama làm tham chiếu thứ hai.
+- **Lưu ý:** `USDCUSDT` đo USDC so với USDT chứ không phải USD (cả hai cùng lệch thì không thấy), nên bắt buộc có tham chiếu thứ hai; vẫn giữ ghim $1.00 cho hiển thị và NAV.
+- **AC:** mỗi snapshot lưu độ lệch; |lệch| > 0.3% → chip cảnh báo, dưới ngưỡng thì ẩn; tham chiếu lỗi → chip "không kiểm được", không chặn `record`.
+
+**N4 · Trade ledger & giá vốn** — M/L · hạng 4 · W5
+- **Vấn đề:** không có giá vốn nên không biết đang lãi/lỗ bao nhiêu trên từng coin, và từng lần mua có tốt hơn giữ USDC 5%/năm không.
+- **Dữ liệu:** bảng mới `trades` (migration), nạp từ Binance Convert + lịch sử Spot qua `HistoryStream` sẵn có. Cho ra: giá vào bình quân, PnL chưa thực hiện, bảng điểm từng lần mua.
+- **Lưu ý:** 33 lần nạp crypto từ ngoài không có giá vốn (phải chọn quy ước và gắn cờ); backfill Spot quét từng symbol nên chậm.
+- **AC:** trade 25–27/11 hiện đúng số lượng và giá; với mọi symbol, mua − bán + nạp − rút + reward khớp số dư snapshot (trừ bụi); vị thế thiếu giá vốn được gắn cờ, không hiện PnL giả.
+
+**N5 · Analyst kit** — S · hạng 5 · W5
+- **Vấn đề:** muốn phân tích tự do thì mỗi lần phải viết lại SQL trên schema thô.
+- **Dữ liệu:** migration thêm view SQL gọn (vị thế theo ngày, return đã khử dòng tiền, dòng tiền ngoài, thu nhập Earn theo ngày) + `main.py export` ra CSV + notebook mẫu.
+- **Lưu ý:** view trở thành hợp đồng schema (đổi bảng gốc phải giữ view); notebook dùng thư viện ngoài, app không thêm dependency (D2).
+- **AC:** `main.py export` sinh một CSV cho mỗi view; notebook mẫu dựng lại đường NAV và return ngày khớp `GET /api/analytics/quant`; `requirements.txt` không đổi.
+
+**N6 · Kế hoạch giải ngân + stress** — M · hạng 6 · W6
+- **Vấn đề:** kế hoạch giải ngân nằm ngoài app: không thấy tiến độ, cũng không thấy rủi ro tăng thế nào khi đi hết kế hoạch.
+- **Dữ liệu:** block config mới (bucket nguồn, tổng, mỗi đợt, nhịp) + số dư và tỷ trọng từ snapshot. Cho ra: tiến độ từng đợt, câu lệnh đợt kế tiếp, dòng "BTC −40% làm danh mục mất X% hôm nay, Y% khi đạt mục tiêu", thanh trượt cú sốc BTC (mặc định −10%).
+- **Lưu ý:** chỉ mô tả, không tín hiệu thời điểm; phải chốt giả định altcoin phản ứng thế nào khi BTC giảm trước khi làm. HHI/top-3 của gợi ý gốc đã thuộc F3.C1–C3, **không làm lại**.
+- **AC:** với config mẫu, thẻ hiện "đợt k/n, còn $Z", câu lệnh kế tiếp copy được, hai con số stress hôm nay / tại mục tiêu; chưa cấu hình → thẻ hướng dẫn, không lỗi.
+
+**N7 · EUR lens** — M · hạng 7 · W6
+- **Vấn đề:** mọi con số là USD, không tách được phần biến động do tỷ giá EUR/USD.
+- **Dữ liệu:** `EURUSDT` từ ticker đã tải (lưu thêm mỗi snapshot); các tháng backfill cần klines EUR.
+- **Lưu ý:** `EURUSDT` là EUR so với USDT, không phải USD (cùng giới hạn như N3); đoạn lịch sử thiếu tỷ giá thì ẩn EUR, không nội suy.
+- **AC:** toggle USD/EUR đổi hero và chart, vẫn giữ `.priv`; attribution có bucket "hiệu ứng tỷ giá" và tổng các bucket vẫn khớp Δ NAV tính bằng EUR.
+
+**N8 · NAV vs vốn đã nạp** — S/M · hạng 8 · W6
+- **Vấn đề:** đường NAV đi lên không cho biết phần nào là lãi thị trường, phần nào là tiền mới nạp.
+- **Dữ liệu:** dòng tiền ngoài luỹ kế từ `cash_flows` (đã loại chuyển nội bộ) + NAV từ `snapshots`.
+- **Lưu ý:** crypto nạp từ ngoài được tính theo giá lúc nạp, không phải giá mua thật; đoạn lịch sử chưa có dữ liệu dòng tiền phải đánh dấu, không vẽ như thể vốn bằng 0.
+- **AC:** tab Portfolio có đường "vốn đã nạp ròng" cạnh NAV; mức thay đổi khoảng cách hai đường trong 30 ngày khớp PnL 30d của `GET /api/portfolio/pnl`; nạp $5,000 khi giá đứng yên → hai đường cùng nhảy, khoảng cách không đổi.
+
+**N9 · Nhật ký đầu tư** — S/M · hạng 9 · W6
+- **Vấn đề:** lý do của từng quyết định (mua, chốt, đổi kế hoạch) không nằm cạnh con số, vài tháng sau không đọc lại được.
+- **Dữ liệu:** bảng mới `notes` (ngày hoặc `snapshot_id`, nội dung): dữ liệu do người dùng nhập đầu tiên trong DB.
+- **Lưu ý:** cần endpoint ghi mới (sau token); ghi chú không tái tạo được nên phải nằm trong backup; nội dung là văn bản thuần, escape khi hiển thị.
+- **AC:** thêm/sửa/xoá ghi chú cho một ngày; thẻ Attribution của kỳ chứa ngày đó hiện ghi chú; ghi chú còn nguyên sau migrate và backup/restore.
+
+### 10.3 Phụ thuộc
+
+```
+N2 ─► N4 (trade thật thay trade suy luận) ─► N5 (phụ thuộc mềm: chốt view sau khi có `trades`)
+N4 ─► F1.8 (bucket `trade` của attribution v2)
+N3 ─► N7 (cùng cách lưu ticker tham chiếu mỗi snapshot)
+F3.C1–C3 ─► N6 (HHI/top-3)          M7.1 ─► N6 (mục tiêu allocation, tuỳ chọn)
+N1, N8, N9: không phụ thuộc ý nào khác trong §10
+```
