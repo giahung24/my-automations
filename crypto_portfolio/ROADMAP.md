@@ -12,7 +12,7 @@
 |---|---|---|
 | **Phase 1** (P0, F1–F3) | Dữ liệu sạch nhịp 1h, backfill 5 năm, attribution, dòng tiền Binance, TWR / Base 100 / drawdown / volatility | Phần lõi xong. Còn lại ở §4. |
 | **Phase 2, W1–W3** (M4, M6, M7) | Tab Activity, tài sản manual (ví lạnh, staking), trợ lý Allocation | Xong. |
-| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | **Việc kế tiếp**, §2. Chưa bắt đầu. |
+| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | **Việc kế tiếp**, §2. W4 đã tách task con, chưa code. |
 | **W7, W8** (M5, M8) | Telegram, widget mobile | Hoãn (D16), §3. |
 
 Nguyên tắc không đổi cho mọi việc bên dưới: app chỉ **mô tả** hiện trạng, không phát tín hiệu
@@ -55,21 +55,42 @@ lệch peg > 0.3% có chip cảnh báo.
   `n_obs`/`sufficient`.
 - **AC:** bảng theo tài sản hiện APR niêm yết, APR thực nhận 7d/30d, thu nhập USD/ngày; USDC 7d ra
   ≈ 5.0% (±0.2 pp) trên dữ liệu hiện tại.
+- **Phạm vi đã chốt (2026-11-27):** APR thực nhận chỉ tính trên snapshot thật (từ 11/2026), không
+  dựng lại số dư Earn quá khứ. Quá khứ chỉ trả lời "đã kiếm được bao nhiêu": tổng reward, không cần
+  số dư. APR 7d/30d là lãi suất năm hoá, không phải return nên không vướng D10.
+
+| Task | Nội dung | AC |
+|---|---|---|
+| N1.1 | Migration v6: cột `snapshot_assets.listed_apr` (NULL = không biết). `earn_flexible()` giữ trường APR của response thay vì bỏ. | Snapshot mới có `listed_apr` cho vị thế Flexible; snapshot cũ và nguồn khác là NULL; migrate DB v5 không mất dòng nào. |
+| N1.2 | Hàm APR thực nhận: reward trong cửa sổ ÷ số dư Earn bình quân theo snapshot, năm hoá; kèm `n_obs`, `sufficient`. | USDC 7d ≈ 5.0% (±0.2 pp); cửa sổ có hố hoặc thiếu snapshot → `sufficient = false`, không ra số giả; số dư 0 → không chia. |
+| N1.3 | Thu nhập luỹ kế: nâng `earn_backfill_days` lên mức xa nhất Binance cho; tổng reward theo tài sản và theo năm, quy USD bằng `value_usd` lúc nhận. | Có tổng theo năm cho từng tài sản và ngày bắt đầu thật của dữ liệu ("tính từ X"); tổng khớp `SUM(value_usd)` của reward Earn trong `cash_flows`. |
+| N1.4 | `GET /api/analytics/earn` (chỉ đọc SQLite) + thẻ "Earn" ở tab Portfolio: bảng APR niêm yết / thực nhận 7d, 30d / $ mỗi ngày, dòng "Đã nhận từ X: $…" theo năm. | Số tiền mang `.priv`; chưa đủ dữ liệu → hiện "—" kèm lý do, không lỗi; `GET` không gọi mạng. |
 
 **N2 · Đối soát số lượng + sức khoẻ dữ liệu** (S/M)
 - **Vấn đề:** 25–27/11 số lượng đổi mạnh (BTC +46%, SOL +57%, PEPE +71%, LINK +38%, USDC −12%,
   USDT −100%; không có nạp, reward < 0.02%) nhưng app ghi **0 trade**. App cũng không báo khi
   snapshot cũ hay một nguồn lỗi.
-- **Cách làm:** phần dư = Δ số lượng − reward − flow, theo `(symbol, source)`. Hai phần dư ngược
-  dấu trong cùng giờ ⇒ "trade suy luận" theo giá snapshot. Badge sức khoẻ: tuổi snapshot, OK/lỗi
+- **Cách làm:** phần dư = Δ số lượng − reward − flow, theo symbol trên **tổng Binance**
+  (Spot + Earn + Funding, để chuyển Spot ↔ Earn không thành trade giả); nguồn khác theo từng nguồn.
+  Hai phần dư ngược dấu trong cùng giờ ⇒ "trade suy luận" theo giá snapshot. Badge sức khoẻ: tuổi snapshot, OK/lỗi
   theo nguồn (`snapshot_sources`), hố trên chart.
 - **Lưu ý:** trade suy luận là ước lượng, phải gắn nhãn và nhường chỗ cho trade thật của N4. Badge
   chỉ thấy khi mở app nên không thay heartbeat của W7.
 - **AC:** chạy lại 25–27/11 → các cặp stablecoin ↔ BTC/SOL/PEPE/LINK hiện thành trade suy luận, phần
   còn lại gom vào một dòng "chưa giải thích"; snapshot cũ quá 130 phút hoặc một nguồn lỗi → badge
   đổi trạng thái.
+- **Phạm vi đã chốt (2026-11-27):** trade suy luận **tính lúc đọc**, không lưu bảng nào: khi N4 có
+  trade thật thì xoá đoạn tính, không phải dọn dữ liệu. Một giờ mua nhiều coin → một dòng
+  "USDC → BTC + SOL", không chia stablecoin cho từng coin.
 
-**N3 · Peg check** (S)
+| Task | Nội dung | AC |
+|---|---|---|
+| N2.1 | Phần dư giữa hai snapshot thật liên tiếp: Δ số lượng − reward − flow ngoài, gộp Binance theo symbol; bỏ qua cặp snapshot có nguồn lỗi và phần dư bụi (< $1). | Chuyển Spot → Earn cho phần dư 0; nạp/rút/reward đã có trong `cash_flows` cho phần dư 0; nguồn lỗi không sinh phần dư. |
+| N2.2 | Ghép cặp: trong cùng khoảng snapshot, phần dư stablecoin và phần dư coin ngược dấu ⇒ một trade suy luận theo giá snapshot; phần không ghép được ⇒ "chưa giải thích". | Dữ liệu 25–27/11: stablecoin ↔ BTC/SOL/PEPE/LINK thành trade suy luận; phần còn lại nằm trong dòng "chưa giải thích". |
+| N2.3 | Tab Activity: item `kind = 'trade'`, `inferred = true`, nhãn "Trade (suy luận)", có chip lọc; dòng "Chưa giải thích" riêng. | Item hiện đúng giờ, hai vế và giá trị ước lượng; nhãn suy luận luôn hiển thị; `GET /api/cash-flows` không gọi mạng. |
+| N2.4 | Badge sức khoẻ cạnh hero: tuổi snapshot mới nhất, nguồn lỗi theo `snapshot_sources`, số hố 24h gần nhất (`is_hole`). | Snapshot cũ quá 130 phút → badge "cũ"; một nguồn `error` → badge nêu tên nguồn; mọi thứ ổn → chỉ hiện tuổi snapshot. |
+
+**N3 · Peg check** (S) — làm trước: N3 → N1 → N2
 - **Vấn đề:** stablecoin luôn hiện $1.00 nên một lần lệch peg sẽ không ai thấy.
 - **Dữ liệu:** ticker `USDCUSDT` đã tải ở mỗi snapshot (chưa lưu) + giá USD từ DefiLlama làm tham
   chiếu thứ hai.
@@ -77,6 +98,14 @@ lệch peg > 0.3% có chip cảnh báo.
   Vẫn giữ ghim $1.00 cho hiển thị và NAV.
 - **AC:** mỗi snapshot lưu độ lệch; |lệch| > 0.3% → chip cảnh báo, dưới ngưỡng thì ẩn; tham chiếu
   lỗi → chip "không kiểm được", không chặn `record`.
+- **Phạm vi đã chốt (2026-11-27):** chỉ kiểm stablecoin đang nắm giữ. USDC có hai tham chiếu
+  (`USDCUSDT`, DefiLlama); USDT chỉ có DefiLlama.
+
+| Task | Nội dung | AC |
+|---|---|---|
+| N3.1 | Migration v6 (chung với N1.1): bảng `peg_checks` (`snapshot_id`, `symbol`, `reference`, `price`, `error`). | Migrate DB v5 sạch; xoá snapshot thì dòng peg đi theo. |
+| N3.2 | `record` ghi một dòng cho mỗi (stablecoin đang giữ, tham chiếu): `USDCUSDT` lấy từ ticker đã tải, giá USD từ DefiLlama. | Tham chiếu lỗi → dòng có `error`, `record` vẫn thành công và NAV vẫn ghim $1.00. |
+| N3.3 | Chip cạnh hero: độ lệch = tham chiếu lệch nhiều nhất còn dùng được của snapshot mới nhất. | \|lệch\| > 0.3% → chip "USDC −0.4%"; dưới ngưỡng → ẩn; mọi tham chiếu của một coin lỗi → chip "không kiểm được". |
 
 ### W5 — Giá vốn & phân tích
 
