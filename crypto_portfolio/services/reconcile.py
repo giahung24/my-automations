@@ -102,6 +102,7 @@ def inferred_items(database: Database, since_iso: str | None = None, tz_offset: 
         if trade:
             items.append(_item("trade", f"trade:{snapshot_id}", snapshot_id, timestamp, day,
                                value_usd=trade["value_usd"], sold=trade["sold"], bought=trade["bought"],
+                               assets=[*trade["sold"], *trade["bought"]],
                                window_start=snapshots[index - 1]["timestamp"]))
         for leg in legs:
             loose[day].append((snapshot_id, {**leg, "timestamp": timestamp}))
@@ -115,7 +116,7 @@ def inferred_items(database: Database, since_iso: str | None = None, tz_offset: 
 
 def _item(kind: str, key: str, snapshot_id: int, timestamp: str, day: str, **extra) -> dict:
     return {
-        "id": key, "key": key, "kind": kind, "group": kind == "unexplained", "inferred": True,
+        "id": key, "key": key, "kind": kind, "group": True, "inferred": True,
         "timestamp": timestamp, "day": day, "asset": "", "amount": None, "direction": None,
         "from": "Binance", "to": "Binance", "source": "binance", "sources": ["binance"],
         "channel": "", "status": COMPLETED, "match": None, "needs_review": False,

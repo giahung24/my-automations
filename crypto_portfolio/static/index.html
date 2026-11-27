@@ -211,7 +211,11 @@
             {{ portfolio.origin === 'live' ? 'Live' : 'Last snapshot' }}
           </span>
           <span aria-hidden="true">·</span>
-          <time :datetime="portfolio.timestamp" :title="fmt.fullDate(portfolio.timestamp)">updated {{ updatedAgo }}</time>
+          <time :datetime="portfolio.timestamp" :title="fmt.fullDate(portfolio.timestamp)" :class="{ 'text-warn': dataStale }">updated {{ updatedAgo }}<template v-if="dataStale"> · stale</template></time>
+          <template v-if="portfolio.gaps_24h">
+            <span aria-hidden="true">·</span>
+            <span class="text-warn" title="Snapshots of the last 24 hours in which at least one source failed">{{ portfolio.gaps_24h }} {{ portfolio.gaps_24h === 1 ? 'gap' : 'gaps' }} in 24h</span>
+          </template>
           <!-- N3: one pill per stablecoin off its peg (or that no reference could check); absent when all is well -->
           <span v-for="w in portfolio.peg" :key="w.symbol" class="status warn num" role="status"
                 :title="w.status === 'off' ? w.symbol + ' is priced at $1.00 here but trades ' + fmt.signedPct(w.deviation_pct) + ' away from it' : 'No price reference answered for ' + w.symbol">
@@ -393,12 +397,23 @@
         <div v-show="activeTab === 'analytics'" id="panel-analytics" role="tabpanel" aria-labelledby="tab-analytics">
 
           <template v-if="!loading && portfolio.configured && portfolio.origin !== 'empty'">
+            <!-- Folding cards (A1): folded, a card is its title and its answer in one line. Two groups:
+                 the first follows the period selector, the second is a picture of now. -->
+            <p class="day-head mt-2">Over the period</p>
+            <div class="card fold-group mt-1.5">
             <!-- 1. Attribution: what made the total move over the period -->
-            <section class="card mt-2" aria-labelledby="why-title" :aria-busy="why.loading">
-              <div class="px-5 pt-4">
-                <h2 id="why-title" class="section-title">Why it moved</h2>
-                <p class="section-sub">Market prices versus changes in what you hold</p>
-              </div>
+            <section class="fold" aria-labelledby="why-title" :aria-busy="why.loading">
+              <h2 class="m-0">
+                <button type="button" class="fold-head" :aria-expanded="folds.why" aria-controls="fold-why" @click="toggleFold('why')">
+                  <span id="why-title" class="fold-title section-title">Why it moved</span>
+                  <span v-if="!folds.why" class="fold-sum num" :class="foldSums.why.trend ? 'pnl ' + foldSums.why.trend : ''">
+                    <span v-if="foldSums.why.money" class="priv priv-soft">{{ foldSums.why.money }}</span>{{ foldSums.why.text }}
+                  </span>
+                  <svg class="icon icon-sm fold-chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+                </button>
+              </h2>
+              <div v-show="folds.why" id="fold-why">
+                <p class="section-sub px-5">Market prices versus changes in what you hold</p>
 
               <div v-if="why.loading && !why.data && !why.error" class="space-y-3 px-5 pb-5 pt-3">
                 <div class="skeleton h-8 w-44"></div>
@@ -470,16 +485,24 @@
                 <p v-if="whyMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ whyMessage }}</p>
                 <div class="h-4"></div>
               </template>
+              </div>
             </section>
 
             <!-- 2. Performance & benchmark -->
-            <section class="card mt-4" aria-labelledby="perf-title" :aria-busy="insights.loading">
-              <div class="px-5 pt-4">
-                <h2 id="perf-title" class="section-title">Performance</h2>
-                <p v-if="insightsReady" class="section-sub num">
+            <section class="fold" aria-labelledby="perf-title" :aria-busy="insights.loading">
+              <h2 class="m-0">
+                <button type="button" class="fold-head" :aria-expanded="folds.perf" aria-controls="fold-perf" @click="toggleFold('perf')">
+                  <span id="perf-title" class="fold-title section-title">Performance</span>
+                  <span v-if="!folds.perf" class="fold-sum num" :class="foldSums.perf.trend ? 'pnl ' + foldSums.perf.trend : ''">
+                    <span v-if="foldSums.perf.money" class="priv priv-soft">{{ foldSums.perf.money }}</span>{{ foldSums.perf.text }}
+                  </span>
+                  <svg class="icon icon-sm fold-chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+                </button>
+              </h2>
+              <div v-show="folds.perf" id="fold-perf">
+                <p v-if="insightsReady" class="section-sub num px-5">
                   {{ insights.data.start }} → {{ insights.data.end }} · {{ insights.data.n_obs }} daily {{ insights.data.n_obs === 1 ? 'return' : 'returns' }}
                 </p>
-              </div>
 
               <div v-if="insights.loading && !insights.data && !insights.error" class="space-y-3 px-5 pb-5 pt-3">
                 <div class="grid grid-cols-3 gap-2"><div class="skeleton h-16"></div><div class="skeleton h-16"></div><div class="skeleton h-16"></div></div>
@@ -518,27 +541,112 @@
                 <p v-if="insightMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ insightMessage }}</p>
                 <div class="h-4"></div>
               </template>
+              </div>
             </section>
 
             <!-- 3. Risk: how far below the high-water mark -->
-            <section v-if="insightsReady" class="card mt-4" aria-labelledby="risk-title">
-              <div class="px-5 pt-4">
-                <h2 id="risk-title" class="section-title">Risk</h2>
-                <p class="section-sub num">
+            <section v-if="insightsReady" class="fold" aria-labelledby="risk-title">
+              <h2 class="m-0">
+                <button type="button" class="fold-head" :aria-expanded="folds.risk" aria-controls="fold-risk" @click="toggleFold('risk')">
+                  <span id="risk-title" class="fold-title section-title">Risk</span>
+                  <span v-if="!folds.risk" class="fold-sum num" :class="foldSums.risk.trend ? 'pnl ' + foldSums.risk.trend : ''">
+                    <span v-if="foldSums.risk.money" class="priv priv-soft">{{ foldSums.risk.money }}</span>{{ foldSums.risk.text }}
+                  </span>
+                  <svg class="icon icon-sm fold-chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+                </button>
+              </h2>
+              <div v-show="folds.risk" id="fold-risk">
+                <p class="section-sub num px-5">
                   Drawdown from peak · worst
                   <span class="pnl" :class="(insights.data.drawdown.max_drawdown_pct ?? 0) < 0 ? 'down' : 'flat'">{{ (insights.data.drawdown.max_drawdown_pct ?? 0).toFixed(2) }}%</span>
                 </p>
-              </div>
               <div ref="underwaterEl" class="insight-chart insight-chart-sm" role="img"
                    :aria-label="'Underwater chart: drawdown from the high-water mark; maximum ' + (insights.data.drawdown.max_drawdown_pct ?? 0) + '%'"></div>
               <div class="h-4"></div>
+              </div>
+            </section>
+            </div>
+
+            <p class="day-head mt-5">Right now</p>
+            <div class="card fold-group mt-1.5">
+            <!-- 4. Earn income (N1): what Simple Earn really pays -->
+            <section class="fold" aria-labelledby="earn-title" :aria-busy="earn.loading">
+              <h2 class="m-0">
+                <button type="button" class="fold-head" :aria-expanded="folds.earn" aria-controls="fold-earn" @click="toggleFold('earn')">
+                  <span id="earn-title" class="fold-title section-title">Earn income</span>
+                  <span v-if="!folds.earn" class="fold-sum num" :class="foldSums.earn.trend ? 'pnl ' + foldSums.earn.trend : ''">
+                    <span v-if="foldSums.earn.money" class="priv priv-soft">{{ foldSums.earn.money }}</span>{{ foldSums.earn.text }}
+                  </span>
+                  <svg class="icon icon-sm fold-chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+                </button>
+              </h2>
+              <div v-show="folds.earn" id="fold-earn">
+                <p class="section-sub px-5">What Simple Earn pays · realised = rewards received over the average balance</p>
+                <div v-if="earn.loading && !earn.data && !earn.error" class="space-y-3 px-5 pb-5 pt-3">
+                  <div v-for="n in 3" :key="n" class="skeleton h-9 w-full"></div>
+                </div>
+                <template v-else>
+                  <template v-if="earnRows.length">
+                    <div class="earn-grid earn-head mt-3 px-5" aria-hidden="true">
+                      <span>Asset</span><span>7d</span><span>30d</span><span>Per day</span>
+                    </div>
+                    <ul class="earn-list num" aria-label="Realised yield per asset in Simple Earn">
+                      <li v-for="r in earnRows" :key="r.symbol" class="earn-grid px-5">
+                        <span class="flex min-w-0 items-center gap-2.5">
+                          <span class="coin coin-sm" :style="{ '--hue': fmt.hue(r.symbol) }" aria-hidden="true">
+                            <img v-if="coinIcon(r.symbol)" :src="coinIcon(r.symbol)" alt="" @error="iconFailed[r.symbol] = true">
+                            <span v-else>{{ fmt.badge(r.symbol) }}</span>
+                          </span>
+                          <span class="min-w-0">
+                            <span class="block truncate text-[14px] font-extrabold tracking-tight">{{ r.symbol }}</span>
+                            <span class="block truncate text-[12px] font-semibold text-ink-3">{{ r.listedText }}</span>
+                          </span>
+                        </span>
+                        <span v-for="w in r.windows" :key="w.id" class="text-[14px] font-extrabold" :class="{ 'text-ink-3': !w.sufficient }" :title="w.hint">
+                          <span class="sr-only">Realised over {{ w.id }}: </span>{{ w.text }}
+                        </span>
+                        <span class="text-[14px] font-extrabold"><span class="sr-only">Income per day: </span><span class="priv priv-soft">{{ r.perDayText }}</span></span>
+                      </li>
+                    </ul>
+                    <p v-if="earnGapNote" class="legend-note px-5 pt-2">{{ earnGapNote }}</p>
+                  </template>
+
+                  <template v-if="earnLife">
+                    <h3 class="block-sub mt-4 px-5">Received since {{ earnLife.since }}</h3>
+                    <p class="delta-figure num px-5 pt-1"><span class="priv">{{ fmt.money(earnLife.total) }}</span></p>
+                    <p class="px-5 text-[12px] font-semibold text-ink-3 num">
+                      of which stablecoins <span class="priv priv-soft">{{ fmt.money(earnLife.stable) }}</span> · valued when each reward was paid
+                    </p>
+                    <ul class="insight-legend px-5" aria-label="Earn income by year">
+                      <li v-for="y in earnLife.years" :key="y.year">{{ y.year }}
+                        <span class="priv priv-soft num font-extrabold text-ink-2">{{ fmt.money(y.usd) }}</span>
+                      </li>
+                    </ul>
+                    <div v-if="earnLife.unpriced" class="notice mx-4 mt-3" role="status">
+                      <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                      <span>{{ earnLife.unpriced }} {{ earnLife.unpriced === 1 ? 'reward has' : 'rewards have' }} no price and count as $0.</span>
+                    </div>
+                  </template>
+                  <p v-if="earnMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ earnMessage }}</p>
+                  <div class="h-4"></div>
+                </template>
+              </div>
             </section>
 
-            <!-- 4. Allocation & rebalancing (M7): a picture of now, so the period above does not apply -->
-            <section class="card mt-4" aria-labelledby="alloc-title" :aria-busy="alloc.loading">
-              <div class="flex items-start gap-3 px-5 pt-4">
+            <!-- 5. Allocation & rebalancing (M7): a picture of now, so the period above does not apply -->
+            <section class="fold" aria-labelledby="alloc-title" :aria-busy="alloc.loading">
+              <h2 class="m-0">
+                <button type="button" class="fold-head" :aria-expanded="folds.alloc" aria-controls="fold-alloc" @click="toggleFold('alloc')">
+                  <span id="alloc-title" class="fold-title section-title">Allocation &amp; rebalancing</span>
+                  <span v-if="!folds.alloc" class="fold-sum num" :class="foldSums.alloc.trend ? 'pnl ' + foldSums.alloc.trend : ''">
+                    <span v-if="foldSums.alloc.money" class="priv priv-soft">{{ foldSums.alloc.money }}</span>{{ foldSums.alloc.text }}
+                  </span>
+                  <svg class="icon icon-sm fold-chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+                </button>
+              </h2>
+              <div v-show="folds.alloc" id="fold-alloc">
+              <div class="flex items-start gap-3 px-5">
                 <div class="min-w-0 flex-1">
-                  <h2 id="alloc-title" class="section-title">Allocation &amp; rebalancing</h2>
                   <p class="section-sub">Target vs actual, right now · suggestions only, nothing is traded</p>
                 </div>
                 <button type="button" class="switch mt-0.5" role="switch" :aria-checked="allocEnabled"
@@ -732,7 +840,9 @@
                 <p v-if="allocMessage && !alloc.errors.length" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ allocMessage }}</p>
                 <div class="h-4"></div>
               </template>
+              </div>
             </section>
+            </div>
           </template>
 
           <!-- Nothing to analyse yet -->
@@ -784,7 +894,7 @@
                 <button v-for="k in activityKinds" :key="k.id" type="button" class="chip" :title="k.hint"
                         :aria-pressed="act.kind === k.id" :class="{ 'is-empty': actFacet('kind', k.id) === 0 }"
                         :aria-label="k.label + ' (' + k.hint + ')'" @click="setActKind(k.id)">
-                  <svg class="icon icon-xs" aria-hidden="true"><use :href="k.id === 'deposit' ? '#i-down' : k.id === 'withdrawal' ? '#i-up' : k.id === 'transfer' ? '#i-swap' : '#i-sparkle'"/></svg>
+                  <svg class="icon icon-xs" aria-hidden="true"><use :href="k.icon"/></svg>
                   {{ k.label }}<span v-if="actFacet('kind', k.id) !== null" class="chip-count num">{{ actFacet('kind', k.id) }}</span>
                 </button>
               </div>
@@ -848,6 +958,7 @@
                       <span class="min-w-0 flex-1">
                         <span class="flex min-w-0 items-center gap-1.5">
                           <span class="truncate text-[15px] font-extrabold tracking-tight num" :class="{ 'priv priv-soft': !item.group }">{{ item.title }}</span>
+                          <span v-if="item.inferred" class="flow-tag" title="Read from the change between two snapshots, not from Binance's trade history">inferred</span>
                           <span v-if="item.pending" class="flow-tag warn">Pending</span>
                           <span v-if="item.reviewText" class="flow-tag review">? {{ item.reviewText }}</span>
                         </span>
@@ -864,17 +975,17 @@
                       <svg v-if="item.group" class="icon icon-sm flow-chev" :class="{ 'rotate-180': act.open[item.key] }" aria-hidden="true"><use href="#i-chevron"/></svg>
                     </component>
 
-                    <!-- Earn day, unfolded: one line per asset -->
+                    <!-- Earn day, inferred trade or unexplained change, unfolded: one line per asset -->
                     <transition name="expand">
-                      <ul v-if="item.group && act.open[item.key]" class="flow-detail num" :aria-label="'Earn interest on ' + group.label">
+                      <ul v-if="item.group && act.open[item.key]" class="flow-detail num" :aria-label="item.kindLabel + ' on ' + group.label">
                         <li v-for="a in item.assets" :key="a.asset">
                           <span class="coin coin-xs" :style="{ '--hue': fmt.hue(a.asset) }" aria-hidden="true">
                             <img v-if="coinIcon(a.asset)" :src="coinIcon(a.asset)" alt="" @error="iconFailed[a.asset] = true">
                             <span v-else>{{ fmt.badge(a.asset) }}</span>
                           </span>
                           <span class="min-w-0 flex-1 truncate font-bold">{{ a.asset }}<span v-if="a.count > 1" class="font-semibold text-ink-3"> · {{ a.count }}×</span></span>
-                          <span class="priv priv-soft text-ink-2">+{{ fmt.qty(a.amount) }}</span>
-                          <span class="priv priv-soft w-20 text-right font-bold">{{ fmt.money(a.value_usd) }}</span>
+                          <span class="priv priv-soft text-ink-2">{{ a.amount < 0 ? '−' : '+' }}{{ fmt.qty(Math.abs(a.amount)) }}</span>
+                          <span class="priv priv-soft w-20 text-right font-bold">{{ fmt.money(Math.abs(a.value_usd)) }}</span>
                         </li>
                       </ul>
                     </transition>

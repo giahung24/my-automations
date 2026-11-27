@@ -12,7 +12,7 @@
 |---|---|---|
 | **Phase 1** (P0, F1–F3) | Dữ liệu sạch nhịp 1h, backfill 5 năm, attribution, dòng tiền Binance, TWR / Base 100 / drawdown / volatility | Phần lõi xong. Còn lại ở §4. |
 | **Phase 2, W1–W3** (M4, M6, M7) | Tab Activity, tài sản manual (ví lạnh, staking), trợ lý Allocation | Xong. |
-| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | **Việc kế tiếp**, §2. W4 đã tách task con, chưa code. |
+| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | W4 (A1, N1–N3) đã code, **chưa chạy trên dữ liệu thật**: xem "Còn phải kiểm" cuối mục W4. W5 là việc kế tiếp. |
 | **W7, W8** (M5, M8) | Telegram, widget mobile | Hoãn (D16), §3. |
 
 Nguyên tắc không đổi cho mọi việc bên dưới: app chỉ **mô tả** hiện trạng, không phát tín hiệu
@@ -81,7 +81,8 @@ lệch peg > 0.3% có chip cảnh báo.
   USDT −100%; không có nạp, reward < 0.02%) nhưng app ghi **0 trade**. App cũng không báo khi
   snapshot cũ hay một nguồn lỗi.
 - **Cách làm:** phần dư = Δ số lượng − reward − flow, theo symbol trên **tổng Binance**
-  (Spot + Earn + Funding, để chuyển Spot ↔ Earn không thành trade giả); nguồn khác theo từng nguồn.
+  (Spot + Earn + Funding, để chuyển Spot ↔ Earn không thành trade giả). Chỉ Binance: ví on-chain
+  chưa có lịch sử dòng tiền (F2.5), mọi lần chuyển vào ví sẽ bị đọc thành "chưa giải thích".
   Hai phần dư ngược dấu trong cùng giờ ⇒ "trade suy luận" theo giá snapshot. Badge sức khoẻ: tuổi snapshot, OK/lỗi
   theo nguồn (`snapshot_sources`), hố trên chart.
 - **Lưu ý:** trade suy luận là ước lượng, phải gắn nhãn và nhường chỗ cho trade thật của N4. Badge
@@ -116,6 +117,15 @@ lệch peg > 0.3% có chip cảnh báo.
 | N3.1 | Migration v6 (chung với N1.1): bảng `peg_checks` (`snapshot_id`, `symbol`, `reference`, `price`, `error`). | Migrate DB v5 sạch; xoá snapshot thì dòng peg đi theo. |
 | N3.2 | `record` ghi một dòng cho mỗi (stablecoin đang giữ, tham chiếu): `USDCUSDT` lấy từ ticker đã tải, giá USD từ DefiLlama. | Tham chiếu lỗi → dòng có `error`, `record` vẫn thành công và NAV vẫn ghim $1.00. |
 | N3.3 | Pill trên dòng trạng thái dưới hero: độ lệch = tham chiếu lệch nhiều nhất còn dùng được của snapshot mới nhất. | \|lệch\| > 0.3% → chip "USDC −0.4%"; dưới ngưỡng → ẩn; mọi tham chiếu của một coin lỗi → chip "không kiểm được". |
+
+**Còn phải kiểm trên máy chủ thật (W4):**
+- AC của N1: USDC 7d ra ≈ 5.0% (±0.2 pp). Cần ≥ 7 ngày snapshot liên tục, không hố quá 6 giờ.
+- AC của N2: 25–27/11 hiện thành trade suy luận. Hai vế lệch nhau quá 15% thì bị xếp vào
+  "Unexplained" (`TRADE_TOLERANCE` trong `services/reconcile.py`).
+- Tên trường APR của Binance (`latestAnnualPercentageRate`) và id DefiLlama của stablecoin
+  (`services/peg.py`): cột "listed" trống hoặc pill "peg unchecked" nghĩa là sai tên.
+- `earn_backfill_days` mặc định nay là 1827. Nếu `config.yaml` đang ghi 365 thì sửa tay; lần
+  `record` kế tiếp tải lùi reward (vài phút, nối tiếp được nếu bị ngắt).
 
 ### W5 — Giá vốn & phân tích
 

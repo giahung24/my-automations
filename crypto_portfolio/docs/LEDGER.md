@@ -111,7 +111,14 @@ phần `53b4309` (2026-11-26).
 | M8.1–M8.3 | Gateway `/summary`, mô hình bảo mật, widget iOS | P2 | DEFERRED | D16, wave W8 |
 | M8.4, M8.5 | Sparkline, Shortcut / Android | P3 | TODO | Bị chặn bởi W8 |
 
-**Phase 3 (N1–N9):** tất cả `TODO`. Bảng xếp hạng và thẻ ý tưởng nằm ở ROADMAP §2.
+**Phase 3 (N1–N9):** N4–N9 `TODO`. Bảng xếp hạng và thẻ ý tưởng nằm ở ROADMAP §2.
+
+| Task | Việc | Trạng thái | Ghi chú |
+|---|---|---|---|
+| A1 | Analytics gập được, hai nhóm | DONE | `static/` |
+| N1.1–N1.4 | Earn: APR niêm yết, APR thực nhận 7d/30d, thu nhập luỹ kế, thẻ "Earn income" | DONE | `services/analytics/earn.py`, `GET /api/analytics/earn`; AC "USDC ≈ 5.0%" chưa đo trên dữ liệu thật |
+| N2.1–N2.4 | Phần dư, trade suy luận, dòng "Unexplained", sức khoẻ dữ liệu trên dòng trạng thái | DONE | `services/reconcile.py`; chỉ Binance; AC 25–27/11 chưa chạy trên dữ liệu thật |
+| N3.1–N3.3 | Peg check: bảng `peg_checks`, ghi mỗi snapshot, pill cảnh báo | DONE | `services/peg.py`; schema v6 |
 
 ## 4. Bản thẩm định 2026-11-25 và tình trạng hôm nay
 
@@ -168,4 +175,5 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | 2026-11-27 | Thêm Phase 3 (N1–N9), gộp từ 7 đề xuất của Fable 5.2 và 6 gợi ý của Jean/assistant. |
 | 2026-11-27 | Mở W4: tách N1.1–N1.4, N2.1–N2.4, N3.1–N3.3 trong ROADMAP §2. Chốt: N1 không dựng lại số dư Earn quá khứ (chỉ tổng thu nhập); N2 tính trade suy luận lúc đọc, gộp Binance theo symbol; thứ tự N3 → N1 → N2. |
 | 2026-11-27 | Thêm `DESIGN.md` (rút từ `static/`) và sơ đồ vị trí UI cho N1–N9. Thêm A1 (Analytics gập được, hai nhóm). Sửa N1.4 (thẻ Earn sang Analytics) và N2.4 (dùng dòng trạng thái sẵn có, không thêm badge). UI giữ tiếng Anh. |
+| 2026-11-27 | Xong code W4: A1, N1, N2, N3. Schema v6 (`snapshot_assets.listed_apr`, `peg_checks`). `earn_backfill_days` mặc định 365 → 1827. N2 thu hẹp về Binance (on-chain chờ F2.5). Test 595 → 613. |
 | 2026-11-27 | Tách `ROADMAP_LEDGER.md` thành ROADMAP / LEDGER / SPEC (D18); đối soát toàn bộ trạng thái với code. Sửa các dòng sai của bảng cũ: F3.B1 không phải DONE; F2.2–F2.4, F2.10, F2.11, M4.1–M4.6, M6.1–M6.4, M7.1–M7.5 thực tế đã xong. Dời test vào `tests/`, script một lần vào `scripts/archive/`. |

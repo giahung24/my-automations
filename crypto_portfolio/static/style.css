@@ -560,6 +560,30 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 @media (hover: hover) { .tabbar-btn:hover { color: var(--ink); } }
 .tabbar-btn:focus-visible { outline-offset: -4px; border-radius: 14px; }
 
+/* Folding cards (A1): a group is one card, each section a row that opens in place */
+.fold-group { overflow: hidden; }
+.fold + .fold { border-top: 1px solid var(--line); }
+.fold-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 56px; padding: 0 14px 0 20px; border: 0; background: transparent; text-align: left;
+  transition: background-color 0.15s ease;
+}
+.fold-head:active { background: var(--surface-2); }
+@media (hover: hover) { .fold-head:hover { background: rgba(28, 34, 43, 0.6); } }
+.fold-head:focus-visible { outline-offset: -3px; border-radius: 14px; }
+/* the title gives way, never the figure: money is not ellipsised */
+.fold-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fold-sum { flex: none; font-size: 13px; font-weight: 700; color: var(--ink-2); white-space: nowrap; }
+.fold-chev { flex: none; color: var(--ink-3); transition: transform 0.25s var(--ease-out); }
+.fold-head[aria-expanded="true"] .fold-chev { transform: rotate(180deg); }
+
+/* Earn income (N1): asset, realised 7d, realised 30d, income per day */
+.earn-grid { display: grid; align-items: center; gap: 8px; grid-template-columns: minmax(0, 1fr) 54px 54px 68px; text-align: right; }
+.earn-grid > :first-child { text-align: left; }
+.earn-head { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.earn-list > li { min-height: 52px; padding-top: 7px; padding-bottom: 7px; }
+.earn-list > li + li { border-top: 1px solid var(--line); }
+
 /* The period selector pinned under the Analytics title */
 .period-pills .pill { height: 40px; }
 
@@ -681,6 +705,7 @@ button.flow-row:active { background: var(--surface-2); }
   flex: none; display: inline-flex; align-items: center; height: 19px; padding: 0 7px; border-radius: 6px;
   font-size: 11px; font-weight: 800; letter-spacing: 0.02em; white-space: nowrap;
 }
+.flow-tag { background: var(--surface-3); color: var(--ink-2); }
 .flow-tag.warn { background: rgba(245, 184, 75, 0.14); color: var(--warn); }
 .flow-tag.review { background: rgba(245, 184, 75, 0.14); color: var(--warn); }
 .flow-detail { margin: 0; padding: 2px 16px 12px 64px; font-size: 13px; }

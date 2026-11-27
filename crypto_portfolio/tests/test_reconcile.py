@@ -74,7 +74,7 @@ def test_one_sided_change_is_unexplained_and_grouped_by_day(tmp_path):
     snap(database, 2, spot={"LINK": 130.0, "USDC": 40.0})
     snap(database, 3, spot={"LINK": 130.0, "USDC": 40.5})   # 50 cents: dust, ignored
     [item] = inferred_items(database)
-    assert item["kind"] == "unexplained" and item["group"]
+    assert item["kind"] == "unexplained" and item["group"] and "sold" not in item
     assert [(leg["asset"], leg["amount"]) for leg in item["assets"]] == [("LINK", 30.0), ("USDC", -60.0)]
 
 

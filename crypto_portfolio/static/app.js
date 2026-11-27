@@ -73,7 +73,10 @@
   const SCRUB_SLOP_PX = 8;         // ...or one that moved this far sideways first
   const STORE = { privacy: 'portfolio.privacy', range: 'portfolio.range', tab: 'portfolio.tab',
     period: 'portfolio.analytics.period', actPeriod: 'portfolio.activity.period',
-    actSource: 'portfolio.activity.source', actKind: 'portfolio.activity.kind', assetView: 'portfolio.assetView' };
+    actSource: 'portfolio.activity.source', actKind: 'portfolio.activity.kind', assetView: 'portfolio.assetView',
+    folds: 'portfolio.analytics.folds' };
+  const FOLDS = ['why', 'perf', 'risk', 'earn', 'alloc'];   // Analytics cards, in page order (A1)
+  const STALE_MS = 130 * 60 * 1000;   // two missed hourly snapshots, plus slack (N2.4)
   const SECTIONS = ['portfolio', 'analytics', 'activity'];
   const SECTION_TITLES = { portfolio: 'Portfolio', analytics: 'Analytics', activity: 'Activity' };
   // Activity tab (M4): look-back, then two independent filters (source x kind) with counts.
@@ -89,10 +92,12 @@
     { id: 'onchain', label: 'On-chain' },
   ];
   const ACTIVITY_KINDS = [
-    { id: 'deposit', label: 'Deposits', hint: 'Money coming in' },
-    { id: 'withdrawal', label: 'Withdrawals', hint: 'Money going out' },
-    { id: 'transfer', label: 'Transfers', hint: 'Between your own accounts' },
-    { id: 'reward', label: 'Earn', hint: 'Simple Earn interest' },
+    { id: 'deposit', label: 'Deposits', hint: 'Money coming in', icon: '#i-down' },
+    { id: 'withdrawal', label: 'Withdrawals', hint: 'Money going out', icon: '#i-up' },
+    { id: 'transfer', label: 'Transfers', hint: 'Between your own accounts', icon: '#i-swap' },
+    { id: 'reward', label: 'Earn', hint: 'Simple Earn interest', icon: '#i-sparkle' },
+    { id: 'trade', label: 'Trades', hint: 'Inferred from the change between two snapshots', icon: '#i-swap' },
+    { id: 'unexplained', label: 'Unexplained', hint: 'Quantity changes no recorded flow accounts for', icon: '#i-alert' },
   ];
   // Direction is always carried by an arrow or a sign, never by colour alone (M4.4 AC3).
   const KIND_META = {
@@ -101,6 +106,8 @@
     transfer: { icon: '#i-swap', label: 'Transfer' },
     reward: { icon: '#i-sparkle', label: 'Earn' },
     fee: { icon: '#i-up', label: 'Fee' },
+    trade: { icon: '#i-swap', label: 'Inferred trade' },
+    unexplained: { icon: '#i-alert', label: 'Unexplained change' },
   };
   const CHANNEL_LABELS = { fiat: 'Bank', fiat_payment: 'Card', p2p: 'P2P', onchain: 'On-chain', manual: 'Manual', earn: 'Earn' };
   const ACTIVITY_PAGE = 50;
@@ -307,6 +314,9 @@
       const why = reactive({ data: null, loading: false, error: '' });
       let whySeq = 0;
       const insights = reactive({ data: null, loading: false, error: '' });
+      const earn = reactive({ data: null, loading: false, error: '' });
+      const openFolds = storage.get(STORE.folds, 'why').split(',');
+      const folds = reactive(Object.fromEntries(FOLDS.map((id) => [id, openFolds.includes(id)])));
       const benchEl = ref(null);
       const underwaterEl = ref(null);
       let insightSeq = 0;
@@ -468,6 +478,8 @@
       });
 
       const updatedAgo = computed(() => fmt.ago(portfolio.value.timestamp, nowMs.value));
+      const dataStale = computed(() => !!portfolio.value.timestamp
+        && nowMs.value - new Date(portfolio.value.timestamp).getTime() > STALE_MS);
 
       // -- computed: attribution ---------------------------------------------------
       // What made the total move: market price vs holdings change, per coin (§2 of docs/SPEC.md).
@@ -769,11 +781,95 @@
         drawInsightCharts();
       }
 
+      async function loadEarn() {
+        earn.loading = true;
+        try {
+          earn.data = await api('/api/analytics/earn');
+          earn.error = '';
+        } catch (error) {
+          handleError(error, { silent: true });
+          earn.data = null;
+          earn.error = error.status === 401 ? '' : 'Could not load Earn income: ' + error.message;
+        } finally {
+          earn.loading = false;
+        }
+      }
+
       function loadAnalytics() {
         loadAttribution();
         loadInsights();
+        loadEarn();
         loadAllocation();
       }
+
+      // -- folding cards (A1) --------------------------------------------------------
+      function toggleFold(id) {
+        folds[id] = !folds[id];
+        storage.set(STORE.folds, FOLDS.filter((f) => folds[f]).join(','));
+        if (folds[id] && (id === 'perf' || id === 'risk')) {   // a chart drawn while folded has no width
+          insightChartsStale = true;
+          nextTick(() => refitCharts('analytics'));
+        }
+      }
+
+      const aprText = (apr) => (apr === null || apr === undefined ? '—' : (num(apr) * 100).toFixed(2) + '%');
+      const earnRows = computed(() => ((earn.data && earn.data.assets) || []).map((a) => ({
+        symbol: a.symbol,
+        listedText: a.listed_apr === null ? 'no listed rate' : 'listed ' + aprText(a.listed_apr),
+        windows: earn.data.windows.map((days) => {
+          const w = a.realised[days + 'd'] || {};
+          return { id: days + 'd', text: aprText(w.apr), sufficient: !!w.sufficient,
+            hint: w.sufficient ? `Rewards over the average balance, ${w.n_obs} snapshots` : `Snapshots cover ${num(w.days).toFixed(1)} of ${days} days` };
+        }),
+        perDayText: a.usd_per_day === null ? '—' : fmt.money(a.usd_per_day),
+      })));
+      const earnGapNote = computed(() => (earnRows.value.some((r) => r.windows.some((w) => !w.sufficient))
+        ? '— : the snapshots do not cover that window yet, or have a gap in it.' : ''));
+      const earnLife = computed(() => {
+        const life = earn.data && earn.data.lifetime;
+        if (!life || !life.since) return null;
+        return {
+          since: new Date(life.since).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }),
+          total: life.total_usd, stable: life.stable_usd, years: life.by_year, unpriced: life.unpriced,
+        };
+      });
+      const earnMessage = computed(() => {
+        if (earn.error) return earn.error;
+        if (earn.data && !earnRows.value.length && !earnLife.value) return 'No Simple Earn position or reward recorded yet.';
+        return '';
+      });
+
+      // What each card says in one line while folded: the figure that answers its question.
+      const foldSums = computed(() => {
+        const none = (loading) => ({ money: '', text: loading ? '…' : '—', trend: '' });
+        const out = {};
+        out.why = whyReady.value
+          ? { money: fmt.signedMoney(why.data.delta_usd), trend: whyTrend.value,
+            text: why.data.delta_pct !== null ? ` (${fmt.signedPct(why.data.delta_pct)})` : '' }
+          : none(why.loading);
+        const twr = insightsReady.value ? (insights.data.twr || {}).twr_pct : null;
+        out.perf = twr !== null && twr !== undefined
+          ? { money: '', text: 'TWR ' + fmt.signedPct(twr), trend: trendOf(num(twr)) } : none(insights.loading);
+        const mdd = insightsReady.value ? (insights.data.drawdown || {}).max_drawdown_pct : null;
+        out.risk = mdd !== null && mdd !== undefined
+          ? { money: '', text: num(mdd).toFixed(2) + '% from peak', trend: num(mdd) < 0 ? 'down' : '' } : none(insights.loading);
+        const top = earn.data && earn.data.assets[0];
+        if (earn.data && earn.data.usd_per_day !== null) {
+          const best = top.realised['7d'].apr ?? top.listed_apr;
+          out.earn = { money: fmt.money(earn.data.usd_per_day), trend: '',
+            text: '/day' + (best !== null && best !== undefined ? ` · ${top.symbol} ${aprText(best)}` : '') };
+        } else if (top && top.listed_apr !== null) {
+          out.earn = { money: '', text: `${top.symbol} listed ${aprText(top.listed_apr)}`, trend: '' };
+        } else if (earnLife.value) {
+          out.earn = { money: fmt.money(earnLife.value.total), text: ' received', trend: '' };
+        } else out.earn = none(earn.loading);
+        if (alloc.data && !alloc.data.enabled) out.alloc = { money: '', text: 'Off', trend: '' };
+        else if (allocReady.value) {
+          const off = allocRows.value.filter((r) => r.breach).length;
+          out.alloc = { money: '', text: off ? `${off} off target` : 'On target', trend: '' };
+        } else out.alloc = none(alloc.loading);
+        return out;
+      });
 
       function setPeriod(id) {
         if (periodId.value === id) return;
@@ -1298,7 +1394,15 @@
         const time = new Date(item.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
         let title;
         let route;
-        if (item.group) {
+        if (item.kind === 'trade') {
+          const names = (legs) => legs.map((leg) => leg.asset).join(' + ');
+          title = 'Trade';   // the legs can be many: they go on the second line, which may truncate
+          route = `${names(item.sold)} → ${names(item.bought)}`;
+        } else if (item.kind === 'unexplained') {
+          const n = item.assets.length;
+          title = 'Unexplained';
+          route = n === 1 ? `${item.assets[0].amount < 0 ? '−' : '+'}${fmt.qty(Math.abs(item.assets[0].amount))} ${item.assets[0].asset}` : `${n} quantity changes`;
+        } else if (item.group) {
           const n = item.assets.length;
           title = 'Earn';
           route = n === 1 ? `${fmt.qty(item.assets[0].amount)} ${item.assets[0].asset}` : `${n} assets`;
@@ -1312,6 +1416,14 @@
         }
         const sign = isTransfer ? '' : out ? '−' : '+';
         const value = num(item.value_usd);
+        if (item.inferred) {   // an estimate: "≈", no gain/loss colour, signed only when it is a net change
+          return {
+            ...item, icon: meta.icon, kindLabel: meta.label, tone: 'flat', title, route, time,
+            amountText: item.kind === 'trade' ? '≈ ' + fmt.money(value) : fmt.signedMoney(value),
+            feeText: '', pending: false, reviewText: '', canPair: false, txShort: '',
+            sr: `${meta.label}, ${title}, ${route}`,
+          };
+        }
         return {
           ...item, icon: meta.icon, kindLabel: meta.label, tone, title, route, time,
           amountText: value > 0 ? sign + fmt.money(value) : (isTransfer ? '' : 'No price'),
@@ -2260,6 +2372,7 @@
         openMatch, markExternal, pickMatch, confirmPair, undoConfirm,
         periods: ANALYTICS_PERIODS, periodId, analyticsPeriod, setPeriod,
         why, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
+        folds, toggleFold, foldSums, earn, earnRows, earnGapNote, earnLife, earnMessage, dataStale,
         insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
         alloc, allocEnabled, allocReady, allocRows, allocActions, allocMessage, loadAllocation, toggleAllocation,
         setAllocMode, applyContribution, toggleDryPowder, copyOrder, copyAllOrders,
