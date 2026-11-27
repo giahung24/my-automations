@@ -1,6 +1,6 @@
 """Quantitative intelligence: TWR, Base-100 benchmark vs BTC/ETH, Max Drawdown, volatility.
 
-ROADMAP_LEDGER §4.1-§4.4 (tasks F3.S1, F3.T1, F3.B3, F3.R1, F3.R2), in one module.
+docs/SPEC.md §4.1-§4.4 (tasks F3.S1, F3.T1, F3.B3, F3.R1, F3.R2), in one module.
 
 Daily series (§4.1)
     ``close_d`` = the newest **healthy** snapshot of UTC day ``d`` (no source in ``error`` /

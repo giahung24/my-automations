@@ -1,0 +1,177 @@
+# ARCHITECTURE — `crypto_portfolio`
+
+> Hệ thống đang chạy thế nào. Viết lại ngày 2026-11-27 theo code hiện tại; bản thẩm định chi tiết
+> ngày 2026-11-25 nằm trong lịch sử git (`SYSTEM_ARCHITECTURE.md`), các phát hiện của nó được đối
+> chiếu ở [`LEDGER.md`](LEDGER.md) §4. Khi tài liệu này và code lệch nhau, code là chuẩn.
+
+## 1. Sản phẩm và nguyên tắc
+
+`crypto_portfolio` gom mọi tài sản crypto của một người về một con số Net Worth (USD), kèm lịch sử,
+giải thích biến động và gợi ý phân bổ.
+
+| Nguyên tắc | Cách code bảo đảm |
+|---|---|
+| **Chỉ đọc** | Client Binance chỉ có hàm đọc; key chỉ cần *Enable Reading*, và Settings cảnh báo khi key có quyền trade hay rút. On-chain chỉ dùng địa chỉ công khai, không ký giao dịch. |
+| **Local-first** | Dữ liệu nằm trong SQLite trên máy. Chỉ truy vấn số dư và giá đi ra ngoài. Không telemetry, không CDN: Vue, Tailwind, Lightweight Charts và font đều nằm trong `static/vendor/`. |
+| **Không sai im lặng** | Lỗi từng nguồn được ghi lại và báo cạnh con số. Dust ẩn khỏi danh sách nhưng vẫn tính vào tổng và vẫn lưu. Token không đọc được `decimals()` thì bỏ qua; tài sản không có giá giữ $0. |
+| **`GET` không gọi mạng** | Mọi endpoint đọc phục vụ từ SQLite. Chỉ `POST /api/portfolio/refresh` và hai nút Test trong Settings gọi Binance hay RPC. |
+
+## 2. Ba tiến trình, một file SQLite
+
+```
+ COLLECTOR                    DASHBOARD                       GATEWAY PUBLIC
+ main.py record (cron 1h)     main.py serve → web_api.py      api_gateway.py
+ biết Binance key             biết Binance key + token        chỉ biết GATEWAY_API_KEY
+ ghi DB                       đọc + ghi DB, ghi config.yaml   đọc DB (mode=ro), 1 route
+        └──────────────► portfolio_history.db ◄──────────────────────┘
+```
+
+| Tiến trình | Chạy bằng | Bind | Bí mật | Quyền DB |
+|---|---|---|---|---|
+| Collector | crontab `0 * * * *` | không mở cổng | Binance key | ghi |
+| Dashboard | `deploy/crypto-web.service` (systemd user) | `0.0.0.0:8088`, bắt buộc có token | Binance key, `PORTFOLIO_WEB_TOKEN` | đọc + ghi |
+| Gateway | `deploy/crypto-api-gateway.service` | `127.0.0.1:8090`, sau Cloudflare Tunnel | `GATEWAY_API_KEY` | chỉ đọc |
+
+Gateway không import gì từ phần còn lại (`config.py`, `clients/`, `services/`): bị chiếm quyền thì
+cũng không có Binance key để lấy, không có route ghi, không có code gọi mạng ra ngoài.
+
+## 3. Thành phần
+
+### 3.1 Thu thập — `clients/`, `config.py`
+
+**`clients/binance.py`**
+- Transport: ký HMAC-SHA256, failover host (`api` → `api1` → `api2`; dữ liệu công khai qua
+  `data-api.binance.vision`), retry có backoff, tự đồng bộ đồng hồ khi gặp lỗi `-1021`.
+- Số dư: Spot, Simple Earn flexible + locked, Funding. Mỗi phần lỗi độc lập.
+- Lịch sử (`HistoryStream`, cho dòng tiền): nạp/rút crypto, lệnh fiat, thanh toán fiat, P2P, lãi Earn
+  flexible + locked.
+- Giá: stablecoin ghim $1.00 → cặp `<ASSET>USDT/FDUSD/USDC…` → cầu nối qua BTC/ETH/BNB → không có thì 0.
+
+**`clients/onchain.py`**
+- EVM (Ethereum, BSC, Arbitrum, Base, Polygon): coin gốc + các ERC-20 đã cấu hình, một `eth_call` mỗi
+  token (chưa có Multicall, P0.7). Solana: SOL + mọi SPL token (cả Token-2022).
+- Mỗi chain có danh sách RPC công khai để failover; ghi đè bằng `chains.<name>.rpcs`.
+- Song song theo cặp (chain, ví). Giá từ DefiLlama (`coins.llama.fi`), không cần key.
+
+**`config.py`** — thứ tự ưu tiên: mặc định → `config.yaml` → biến môi trường / `.env`. Các block:
+`binance`, `wallets`, `chains`, `settings`, `cash_flows`, `manual_assets`, `allocation`. Ghi config
+là atomic, mode 0600, giữ bản `.bak`; comment YAML mất sau khi ghi từ UI.
+
+### 3.2 Tổng hợp — `models.py`, `services/portfolio.py`, `services/manual.py`
+
+- `Holding` (symbol, source, quantity, price, detail, price_id) → `aggregate()` gom theo symbol, tính
+  giá trung bình theo giá trị, tổng theo nguồn, lọc dust.
+- Năm nguồn: `binance_spot`, `binance_earn`, `binance_funding`, `onchain`, `manual`.
+- **Tài sản manual** (`manual_assets` trong config): ví lạnh, staking ngoài, sàn khác. Định giá qua
+  cùng pipeline (Binance → DefiLlama → `price_usd` cố định). Đổi số lượng được ghi thành dòng tiền,
+  không tính là lãi. `linked_wallet` gộp hiển thị với một ví on-chain đã cấu hình.
+
+### 3.3 Lưu trữ — `services/db.py`
+
+SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v5**);
+migration chạy trong một transaction và sao lưu file trước.
+
+| Bảng | Nội dung |
+|---|---|
+| `snapshots` | Một dòng mỗi lần ghi: tổng, năm tổng theo nguồn, `trigger` (cron / refresh), `is_backfilled` |
+| `snapshot_assets` | Một dòng mỗi `Holding`: symbol, source, số lượng, giá, `detail` (chain/ví, flexible/locked), `price_id` |
+| `snapshot_sources` | Trạng thái từng nguồn của mỗi snapshot (ok / error / disabled) |
+| `cash_flows` | Nạp, rút, fiat, P2P, lãi Earn, thay đổi tài sản manual; cờ chuyển khoản nội bộ và cặp ghép |
+| `sync_state` | Con trỏ đồng bộ tăng dần của từng luồng lịch sử Binance |
+
+`services/backfill.py` dựng 60 checkpoint tháng (2021-11 đến 2026-10) từ giá lịch sử, gắn
+`is_backfilled = 1`: số dư hôm nay nhân với giá của tháng đó.
+
+### 3.4 Phân tích — `services/analytics/`, `services/cash_flows.py`, `services/activity.py`
+
+| Module | Trả lời câu hỏi | Endpoint |
+|---|---|---|
+| `attribution.py` | Vì sao NAV đổi: giá, số lượng, tương tác, định giá lại, thiếu dữ liệu | `GET /api/portfolio/attribution` |
+| `pnl.py` | Lãi/lỗ sau khi trừ nạp/rút, theo cửa sổ | `GET /api/portfolio/pnl` |
+| `quant.py` | TWR, Base 100 so với BTC/ETH, drawdown, volatility | `GET /api/analytics/quant` |
+| `allocation.py` | Lệch mục tiêu bao nhiêu, cần mua/bán gì (`target`, `band_edge`, `contribution`, góp vốn một phần) | `GET /api/analytics/allocation` |
+| `cash_flows.py` | Đồng bộ lịch sử Binance, ghép chuyển khoản nội bộ (địa chỉ → `tx_hash` → heuristic) | chạy sau mỗi `record` |
+| `activity.py` | Dòng thời gian đọc được và sửa được của `cash_flows` | `GET`/`PATCH /api/cash-flows` |
+
+Mọi engine là hàm thuần trên dữ liệu thường; chỉ các loader chạm SQLite. Chỉ dùng numpy và stdlib.
+Công thức và thuật toán: [`SPEC.md`](SPEC.md).
+
+### 3.5 Dashboard — `web_api.py`, `static/`
+
+**API** (mọi `/api/*` trừ `/api/auth` cần token):
+
+| Nhóm | Route |
+|---|---|
+| Danh mục | `GET /api/portfolio` · `POST /api/portfolio/refresh` · `GET /api/portfolio/history` |
+| Phân tích | `GET /api/portfolio/attribution` · `GET /api/portfolio/pnl` · `GET /api/analytics/quant` · `GET /api/analytics/allocation` |
+| Dòng tiền | `GET /api/cash-flows` · `GET /api/cash-flows/{id}/candidates` · `PATCH /api/cash-flows/{id}` |
+| Cấu hình | `GET`/`POST /api/settings` · `POST /api/settings/allocation` · `POST /api/settings/test-binance` · `POST /api/settings/test-wallet` |
+| Khác | `POST /api/auth` · `GET /api/health` · `/api/docs` |
+
+**Xác thực:** token từ `PORTFOLIO_WEB_TOKEN` hoặc `settings.web_token`. Gửi bằng
+`Authorization: Bearer`, hoặc đổi lấy cookie phiên đã ký ở màn hình unlock (HMAC theo token, 90
+ngày, không chứa token). Credential sai bị giới hạn 20 lần mỗi 5 phút mỗi client. `serve` từ chối
+bind ngoài loopback khi chưa đặt token.
+
+**PWA** (Vue 3, Tailwind, Lightweight Charts): ba tab ở thanh dưới.
+- **Portfolio:** Net Worth, chip 24h, chart có scrub, card "Why it moved", danh sách tài sản theo
+  All / Binance / Personal (Coins | Wallets).
+- **Analytics:** Insights (TWR, Base 100, underwater) và thẻ Allocation.
+- **Activity:** dòng thời gian nạp/rút/chuyển/lãi, bộ lọc, hàng chờ xác nhận.
+- Chế độ riêng tư làm mờ mọi số tiền (`.priv`). Settings sửa Binance key, ví, tài sản manual; secret
+  chỉ hiển thị dạng đã che.
+- Service worker chỉ đăng ký trên HTTPS hoặc `localhost`; truy cập qua HTTP trên LAN/Tailscale nên
+  hiện không có offline shell.
+
+### 3.6 Gateway public — `api_gateway.py`
+
+Một route: `GET /v1/crypto/portfolio/total?currency=USD` với header `X-API-Key`. Trả tổng, tổng theo
+nguồn, thời điểm và cờ `stale`. Mọi request không hợp lệ (sai key, path, method, Host) nhận cùng một
+`404`. Rate limit 30 request/phút mỗi client. Chỉ bind loopback, đi ra Internet qua Cloudflare Tunnel.
+
+### 3.7 CLI — `main.py`
+
+`show` · `record` · `chart` · `history` · `backfill` · `pnl` · `serve`. Sau mỗi `record`: ghi dòng
+tiền của tài sản manual, rồi đồng bộ lịch sử Binance. Lỗi ở hai bước này không làm hỏng snapshot.
+
+## 4. Bảo mật
+
+| Bí mật | Nơi lưu | Ai đọc | Nếu lộ |
+|---|---|---|---|
+| **T1** Binance key + secret | `config.yaml` (0600) hoặc `.env` | collector, dashboard | Đọc được số dư Binance. Không trade, không rút, với điều kiện key chỉ có quyền đọc |
+| **T2** Token dashboard | `.env` hoặc `config.yaml` | dashboard | Đọc số dư và **ghi `config.yaml`** (đổi key, thêm/xoá ví) |
+| **T3** Key gateway | `.env.gateway` (0600) | gateway | Chỉ đọc được tổng và tổng theo nguồn |
+| **T4** Dữ liệu nhạy cảm | `config.yaml`, `portfolio_history.db` (0600) | cả ba | Lộ quy mô tài sản và địa chỉ ví |
+
+- **Bất biến:** gateway (T3) không thể leo lên T1/T2.
+- **Mạng:** dashboard chỉ truy cập qua LAN và Tailscale, không mở ra Internet. Phương án mở public
+  bằng Cloudflare Access được để dành ở [`AUTH_SPEC.md`](AUTH_SPEC.md).
+- **Lưới an toàn cuối:** phía Binance, key chỉ bật *Enable Reading* và có IP whitelist.
+- **Còn mở:** dashboard chạy HTTP thuần trong mạng riêng (chấp nhận); `/api/docs` tồn tại sau token;
+  RPC công khai thấy địa chỉ ví và IP của máy.
+
+## 5. Vận hành
+
+| Hạng mục | Cấu hình |
+|---|---|
+| Collector | crontab người dùng, `main.py record` mỗi giờ |
+| Dashboard | `systemctl --user … crypto-web`, cổng 8088, token trong `.env` |
+| Gateway | `systemctl --user … crypto-api-gateway`, cổng 8090, sau `cloudflared` |
+| Backup | Chưa có lịch. Migration tự sao lưu file trước khi chạy |
+| Test | `python -m pytest -q` (offline, mọi HTTP được mock) |
+
+## 6. Bản đồ thư mục
+
+| Đường dẫn | Vai trò |
+|---|---|
+| `main.py` | CLI |
+| `config.py`, `models.py` | Cấu hình; `Holding`, `AssetRow`, `Portfolio` |
+| `clients/` | Binance, on-chain |
+| `services/` | `portfolio`, `db`, `manual`, `cash_flows`, `activity`, `backfill`, `resample`, `visualizer` |
+| `services/analytics/` | `attribution`, `pnl`, `quant`, `allocation` |
+| `web_api.py`, `static/` | Dashboard: API + PWA |
+| `api_gateway.py` | Gateway public chỉ đọc |
+| `deploy/` | Hai unit systemd |
+| `tests/` | Toàn bộ test; `conftest.py` cô lập khỏi `.env` thật |
+| `scripts/archive/` | Script chạy một lần đã xong, giữ để tham khảo |
+| `docs/` | Tài liệu này, `SPEC.md`, `LEDGER.md`, `AUTH_SPEC.md` |

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import load_config, read_raw_config, write_raw_config
 from test_api import EVM_A, EVM_B, SOL_A, make_client
@@ -134,5 +134,5 @@ def test_allocation_toggle_leaves_manual_assets_untouched(tmp_path):
 
 # -- scripts that load the config must not write it ----------------------------------------------
 def test_backfill_script_never_writes_config(tmp_path):
-    source = (Path(__file__).resolve().parent / "scripts" / "backfill_manual_btc.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "archive" / "backfill_manual_btc.py").read_text()
     assert "write_raw_config" not in source and "safe_dump" not in source

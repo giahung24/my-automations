@@ -1,4 +1,4 @@
-"""M7.rebalance_toggle: asset allocation & rebalancing assistant (ROADMAP_LEDGER §4.5, §9.4).
+"""M7.rebalance_toggle: asset allocation & rebalancing assistant (docs/SPEC.md §4.5, §9.4).
 
 Pure engine on plain data, config validation, property tests on random portfolios, and the
 endpoint + ON/OFF switch on a temporary config/SQLite. No network.
@@ -14,7 +14,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config as config_module
 import web_api
@@ -61,7 +61,7 @@ def spot(symbol: str, value: float, price: float = 1.0, source: str = BINANCE_SP
                lock_reason=lock)
 
 
-# ROADMAP_LEDGER §4.5.2 example: NAV 50,770.12, BTC 41.2 %, Stablecoin 33.0 %
+# docs/SPEC.md §4.5.2 example: NAV 50,770.12, BTC 41.2 %, Stablecoin 33.0 %
 EXAMPLE = [
     spot("BTC", 20917.29, 90000.0),
     spot("ETH", 12000.0, 3000.0),

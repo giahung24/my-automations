@@ -1,4 +1,4 @@
-"""Asset allocation & rebalancing assistant (ROADMAP_LEDGER §4.5, Epic M7).
+"""Asset allocation & rebalancing assistant (docs/SPEC.md §4.5, Epic M7).
 
 From the newest snapshot: the weight of every target bucket, its drift from the target, and the
 orders that would bring the portfolio back in line. **Suggestions only**: nothing here places an
@@ -44,7 +44,7 @@ from models import BINANCE_EARN, BINANCE_FUNDING, BINANCE_SPOT, MANUAL, ONCHAIN,
 EPS = 0.005  # half a cent: below this two USD amounts are equal
 LOCKED_EARN = "locked_earn"
 ILLIQUID = "illiquid_manual"
-# Where a SELL is taken from first (ROADMAP_LEDGER M7.3 AC3): the exchange's free balance, then
+# Where a SELL is taken from first (docs/SPEC.md M7.3 AC3): the exchange's free balance, then
 # what one click redeems, then what has to be moved to the exchange first.
 SELL_ORDER = {BINANCE_SPOT: 0, BINANCE_EARN: 1, BINANCE_FUNDING: 2, ONCHAIN: 3, MANUAL: 4}
 OFF_EXCHANGE = (ONCHAIN, MANUAL)

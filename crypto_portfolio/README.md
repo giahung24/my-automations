@@ -1,8 +1,9 @@
 # Crypto Portfolio
 
-Multi-source crypto portfolio tracker and visualizer: Binance (Spot + Simple Earn + Funding)
-and on-chain wallets across Ethereum, BSC, Arbitrum, Base, Polygon and Solana, in one table,
-one JSON document and three charts.
+Self-hosted crypto net-worth tracker: Binance (Spot, Simple Earn, Funding), on-chain wallets
+across Ethereum, BSC, Arbitrum, Base, Polygon and Solana, and assets declared by hand (cold
+wallets, external staking). One number, its history, an explanation of every move, and an
+allocation assistant - from a CLI, a mobile PWA and a one-route public gateway.
 
 **Read-only by construction.** The Binance key needs *Enable Reading* and nothing else; the
 client only issues balance queries. On-chain, only public addresses are used - no private key
@@ -31,6 +32,7 @@ environment or in a `.env` (see `.env.example`) override it. Both files are git-
 .venv/bin/python main.py chart --from-db --type text    # ASCII report, no network
 .venv/bin/python main.py history --days 30       # recorded snapshots
 .venv/bin/python main.py backfill               # 60 monthly checkpoints 2021-11..2026-10 (see below)
+.venv/bin/python main.py pnl                     # profit and loss net of deposits/withdrawals
 .venv/bin/python main.py serve --port 8080       # mobile web dashboard (see below)
 ```
 
@@ -47,6 +49,10 @@ Build the time series from cron:
 
 No `cd` needed: relative `db_path` and `charts_dir` resolve against the project directory,
 not the shell's working directory.
+
+After each snapshot `record` also books changes of manual assets as cash flows and syncs the
+Binance deposit / withdrawal / fiat / P2P / Earn-reward history, which is what lets the
+analytics tell profit from money moved.
 
 `record` prints nothing on success. Partial failures go to stderr (so cron mails them) and
 the snapshot is still written; if *every* source fails it refuses to record rather than
@@ -70,16 +76,22 @@ PORTFOLIO_WEB_TOKEN=<long-random> .venv/bin/python main.py serve --host 0.0.0.0 
 
 A mobile-first PWA (Vue 3, Tailwind, TradingView Lightweight Charts, all vendored in
 `static/vendor/`, so there are no CDN calls) served by a FastAPI backend that reuses the CLI's
-clients, aggregation and SQLite history:
+clients, aggregation and SQLite history. Three tabs:
 
-- net worth with a privacy toggle that blurs every balance, plus the 24h change;
-- a touch-scrubbable history chart (24H / 7D / 1M / 1Y / 5Y / ALL) built from the snapshots;
-- All / Binance / Personal tabs over the per-asset list (quantity, price, value, share), and
-  a tap on an asset shows the per-source and per-wallet breakdown. Personal is everything off
-  the exchange (on-chain wallets, cold wallets, staking, manual assets); Binance and Personal
-  have a Coins | Wallets switch, and balances under the dust filter fold into one line;
-- a settings sheet for the Binance key (with a permissions check) and the wallet list (with
-  a per-chain balance check), saved to `config.yaml`.
+- **Portfolio** - net worth with a privacy toggle that blurs every balance, the 24h change, a
+  touch-scrubbable history chart (24H / 7D / 1M / 1Y / 5Y / ALL), a "Why it moved" card that
+  splits the move into price, quantity and data-gap effects, and the per-asset list under
+  All / Binance / Personal. Personal is everything off the exchange (on-chain wallets, cold
+  wallets, staking); Binance and Personal have a Coins | Wallets switch, and balances under
+  the dust filter fold into one line.
+- **Analytics** - time-weighted return, base-100 comparison with BTC and ETH, drawdown and
+  volatility, and the allocation assistant (drift against your targets and the orders that
+  would close it; off until enabled).
+- **Activity** - deposits, withdrawals, internal transfers and Earn rewards as a timeline,
+  with a queue of the items that need your confirmation.
+
+The settings sheet edits the Binance key (with a permissions check), the wallet list (with a
+per-chain balance check) and the manual assets, saved to `config.yaml`.
 
 On iOS, open it in Safari and use Share > Add to Home Screen.
 
@@ -91,32 +103,24 @@ SameSite=Strict session cookie that lasts 90 days and never contains the token),
 as `Authorization: Bearer`. Changing the token signs every device out. Wrong credentials are
 rate limited (20 per 5 minutes per client, then `429`).
 
-**Recommended setup: systemd + LAN + Tailscale.** Run the dashboard as a user service bound to
-`0.0.0.0` so it's reachable both from the home LAN and over Tailscale (no `tailscale serve`
-needed - it would collide with the hermes gateway's existing mapping on port 443/9119):
+**Recommended setup: systemd on a private network.** Run the dashboard as a user service bound
+to `0.0.0.0`, reachable from the home LAN and over Tailscale, token required on both:
 
 ```bash
 cp deploy/crypto-web.service ~/.config/systemd/user/     # adjust the paths inside first
 systemctl --user daemon-reload && systemctl --user enable --now crypto-web
 loginctl enable-linger "$USER"                            # once: keep it running without a login
-
-# Open from either address, token required on both:
-#   http://<lan-ip>:8088        (home wifi, no Tailscale needed)
-#   http://<tailscale-ip>:8088  (from anywhere, via Tailscale)
 ```
 
-Both are plain HTTP + Bearer/session token (no TLS) - acceptable because the LAN and the
-tailnet are both private networks, not the open internet. If a device needs HTTPS (e.g. for
-the PWA's service worker from outside the LAN), `tailscale serve` on a *different* port
-(e.g. `--https=8443`) would do it without disturbing the existing 443 mapping; not set up yet.
-
-`portfolio_history.db` is created with mode 0600 (and tightened to it if it was wider).
+This is plain HTTP, acceptable only because the LAN and the tailnet are private networks. The
+PWA's service worker needs HTTPS, so there is no offline shell in this setup. Opening the
+dashboard to the internet is a separate, parked design: [`docs/AUTH_SPEC.md`](docs/AUTH_SPEC.md).
 
 **Data freshness.** `GET /api/portfolio` never touches the network: it serves the last live
 refresh or the newest snapshot. The app refreshes in the background when the data is more
 than 10 minutes old, and the refresh button forces it. Every refresh records a snapshot, as
 `record` does. The 24h change compares against the snapshot closest to 24 hours ago, so
-deposits and withdrawals count as change, and with a shorter history it labels the real
+deposits and withdrawals count as change (the PnL figures and the analytics net them out), and with a shorter history it labels the real
 window (for example "past 6h").
 
 **Saving settings** rewrites `config.yaml` (mode 0600) and keeps the previous file as
@@ -126,18 +130,18 @@ browser, only masked (`****9f3a`). Values set through the environment or `.env`
 (`BINANCE_API_KEY`, `EVM_WALLETS`, ...) still win over the file, and the settings sheet says
 so.
 
-| endpoint | does |
-|----------|------|
-| `GET /api/portfolio` | latest portfolio: totals, per-source groups, assets, 24h change |
-| `POST /api/portfolio/refresh` | live fetch, record a snapshot, return it (`502` if every source failed) |
-| `GET /api/portfolio/history?days=30` | snapshot totals for the chart; `days=0` = everything |
-| `GET /api/settings` | masked credentials, wallets, chains, env overrides |
-| `POST /api/settings` | save Binance credentials and the wallet list |
-| `POST /api/settings/test-binance` | check a key pair and its permissions (falls back to the saved one) |
-| `POST /api/settings/test-wallet` | read an address's native balance on each chosen chain |
-| `POST /api/auth` | trade the access token for a cookie |
+The API is listed in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#35-dashboard--web_apipy-static)
+and, interactively, at `/api/docs`. Every `GET` is served from SQLite; only
+`POST /api/portfolio/refresh` and the two settings checks reach Binance or an RPC.
 
-Interactive API docs: `/api/docs`.
+## Public gateway
+
+`api_gateway.py` is a separate, read-only process for one consumer-facing number:
+`GET /v1/crypto/portfolio/total?currency=USD` with an `X-API-Key` header. It imports nothing
+from the dashboard, never loads Binance credentials, opens SQLite read-only and binds loopback
+only (meant to sit behind a Cloudflare Tunnel). Anything but an authorised request gets the
+same `404`. Unit: `deploy/crypto-api-gateway.service`; the key is generated on first start
+(`python api_gateway.py show-key`).
 
 ## Output
 
@@ -160,25 +164,27 @@ labelled). "Others" takes neutral grey - it is not an entity.
 
 | path | role |
 |------|------|
-| `main.py` | CLI: `show`, `record`, `chart`, `history`, `backfill`, `serve` |
-| `web_api.py` | FastAPI app: JSON API + PWA hosting, optional access token |
-| `static/` | PWA: `index.html`, `app.js`, `style.css`, `manifest.json`, `sw.js`, icons, vendored libs |
-| `config.py` | defaults -> `config.yaml` -> environment |
-| `models.py` | `Holding`, `AssetRow`, `Portfolio` |
-| `clients/binance.py` | signed read-only Binance client + USDT pricing |
-| `clients/onchain.py` | EVM JSON-RPC + Solana RPC + DefiLlama pricing |
-| `services/db.py` | SQLite schema, snapshots, history |
-| `services/backfill.py` | monthly history checkpoints from public Binance klines |
-| `services/portfolio.py` | fetch orchestration and per-asset aggregation |
-| `services/visualizer.py` | Matplotlib charts (Agg) and the ASCII report |
-| `test_all.py` | 62 tests, fully mocked - no network, no keys |
-| `test_api.py` | 53 API tests (FastAPI TestClient, temp config and DB, mocked HTTP) |
+| `main.py` | CLI: `show`, `record`, `chart`, `history`, `backfill`, `pnl`, `serve` |
+| `config.py`, `models.py` | defaults -> `config.yaml` -> environment; `Holding`, `AssetRow`, `Portfolio` |
+| `clients/` | signed read-only Binance client; EVM + Solana RPC with DefiLlama pricing |
+| `services/` | aggregation, SQLite, manual assets, cash flows, activity timeline, backfill, charts |
+| `services/analytics/` | attribution, PnL, quant (TWR, drawdown, volatility), allocation |
+| `web_api.py`, `static/` | dashboard: JSON API + PWA |
+| `api_gateway.py` | public read-only gateway |
+| `deploy/` | systemd user units for the dashboard and the gateway |
+| `tests/` | the whole suite, fully mocked - no network, no keys |
+| `scripts/archive/` | one-off scripts that have already run, kept for reference |
+| `docs/` | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`SPEC.md`](docs/SPEC.md), [`LEDGER.md`](docs/LEDGER.md), [`AUTH_SPEC.md`](docs/AUTH_SPEC.md) |
+
+What comes next: [`ROADMAP.md`](ROADMAP.md).
 
 ### Storage
 
-`portfolio_history.db` is created on first use. `snapshots` holds one row per run
-(timestamp + the per-source totals); `snapshot_assets` holds one row per asset per source
-(quantity, price, value). There is no migration step - delete the file to start over.
+`portfolio_history.db` is created on first use, in WAL mode and with mode 0600. `snapshots`
+holds one row per run, `snapshot_assets` one row per holding, `snapshot_sources` the status of
+each source, `cash_flows` every deposit, withdrawal, reward and transfer. The schema is
+versioned (`PRAGMA user_version`): upgrades run on open, in one transaction, after a backup
+copy of the file.
 
 ### Backfilled history
 
@@ -213,7 +219,7 @@ DefiLlama timeout is reported on stderr and leaves the other sources intact.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q                  # both suites: test_all.py + test_api.py
+.venv/bin/python -m pytest -q                  # everything under tests/
 ```
 
 All HTTP is mocked, so the suite runs offline in a few seconds.

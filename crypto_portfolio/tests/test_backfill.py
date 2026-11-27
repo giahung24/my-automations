@@ -15,7 +15,7 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import api_gateway
 import main as cli
@@ -443,7 +443,7 @@ def test_gateway_still_reports_the_real_latest_snapshot(tmp_path):
 
 
 def test_dashboard_offers_1y_5y_and_all_ranges():
-    app_js = (Path(__file__).resolve().parent / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(encoding="utf-8")
     for range_id in ("'1Y', days: 365", "'5Y', days: 1827", "'ALL', days: 0"):
         assert f"id: {range_id}" in app_js
 

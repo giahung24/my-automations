@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from api_gateway import ENDPOINT, Settings, connect_readonly, create_app
 from models import BINANCE_SPOT, Holding

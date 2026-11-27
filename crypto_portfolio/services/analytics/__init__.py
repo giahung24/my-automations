@@ -1,4 +1,4 @@
-"""Read-only analytics computed from the snapshot history (ROADMAP_LEDGER Epic F1, F3).
+"""Read-only analytics computed from the snapshot history (docs/SPEC.md Epic F1, F3).
 
 Every engine here is a pure function over plain data; the loaders are the only code that
 touches SQLite, so the maths can be tested without a database.

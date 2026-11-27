@@ -16,7 +16,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import web_api
 from models import (

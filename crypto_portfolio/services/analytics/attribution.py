@@ -1,4 +1,4 @@
-"""Attribution analysis: why did the net worth move? (ROADMAP_LEDGER Epic F1, §2.2-§2.4)
+"""Attribution analysis: why did the net worth move? (docs/SPEC.md Epic F1, §2.2-§2.4)
 
 Between two consecutive snapshots, each position (quantity Q, price P, value V = Q*P) moves by
 

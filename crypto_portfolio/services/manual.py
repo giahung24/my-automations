@@ -1,4 +1,4 @@
-"""Manual assets: balances no API can read (ROADMAP_LEDGER Epic M6, §9.3).
+"""Manual assets: balances no API can read (docs/SPEC.md Epic M6, §9.3).
 
 BTC on a hardware wallet, ETH staked with a validator, coins on another exchange: declared in
 ``config.yaml`` under ``manual_assets:`` (decision D13), then treated like any other source.
@@ -25,7 +25,7 @@ cold wallet -> Binance deposit) when the asset matches, the amounts agree within
 ``cash_flows.amount_tolerance_pct`` once the withdrawal fee is taken off, and the Binance flow falls
 between the two snapshots that bracket the manual change, widened by ``cash_flows.in_transit_hours``.
 Both rows then get ``is_internal_transfer = 1`` and point at each other, so the net external flow is
-unchanged. Pairing is greedy one-to-one, best match first (ROADMAP_LEDGER §3.6).
+unchanged. Pairing is greedy one-to-one, best match first (docs/SPEC.md §3.6).
 """
 from __future__ import annotations
 

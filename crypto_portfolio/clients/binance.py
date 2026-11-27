@@ -55,7 +55,7 @@ class HistoryStream:
     min_interval_s: float = 0.0          # least pause between two calls to `path` (rate limit)
 
 
-# ROADMAP_LEDGER §3.4. [to verify against the live API docs] the window caps of the fiat and
+# docs/SPEC.md §3.4. [to verify against the live API docs] the window caps of the fiat and
 # C2C endpoints are not documented as firmly as the 90 days of the capital ones; 90 / 30 days
 # are the conservative values. Every one of them is a GET and only reads.
 #

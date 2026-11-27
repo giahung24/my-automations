@@ -1,4 +1,4 @@
-"""Activity timeline over ``cash_flows`` (ROADMAP_LEDGER Epic M4, Tab 3 of the PWA).
+"""Activity timeline over ``cash_flows`` (docs/SPEC.md Epic M4, Tab 3 of the PWA).
 
 Reads SQLite only. Three entry points back the three routes of ``web_api.py``:
 
@@ -80,7 +80,7 @@ def kind_of(row) -> str:
 
 
 def needs_review(row, now: datetime, transit: timedelta) -> bool:
-    """True when the system is unsure and only the user can say (ROADMAP_LEDGER §9.1).
+    """True when the system is unsure and only the user can say (docs/SPEC.md §9.1).
 
     (a) a completed crypto deposit/withdrawal, past the in-transit window, matched with nothing
     and never looked at by the user; or (b) a heuristic pairing below 0.9 confidence.

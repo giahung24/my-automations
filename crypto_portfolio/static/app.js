@@ -470,7 +470,7 @@
       const updatedAgo = computed(() => fmt.ago(portfolio.value.timestamp, nowMs.value));
 
       // -- computed: attribution ---------------------------------------------------
-      // What made the total move: market price vs holdings change, per coin (§2 of ROADMAP_LEDGER).
+      // What made the total move: market price vs holdings change, per coin (§2 of docs/SPEC.md).
       // The same helpers feed the Analytics section and the 24h peek sheet.
       const attributionReady = (data) => !!(data && !data.insufficient_history);
 

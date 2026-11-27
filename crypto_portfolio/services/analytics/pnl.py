@@ -18,7 +18,7 @@ before ``end - days`` (else the oldest one after it, with ``complete = false``) 
 as the attribution engine. Backfilled monthly checkpoints are never used.
 
 Before any Binance history was synced, the flows are unknown, not zero: the payload then says
-``flow_adjusted = false`` and the PnL equals the raw NAV change (ROADMAP_LEDGER §4, "F_j = 0") -
+``flow_adjusted = false`` and the PnL equals the raw NAV change (docs/SPEC.md §4, "F_j = 0") -
 except for manual-asset quantity changes (Epic M6), which are recorded by the collector itself
 and so are always known: they are subtracted either way.
 

@@ -7,7 +7,7 @@
 >   - **LAN nhà:** `http://192.168.1.66:8088`
 >   - **Tailscale (mọi nơi, không cần ở nhà):** `http://100.123.246.52:8088`
 >   Cả 2 đều là HTTP thường (không TLS) + token Bearer/session — chấp nhận được vì cả LAN
->   lẫn tailnet là mạng riêng tin cậy, không phải Internet mở. Xem [README](README.md#web-dashboard)
+>   lẫn tailnet là mạng riêng tin cậy, không phải Internet mở. Xem [README](../README.md#web-dashboard)
 >   và `deploy/crypto-web.service`.
 > **Khi nào mở lại tài liệu này:** khi cần xem dashboard từ thiết bị không cài được Tailscale
 > và không ở nhà (khách, điện thoại công ty, v.v.).

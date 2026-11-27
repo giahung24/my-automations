@@ -621,7 +621,7 @@ def create_app(
     ):
         """Why the net worth moved: price / quantity / interaction effect per coin, from SQLite only.
 
-        Splits the NAV change over `window` (ROADMAP_LEDGER §2.2) and lists the coins that pulled
+        Splits the NAV change over `window` (docs/SPEC.md §2.2) and lists the coins that pulled
         it up and down. Never touches the network.
         """
         cfg = config()
@@ -648,7 +648,7 @@ def create_app(
     ):
         """TWR, Base-100 vs BTC/ETH, Max Drawdown + underwater series, annualised volatility.
 
-        Built from the daily closes in SQLite (ROADMAP_LEDGER §4.1-§4.4); never touches the network.
+        Built from the daily closes in SQLite (docs/SPEC.md §4.1-§4.4); never touches the network.
         Every metric comes with `n_obs` and `sufficient`.
         """
         try:
@@ -675,7 +675,7 @@ def create_app(
         include_dry_powder: bool = Query(
             False, description="Count the `allocation.dry_powder` holdings in the weights too"),
     ):
-        """Target vs actual weight per bucket, drift, and suggested orders (ROADMAP_LEDGER §4.5).
+        """Target vs actual weight per bucket, drift, and suggested orders (docs/SPEC.md §4.5).
 
         Off until turned on (`allocation.enabled`, or POST /api/settings/allocation): then the
         answer is `{"enabled": false}`. Invalid targets -> 422 with one message per problem.
@@ -1064,7 +1064,7 @@ def manual_asset_view(asset: ManualAsset, last_change: str = "", today: datetime
 
     `updated_at` is the day the quantities were last edited in Settings, else the newest manual
     cash flow of the asset. A staking position unchanged for `MANUAL_REVIEW_DAYS` gets a hint:
-    rewards have most likely grown the balance since (ROADMAP_LEDGER M6.4 AC3).
+    rewards have most likely grown the balance since (docs/SPEC.md M6.4 AC3).
     """
     today = today or datetime.now(timezone.utc)
     updated = asset.updated_at or last_change

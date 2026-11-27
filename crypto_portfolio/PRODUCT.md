@@ -19,9 +19,10 @@ move from a phone, often several times a day, and occasionally edits API keys an
 addresses. Also uses the CLI (`show`, `record`, cron) on the machine running the server.
 
 ## Product Purpose
-One number for everything held across Binance (Spot, Simple Earn, Funding) and self-custody
-wallets on Ethereum, BSC, Arbitrum, Base, Polygon and Solana, with a history built from
-SQLite snapshots. Success: the total and the 24h move are readable within a second of opening
+One number for everything held across Binance (Spot, Simple Earn, Funding), self-custody
+wallets on Ethereum, BSC, Arbitrum, Base, Polygon and Solana, and assets declared by hand
+(cold wallets, external staking), with a history built from SQLite snapshots, an explanation
+of each move and an allocation assistant. Success: the total and the 24h move are readable within a second of opening
 the app, and every figure traces back to a source.
 
 ## Positioning
@@ -30,7 +31,7 @@ are public addresses, pricing is keyless (Binance ticker, DefiLlama). No account
 service holds the keys or the balances.
 
 ## Operating Context
-- Runs on a personal machine or home server; the phone reaches it over the LAN *(inferred)*.
+- Runs on a home server; the phone reaches it over the LAN or Tailscale, never the open internet.
 - History comes from `main.py record` in cron plus every refresh from the app.
 - Secrets may live in `.env`/environment, which override `config.yaml` - the UI must say so.
 
@@ -39,8 +40,8 @@ service holds the keys or the balances.
   configured ERC-20s; Solana SOL plus SPL tokens.
 - Dust (default under $1) is hidden from lists but always counted in totals and history.
 - Partial failures are normal (public RPCs drop); the product reports them instead of failing.
-- 24h change is snapshot-based: deposits and withdrawals show up as change *(inferred
-  trade-off; price-based P&L is undecided)*.
+- The 24h chip is snapshot-based, so deposits and withdrawals show up as change; attribution,
+  PnL and the analytics net them out using the synced cash-flow history.
 - An access token (`PORTFOLIO_WEB_TOKEN`) guards the API; it is mandatory when served beyond localhost.
 
 ## Brand Commitments

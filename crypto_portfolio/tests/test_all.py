@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import requests
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config as config_module
 import main as cli

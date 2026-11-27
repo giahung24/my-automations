@@ -125,7 +125,7 @@ DEFAULTS = {
         "max_workers": 8,          # parallel chain / wallet fetches
         "stablecoins": ["USDT", "USDC", "FDUSD", "DAI", "TUSD", "USDP", "PYUSD", "USDE"],
     },
-    # Epic F2 (ROADMAP_LEDGER §3.8): deposit / withdrawal / fiat / P2P history from Binance.
+    # Epic F2 (docs/SPEC.md §3.8): deposit / withdrawal / fiat / P2P history from Binance.
     "cash_flows": {
         "enabled": True,
         "backfill_days": 1827,     # history kept in sync: 5 years (the maximum); raising it later back-fills the gap
@@ -138,10 +138,10 @@ DEFAULTS = {
         "amount_tolerance_pct": 0.5,  # |withdrawn - fee - received| allowed when pairing, % of withdrawn
         "match_window_minutes": 30,   # heuristic transfer matching: time slack around a flow (§3.6)
     },
-    # Epic M6 (ROADMAP_LEDGER §9.3): balances with no API - BTC on a hardware wallet, staking
+    # Epic M6 (docs/SPEC.md §9.3): balances with no API - BTC on a hardware wallet, staking
     # elsewhere. Validated by `parse_manual_assets`; a bad entry is skipped, never fatal.
     "manual_assets": [],
-    # Epic M7 (ROADMAP_LEDGER §4.5, §9.4): target weights + rebalancing suggestions. Off until
+    # Epic M7 (docs/SPEC.md §4.5, §9.4): target weights + rebalancing suggestions. Off until
     # the user turns it on (Settings or the Allocation card); validated by `parse_allocation`.
     "allocation": {"enabled": False},
 }
@@ -450,7 +450,7 @@ ALLOCATION_CATCH_ALL = "*"
 ALLOCATION_STABLECOINS = "@stablecoins"
 # Sources a dry-powder rule may name (models.SOURCES, repeated here to keep config import-light).
 DRY_POWDER_SOURCES = ("binance_spot", "binance_earn", "binance_funding", "onchain", "manual")
-# The targets used when `allocation.buckets` is absent (ROADMAP_LEDGER §9.4).
+# The targets used when `allocation.buckets` is absent (docs/SPEC.md §9.4).
 DEFAULT_ALLOCATION_BUCKETS = {
     "BTC": {"target": 50, "symbols": ["BTC", "WBTC", "BTCB"]},
     "ETH": {"target": 25, "symbols": ["ETH", "WETH", "STETH", "WSTETH"]},
@@ -484,7 +484,7 @@ class DryPowderRule:
 
 @dataclass(frozen=True)
 class AllocationSettings:
-    """The validated `allocation:` block (ROADMAP_LEDGER §4.5.1)."""
+    """The validated `allocation:` block (docs/SPEC.md §4.5.1)."""
 
     enabled: bool = False
     tolerance_pp: float = 5.0

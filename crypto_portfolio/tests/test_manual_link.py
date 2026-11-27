@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import ManualAsset, ManualHolding, load_config, parse_manual_assets, resolve_linked_wallet
 from models import BINANCE_EARN, BINANCE_SPOT, MANUAL, ONCHAIN, Holding, holding_sources
@@ -30,7 +30,7 @@ from services.manual import fetch_manual
 from services.portfolio import aggregate, personal_wallets, to_dict
 from test_api import EVM_A, EVM_B, SOL_A, fake_fetcher, make_client
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 
 
 # The situation reported by Jean: Earn BTC on Binance, BTC declared on the Ledger, and an EVM

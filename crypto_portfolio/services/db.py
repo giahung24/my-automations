@@ -95,7 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_backfilled ON snapshots(is_backfilled, 
 
 # v4 (F2): deposits, withdrawals, fiat and P2P orders - every quantity change that is money
 # entering or leaving the portfolio rather than profit - plus the incremental sync cursors.
-# ROADMAP_LEDGER §3.3; `channel` and `counterparty_label` are additions of task F2.flow.
+# docs/SPEC.md §3.3; `channel` and `counterparty_label` are additions of task F2.flow.
 SCHEMA_V4 = """
 CREATE TABLE IF NOT EXISTS cash_flows (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,

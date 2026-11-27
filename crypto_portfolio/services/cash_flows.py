@@ -1,4 +1,4 @@
-"""Cash-flow engine: money entering or leaving the portfolio (ROADMAP_LEDGER Epic F2).
+"""Cash-flow engine: money entering or leaving the portfolio (docs/SPEC.md Epic F2).
 
 A quantity change is either profit (price moves, Earn interest) or a cash flow (a deposit, a
 withdrawal). The flows come from Binance's read-only history endpoints:
@@ -21,7 +21,7 @@ deposit whose ``sourceAddress`` (when Binance provides it) is an owned wallet. W
 owned address on a chain the wallet is *not* tracked on does take the coins out of the tracked
 portfolio, so it stays external. Fiat and P2P orders are always external.
 
-**Pairing (M4).** :func:`match_transfers` is the pure matcher of ROADMAP_LEDGER §3.6: it pairs an
+**Pairing (M4).** :func:`match_transfers` is the pure matcher of docs/SPEC.md §3.6: it pairs an
 ``out`` flow with the ``in`` flow on another account that received it - by owned address (tier 1),
 by identical tx hash (tier 2) or by amount + time (tier 3, heuristic, confidence in [0.6, 1)). Both
 legs then point at each other through ``matched_flow_id``. It needs a flow on each side, so it pays
@@ -42,7 +42,7 @@ and *kept* only ``earn_backfill_days`` back (1 year by default, never more than
 Every sync deletes the ``reward`` rows older than that and moves the Earn streams' backfill
 marker up to the cut-off, so the pruned range is never fetched again (:func:`prune_earn_rewards`).
 
-[to verify against the live API docs] (ROADMAP_LEDGER §3.4): the status codes below, whether a
+[to verify against the live API docs] (docs/SPEC.md §3.4): the status codes below, whether a
 withdrawal ``amount`` is net of ``transactionFee``, and the ``sourceAddress`` field of deposits.
 """
 from __future__ import annotations
@@ -92,7 +92,7 @@ P2P_STREAMS = ("p2p_buy", "p2p_sell")
 EARN_STREAMS = ("earn_flexible", "earn_flexible_bonus", "earn_locked")
 BACKFILL_PREFIX = "backfill."
 
-# Binance network name -> chain id used in config.yaml (ROADMAP_LEDGER F2.4). An unknown
+# Binance network name -> chain id used in config.yaml (docs/SPEC.md F2.4). An unknown
 # network maps to nothing, so it can never produce an address match.
 NETWORK_TO_CHAIN = {
     "ETH": "ethereum",
@@ -107,7 +107,7 @@ NETWORK_TO_CHAIN = {
 SOLANA_CHAIN = "solana"
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
-# Binance status codes (ROADMAP_LEDGER §3.4). Deposit 6 = "credited but cannot withdraw yet":
+# Binance status codes (docs/SPEC.md §3.4). Deposit 6 = "credited but cannot withdraw yet":
 # the coins are already in the balance, so for the portfolio it is completed.
 DEPOSIT_STATUS = {1: COMPLETED, 6: COMPLETED, 2: FAILED, 7: FAILED}            # else pending (0, 8)
 WITHDRAW_STATUS = {6: COMPLETED, 1: FAILED, 3: FAILED, 5: FAILED}              # else pending (0, 2, 4)
@@ -462,7 +462,7 @@ def owned_addresses(config) -> dict[str, OwnedWallet]:
 
 
 def classify(flow: CashFlow, owned: dict[str, OwnedWallet]) -> CashFlow:
-    """Tier-1 matching (ROADMAP_LEDGER §3.6): is this Binance crypto flow an internal transfer?
+    """Tier-1 matching (docs/SPEC.md §3.6): is this Binance crypto flow an internal transfer?
 
     Internal when the counterparty address is an owned wallet **and** the Binance network maps
     to a chain that wallet is tracked on. A user decision (``classified_by = 'user'``) is kept.
@@ -532,7 +532,7 @@ def amount_gap(sent: float, fee: float, received: float) -> float:
 
 
 def heuristic_score(out_row, in_row, tolerance: float, window_seconds: float) -> float | None:
-    """Tier-3 score of ROADMAP_LEDGER §3.6, or ``None`` when the pair is not a candidate.
+    """Tier-3 score of docs/SPEC.md §3.6, or ``None`` when the pair is not a candidate.
 
     ``s = 1 - 0.25 * min(1, gap / tolerance) - 0.25 * min(1, distance / window)``, where ``gap``
     is :func:`amount_gap` and ``distance`` the time between the two flow intervals.
@@ -575,7 +575,7 @@ def _address_pair(out_row, in_row, owned: dict[str, OwnedWallet]) -> bool:
 
 def match_transfers(flows: Iterable, owned: dict[str, OwnedWallet],
                     settings: CashFlowSettings | None = None) -> list[TransferMatch]:
-    """Pair out flows with the in flows that received them (pure: no I/O; ROADMAP_LEDGER §3.6).
+    """Pair out flows with the in flows that received them (pure: no I/O; docs/SPEC.md §3.6).
 
     ``flows`` are ``cash_flows`` rows (dicts or ``sqlite3.Row``) of crypto deposits/withdrawals.
     A pair needs the same asset, opposite directions and two different accounts, then:
