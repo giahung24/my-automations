@@ -79,6 +79,7 @@ from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.manual import after_snapshot, last_changes
+from services.peg import peg_warnings
 from services.portfolio import fetch_portfolio, portfolio_from_db, source_wallets, tab_dust, to_dict
 from services.resample import TooManyBuckets, resample
 
@@ -400,6 +401,7 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
         source_labels=SOURCE_LABELS,
         change_24h=change_since(database, portfolio.total_usd, portfolio.timestamp)
         if origin != "empty" else None,
+        peg=peg_warnings(portfolio.peg_checks),  # N3: empty while every stablecoin held is on peg
     )
     return data
 

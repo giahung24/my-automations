@@ -282,7 +282,8 @@ class BinanceClient:
             if quantity > 0:
                 holdings.append(
                     Holding(symbol=str(row.get("asset", "")).upper(), source=BINANCE_EARN,
-                            quantity=quantity, detail="flexible")
+                            quantity=quantity, detail="flexible",
+                            listed_apr=_to_float(row.get("latestAnnualPercentageRate")) or None)
                 )
         return holdings
 

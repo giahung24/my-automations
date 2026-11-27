@@ -296,7 +296,8 @@ def test_assets_return_detail_and_price_id(tmp_path):
     snapshot_id = database.record(portfolio)
     assert database.assets(snapshot_id) == [{
         "symbol": "ETH", "source": ONCHAIN, "quantity": 2.0, "price_usd": 3000.0,
-        "value_usd": 6000.0, "detail": "base/cold", "price_id": "coingecko:ethereum"}]
+        "value_usd": 6000.0, "detail": "base/cold", "price_id": "coingecko:ethereum",
+            "listed_apr": None}]
 
 
 def test_portfolio_from_db_returns_locations(tmp_path):

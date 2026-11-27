@@ -151,6 +151,20 @@ SCHEMA_V5 = """
 ALTER TABLE snapshots ADD COLUMN manual_usd REAL NOT NULL DEFAULT 0;
 """
 
+# v6 (N1.1 + N3.1): the APR Binance lists for a Simple Earn position (NULL = not known), and what
+# each stablecoin held was worth against its references when the snapshot was taken.
+SCHEMA_V6 = """
+ALTER TABLE snapshot_assets ADD COLUMN listed_apr REAL;
+CREATE TABLE IF NOT EXISTS peg_checks (
+    snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+    symbol      TEXT    NOT NULL,
+    reference   TEXT    NOT NULL,          -- binance:USDCUSDT | defillama:coingecko:usd-coin
+    price       REAL,                      -- NULL when the reference failed
+    error       TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (snapshot_id, symbol, reference)
+);
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
@@ -158,6 +172,7 @@ MIGRATIONS: list[str] = [
     SCHEMA_V3,  # v3
     SCHEMA_V4,  # v4
     SCHEMA_V5,  # v5
+    SCHEMA_V6,  # v6
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
@@ -308,6 +323,12 @@ class Database:
                     for source, status in sorted(statuses.items())
                 ],
             )
+            connection.executemany(
+                "INSERT OR REPLACE INTO peg_checks (snapshot_id, symbol, reference, price, error) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(snapshot_id, c["symbol"], c["reference"], c.get("price"), c.get("error") or "")
+                 for c in portfolio.peg_checks],
+            )
         return snapshot_id
 
     def replace_backfill(self, portfolios: Sequence[Portfolio]) -> list[int]:
@@ -414,8 +435,18 @@ class Database:
     def assets(self, snapshot_id: int) -> list[dict]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT symbol, source, quantity, price_usd, value_usd, detail, price_id "
+                "SELECT symbol, source, quantity, price_usd, value_usd, detail, price_id, listed_apr "
                 "FROM snapshot_assets WHERE snapshot_id = ? ORDER BY value_usd DESC",
+                (snapshot_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def peg_checks(self, snapshot_id: int) -> list[dict]:
+        """`peg_checks` of one snapshot (empty before v6, or when no stablecoin was held)."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT symbol, reference, price, error FROM peg_checks WHERE snapshot_id = ? "
+                "ORDER BY symbol, reference",
                 (snapshot_id,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -458,11 +489,12 @@ def _insert_snapshot(connection: sqlite3.Connection, portfolio: Portfolio, trigg
     snapshot_id = int(cursor.lastrowid)
     connection.executemany(
         """INSERT INTO snapshot_assets
-               (snapshot_id, symbol, source, quantity, price_usd, value_usd, detail, price_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (snapshot_id, symbol, source, quantity, price_usd, value_usd, detail, price_id,
+                listed_apr)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         [
             (snapshot_id, h.symbol, h.source, float(h.quantity), float(h.price_usd),
-             float(h.value_usd), h.detail or "", h.price_id or "")
+             float(h.value_usd), h.detail or "", h.price_id or "", h.listed_apr)
             for h in portfolio.holdings
         ],
     )

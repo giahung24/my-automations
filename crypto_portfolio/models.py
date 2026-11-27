@@ -75,6 +75,7 @@ class Holding:
     price_usd: float = 0.0
     detail: str = ""  # chain / wallet label (on-chain rows), asset label (manual rows)
     price_id: str = ""
+    listed_apr: float | None = None  # Simple Earn only: the rate Binance advertises, as a fraction
 
     @property
     def value_usd(self) -> float:
@@ -110,6 +111,8 @@ class Portfolio:
     dust_assets: int = 0
     # snapshot_sources key -> status; filled by `fetch_portfolio` and `portfolio_from_db`
     sources: dict[str, SourceStatus] = field(default_factory=dict)
+    # N3: one dict per (stablecoin held, reference): symbol, reference, price, error
+    peg_checks: list[dict] = field(default_factory=list)
 
     @property
     def total_usd(self) -> float:

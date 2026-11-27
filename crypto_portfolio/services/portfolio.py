@@ -1,6 +1,8 @@
 """Fetch every source and aggregate the holdings into the per-asset view."""
 from __future__ import annotations
 
+import logging
+
 from models import (
     BINANCE_SOURCES,
     MANUAL,
@@ -16,6 +18,8 @@ from models import (
     source_statuses,
 )
 from services.db import utc_now_iso
+
+log = logging.getLogger(__name__)
 
 
 def aggregate(holdings: list[Holding], min_value: float = 0.0) -> Portfolio:
@@ -123,6 +127,19 @@ def fetch_portfolio(config, min_value: float | None = None) -> Portfolio:
     portfolio = aggregate(holdings, config.min_value if min_value is None else min_value)
     portfolio.errors = errors
     portfolio.sources = source_statuses(errors, expected=expected, disabled=disabled)
+    try:  # N3: a peg reference that fails must never block the snapshot
+        from services import peg
+        stable = {str(s).upper() for s in config.stablecoins}
+        held = {h.symbol for h in holdings if h.quantity > 0 and h.symbol in stable}
+        tickers = None
+        if client is not None:
+            try:
+                tickers = client.prices()
+            except Exception:  # noqa: BLE001 - reported as a failed reference below
+                tickers = None
+        portfolio.peg_checks = peg.check_pegs(held, tickers, lambda keys: peg.llama_prices(keys, config.timeout))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("peg check skipped: %s", exc)
     return portfolio
 
 
@@ -138,13 +155,14 @@ def portfolio_from_db(database, min_value: float = 0.0) -> Portfolio | None:
     holdings = [
         Holding(symbol=row["symbol"], source=row["source"], quantity=row["quantity"],
                 price_usd=row["price_usd"], detail=row.get("detail") or "",
-                price_id=row.get("price_id") or "")
+                price_id=row.get("price_id") or "", listed_apr=row.get("listed_apr"))
         for row in database.assets(snapshot.id)
     ]
     portfolio = aggregate(holdings, min_value)
     portfolio.timestamp = snapshot.timestamp
     portfolio.sources = database.sources(snapshot.id)
     portfolio.errors = stored_errors(portfolio.sources)
+    portfolio.peg_checks = database.peg_checks(snapshot.id)
     return portfolio
 
 
