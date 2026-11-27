@@ -168,7 +168,7 @@ def test_days_window_and_bad_parameters(env):
     upsert_flows(database, [flow("recent", ago=timedelta(days=5)), flow("old", ago=timedelta(days=200))])
     assert client.get("/api/cash-flows?days=30").json()["total"] == 1
     assert client.get("/api/cash-flows?days=0").json()["total"] == 2
-    for bad in ("source=kraken", "type=trade", "limit=500", "days=-1", "cursor=nope"):
+    for bad in ("source=kraken", "type=swap", "limit=500", "days=-1", "cursor=nope"):
         assert client.get(f"/api/cash-flows?{bad}").status_code == 422, bad
 
 

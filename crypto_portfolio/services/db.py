@@ -28,7 +28,7 @@ import sqlite3
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from models import (
@@ -37,6 +37,7 @@ from models import (
     BINANCE_SPOT,
     MANUAL,
     ONCHAIN,
+    STATUS_ERROR,
     STATUS_INFERRED_ERROR,
     Portfolio,
     SourceStatus,
@@ -440,6 +441,17 @@ class Database:
                 (snapshot_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def failed_snapshots_since(self, timestamp: str, hours: int = 24) -> int:
+        """Snapshots taken in the `hours` up to `timestamp` in which at least one source failed."""
+        start = (parse_timestamp(timestamp) - timedelta(hours=hours)).isoformat()
+        with self.connect() as connection:
+            return int(connection.execute(
+                "SELECT COUNT(DISTINCT x.snapshot_id) FROM snapshot_sources x "
+                "JOIN snapshots s ON s.id = x.snapshot_id "
+                "WHERE x.status IN (?, ?) AND s.timestamp > ? AND s.timestamp <= ?",
+                (STATUS_ERROR, STATUS_INFERRED_ERROR, start, timestamp),
+            ).fetchone()[0])
 
     def peg_checks(self, snapshot_id: int) -> list[dict]:
         """`peg_checks` of one snapshot (empty before v6, or when no stablecoin was held)."""

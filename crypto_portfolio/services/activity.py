@@ -36,9 +36,10 @@ from services.cash_flows import (
     sync_states,
 )
 from services.db import Database, parse_timestamp, utc_now_iso
+from services.reconcile import inferred_items
 
 SOURCE_GROUPS = ("binance", "onchain", "manual")
-KINDS = ("deposit", "withdrawal", "transfer", "reward", "fee")
+KINDS = ("deposit", "withdrawal", "transfer", "reward", "fee", "trade", "unexplained")
 REVIEW_CONFIDENCE = 0.9      # a heuristic pairing below this is shown for confirmation
 CANDIDATE_WINDOW_DAYS = 7    # how far apart two legs of one transfer can plausibly be
 CANDIDATE_LIMIT = 10
@@ -215,7 +216,7 @@ def earn_item(day: str, rows: list, tz_offset: int = 0) -> dict:
 
 # -- report ------------------------------------------------------------------------------
 def _cursor_key(item: dict) -> tuple[str, int]:
-    return item["timestamp"], int(item["id"] if not item["group"] else item["_last_id"])
+    return item["timestamp"], int(item["_last_id"] if "_last_id" in item else item["id"])
 
 
 def parse_cursor(cursor: str | None) -> tuple[str, int] | None:
@@ -235,7 +236,11 @@ def activity_report(database: Database, *, settings: CashFlowSettings | None = N
                     source: str = "all", kind: str = "all", asset: str = "", review: bool = False,
                     cursor: str | None = None, limit: int = 50, tz_offset: int = 0,
                     now: datetime | None = None) -> dict:
-    """The timeline page plus counts for the filter chips. ``days = 0`` means all history."""
+    """The timeline page plus counts for the filter chips. ``days = 0`` means all history.
+
+    Besides the recorded flows it carries the inferred trades and the unexplained quantity
+    changes of ``services/reconcile.py`` (``inferred: true``).
+    """
     settings = settings or CashFlowSettings()
     now = now or datetime.now(timezone.utc)
     transit = timedelta(hours=settings.in_transit_hours)
@@ -285,6 +290,12 @@ def activity_report(database: Database, *, settings: CashFlowSettings | None = N
         shown.add(row["id"])
         items.append(flow_item(row, now=now, transit=transit, tz_offset=tz_offset))
     items.extend(earn_item(day, day_rows, tz_offset) for day, day_rows in earn_days.items())
+    # N2: quantity changes no flow explains, read from the snapshots (inferred, never stored)
+    since = (now - timedelta(days=days)).replace(microsecond=0).isoformat() if days else None
+    for item in inferred_items(database, since, tz_offset):
+        legs = [*item.get("sold", []), *item.get("bought", []), *item.get("assets", [])]
+        if not asset or any(leg["asset"] == asset for leg in legs):
+            items.append(item)
     items.sort(key=_cursor_key, reverse=True)
 
     def source_ok(item: dict) -> bool:

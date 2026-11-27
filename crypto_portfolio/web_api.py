@@ -403,6 +403,8 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
         change_24h=change_since(database, portfolio.total_usd, portfolio.timestamp)
         if origin != "empty" else None,
         peg=peg_warnings(portfolio.peg_checks),  # N3: empty while every stablecoin held is on peg
+        # N2.4: snapshots of the last 24h in which a source failed (the holes of the chart)
+        gaps_24h=database.failed_snapshots_since(portfolio.timestamp, hours=24) if origin != "empty" else 0,
     )
     return data
 
@@ -752,7 +754,7 @@ def create_app(
     def cash_flows_timeline(
         days: int = Query(90, ge=0, le=36500, description="Look-back window in days; 0 = everything"),
         source: Literal["all", "binance", "onchain", "manual"] = Query("all"),
-        type: Literal["all", "deposit", "withdrawal", "transfer", "reward", "fee"] = Query("all"),
+        type: Literal["all", "deposit", "withdrawal", "transfer", "reward", "fee", "trade", "unexplained"] = Query("all"),
         asset: str = Query("", max_length=20, pattern=r"^[A-Za-z0-9._-]*$"),
         review: bool = Query(False, description="Only the items waiting for a confirmation"),
         cursor: str | None = Query(None, max_length=80, description="`next_cursor` of the previous page"),
