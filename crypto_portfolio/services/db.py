@@ -176,6 +176,33 @@ ALTER TABLE snapshot_assets ADD COLUMN listed_base_apr REAL;
 ALTER TABLE snapshot_assets ADD COLUMN listed_tiers TEXT;
 """
 
+# v8 (N4): every Binance trade (spot fill or conversion), the raw material of the cost basis.
+# `side` says what happened to `base`; `quote_usd` is what one unit of `quote` was worth then.
+SCHEMA_V8 = """
+CREATE TABLE IF NOT EXISTS trades (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT    NOT NULL,              -- ISO8601 UTC
+    venue           TEXT    NOT NULL,              -- spot | convert
+    pair            TEXT    NOT NULL DEFAULT '',   -- BTCUSDC (spot only)
+    order_id        TEXT    NOT NULL DEFAULT '',   -- fills of one order share it
+    base            TEXT    NOT NULL,
+    quote           TEXT    NOT NULL,
+    side            TEXT    NOT NULL CHECK (side IN ('buy', 'sell')),
+    quantity        REAL    NOT NULL CHECK (quantity >= 0),        -- of base
+    quote_quantity  REAL    NOT NULL CHECK (quote_quantity >= 0),  -- of quote
+    fee_amount      REAL    NOT NULL DEFAULT 0,
+    fee_asset       TEXT    NOT NULL DEFAULT '',
+    quote_usd       REAL    NOT NULL DEFAULT 0,    -- 1.0 for a stablecoin quote
+    value_usd       REAL    NOT NULL DEFAULT 0,    -- quote_quantity * quote_usd
+    estimated       INTEGER NOT NULL DEFAULT 0 CHECK (estimated IN (0, 1)),  -- quote priced from a series
+    external_id     TEXT    NOT NULL,
+    raw_json        TEXT    NOT NULL DEFAULT '{}',
+    UNIQUE (venue, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_trades_ts   ON trades(timestamp);
+CREATE INDEX IF NOT EXISTS idx_trades_base ON trades(base, timestamp);
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
@@ -185,6 +212,7 @@ MIGRATIONS: list[str] = [
     SCHEMA_V5,  # v5
     SCHEMA_V6,  # v6
     SCHEMA_V7,  # v7
+    SCHEMA_V8,  # v8
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger

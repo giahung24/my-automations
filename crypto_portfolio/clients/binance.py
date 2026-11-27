@@ -15,6 +15,7 @@ import hmac
 import re
 import time
 from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
@@ -32,6 +33,9 @@ MAX_PAGES = 100          # hard stop so a misbehaving `total` cannot spin foreve
 RETRIES = 3
 # USD proxies tried in order when `<ASSET>USDT` does not exist, then crypto bridges.
 USD_QUOTES = ["USDT", "FDUSD", "USDC", "BUSD", "TUSD"]
+TRADES_PAGE = 1000          # myTrades / convert tradeFlow / klines: rows per call
+CONVERT_WINDOW_DAYS = 30
+CONVERT_INTERVAL_S = 1.5
 BRIDGE_QUOTES = ["BTC", "ETH", "BNB"]
 
 
@@ -374,6 +378,63 @@ class BinanceClient:
         """GET /sapi/v1/c2c/orderMatch/listUserOrderHistory - P2P BUY / SELL orders."""
         return self.history("p2p_sell" if str(trade_type).upper() == "SELL" else "p2p_buy",
                             start_ms, end_ms)
+
+    # -- trades (N4) -------------------------------------------------------------
+    def my_trades(self, symbol: str, from_id: int = 0) -> list[dict]:
+        """GET /api/v3/myTrades - every fill of one spot pair with `id >= from_id`, oldest first.
+
+        The endpoint only answers per pair, so the caller decides which pairs to ask for.
+        [to verify on the live API] weight 20 per call, 1000 fills per page.
+        """
+        self.sync_time()
+        collected: list[dict] = []
+        for _ in range(MAX_PAGES):
+            rows = self._get("/api/v3/myTrades", {"symbol": symbol, "fromId": from_id, "limit": TRADES_PAGE},
+                             signed=True)
+            if not isinstance(rows, list):
+                raise BinanceError(f"unexpected payload on myTrades {symbol}: {str(rows)[:200]}")
+            collected.extend(row for row in rows if isinstance(row, dict))
+            if len(rows) < TRADES_PAGE:
+                break
+            from_id = max(_to_int(row.get("id")) for row in rows) + 1
+        return collected
+
+    def convert_history(self, start_ms: int, end_ms: int) -> Iterator[tuple[int, list[dict]]]:
+        """GET /sapi/v1/convert/tradeFlow - yields `(chunk_end_ms, conversions)`, oldest first.
+
+        [to verify on the live API] 30 days per query, 1000 rows, weight 3000 against the
+        180000-per-minute UID budget: calls are spaced `CONVERT_INTERVAL_S` apart.
+        """
+        self.sync_time()
+        for index, (chunk_start, chunk_end) in enumerate(time_chunks(start_ms, end_ms, CONVERT_WINDOW_DAYS)):
+            if index:
+                self._sleep(CONVERT_INTERVAL_S)
+            payload = self._get("/sapi/v1/convert/tradeFlow",
+                                {"startTime": chunk_start, "endTime": chunk_end, "limit": TRADES_PAGE}, signed=True)
+            if not isinstance(payload, dict):
+                raise BinanceError(f"unexpected payload on convert/tradeFlow: {str(payload)[:200]}")
+            if payload.get("moreData"):
+                # shortcut: over 1000 conversions in 30 days is refused rather than half-read;
+                # halve the window here if an account ever converts that often.
+                raise BinanceError("convert/tradeFlow: more than 1000 conversions in one 30-day window")
+            yield chunk_end, [row for row in payload.get("list") or [] if isinstance(row, dict)]
+
+    def daily_closes(self, asset: str, start_ms: int, end_ms: int) -> dict[str, float]:
+        """Public daily `<asset>USDT` closes as `{YYYY-MM-DD: price}`; empty when the pair is unknown."""
+        closes: dict[str, float] = {}
+        cursor = start_ms
+        while cursor < end_ms:
+            rows = self._get("/api/v3/klines", {"symbol": f"{asset.upper()}USDT", "interval": "1d",
+                                                "startTime": cursor, "endTime": end_ms, "limit": TRADES_PAGE})
+            if not isinstance(rows, list) or not rows:
+                break
+            for row in rows:
+                day = datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+                closes[day] = _to_float(row[4])
+            if len(rows) < TRADES_PAGE:
+                break
+            cursor = int(rows[-1][0]) + 1
+        return closes
 
     def _throttle(self, spec: HistoryStream) -> None:
         """Wait until `spec.min_interval_s` has passed since the last call to the same path."""

@@ -7,9 +7,11 @@ Between two consecutive good snapshots, for every asset held on Binance:
 Quantities are summed over Spot + Earn + Funding, so moving a coin between the three is not a
 residual. A snapshot where a Binance source did not answer is skipped: its zero is a failed fetch.
 
-Residuals of opposite sign in the same interval, worth about the same, are read as one **inferred
-trade** at the snapshot prices. Everything else is **unexplained**. Nothing is stored: when real
-trades are synced (N4) this module goes away with no data to clean up.
+Trades synced from Binance (``trades``, N4) are subtracted like any other flow and listed as they
+happened. What is left is read from the snapshots: residuals of opposite sign in the same interval,
+worth about the same, are one **inferred trade** at the snapshot prices (a trade the ledger does
+not have: not synced yet, or on a pair it does not read). Everything else is **unexplained**.
+Nothing inferred is stored.
 
 Scope: Binance only. On-chain wallets have no flow history yet (F2.5), so every transfer into
 them would read as unexplained.
@@ -21,6 +23,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from models import BINANCE_SOURCES, STATUS_OK
+from services.analytics.cost_basis import trade_events
 from services.cash_flows import COMPLETED, IN, SOURCE_BINANCE
 from services.db import Database, parse_timestamp
 
@@ -70,6 +73,10 @@ def inferred_items(database: Database, since_iso: str | None = None, tz_offset: 
             (SOURCE_BINANCE, COMPLETED, snapshots[0]["timestamp"]),
         ).fetchall()
 
+        trades = connection.execute(
+            "SELECT * FROM trades WHERE timestamp > ? ORDER BY timestamp, id", (snapshots[0]["timestamp"],)
+        ).fetchall()
+
     times = [parse_timestamp(row["timestamp"]) for row in snapshots]
     state: dict[int, dict[str, tuple[float, float]]] = defaultdict(dict)
     for row in held:
@@ -84,6 +91,12 @@ def inferred_items(database: Database, since_iso: str | None = None, tz_offset: 
         else:
             fee = float(row["fee_amount"] or 0) if (row["fee_asset"] or row["asset"]) == row["asset"] else 0.0
             explained[index][row["asset"]] -= float(row["amount"]) + fee
+
+    for row in trades:
+        index = bisect_left(times, parse_timestamp(row["timestamp"]))
+        if index < len(times):
+            for _, asset, quantity, _, _ in trade_events(row):
+                explained[index][asset] += quantity
 
     offset = timedelta(minutes=tz_offset)
     items: list[dict] = []
@@ -111,6 +124,39 @@ def inferred_items(database: Database, since_iso: str | None = None, tz_offset: 
         legs = [leg for _, leg in entries]
         items.append(_item("unexplained", f"unexplained:{day}", newest[0], newest[1]["timestamp"], day,
                            value_usd=round(sum(leg["value_usd"] for leg in legs), 2), assets=legs))
+    return items
+
+
+def trade_items(database: Database, since_iso: str | None = None, tz_offset: int = 0) -> list[dict]:
+    """Activity items for the trades synced from Binance, one per order."""
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM trades WHERE timestamp >= ? ORDER BY timestamp, id", (since_iso or "",)).fetchall()
+    offset = timedelta(minutes=tz_offset)
+    orders: dict[tuple, dict] = {}
+    for row in rows:
+        order = orders.setdefault((row["venue"], row["order_id"] or row["external_id"]),
+                                  {"legs": defaultdict(lambda: [0.0, 0.0]), "value": 0.0})
+        order.update(timestamp=row["timestamp"], last_id=row["id"], venue=row["venue"],
+                     estimated=order.get("estimated", False) or bool(row["estimated"]))
+        sign = 1 if row["side"] == "buy" else -1
+        value = float(row["value_usd"] or 0)
+        for asset, quantity in ((row["base"], sign * float(row["quantity"])),
+                                (row["quote"], -sign * float(row["quote_quantity"]))):
+            order["legs"][asset][0] += quantity
+            order["legs"][asset][1] += value if quantity > 0 else -value
+        order["value"] += value
+    items = []
+    for (venue, key), order in orders.items():
+        legs = [{"asset": asset, "amount": quantity, "value_usd": round(usd, 2)}
+                for asset, (quantity, usd) in sorted(order["legs"].items()) if quantity]
+        when = parse_timestamp(order["timestamp"])
+        item = _item("trade", f"{venue}:{key}", order["last_id"], order["timestamp"],
+                     (when.astimezone(timezone.utc) + offset).strftime("%Y-%m-%d"),
+                     value_usd=round(order["value"], 2), assets=legs, venue=venue,
+                     sold=[leg for leg in legs if leg["amount"] < 0], bought=[leg for leg in legs if leg["amount"] > 0])
+        item.update(inferred=False, estimated=order["estimated"])
+        items.append(item)
     return items
 
 

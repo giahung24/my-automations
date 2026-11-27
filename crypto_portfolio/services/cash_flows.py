@@ -670,10 +670,15 @@ class PriceBook:
     """
 
     def __init__(self, database: Database, stablecoins: Iterable[str] = (),
-                 fallback: Callable[[str], float] | None = None):
+                 fallback: Callable[[str], float] | None = None,
+                 historic: Callable[[str, str], float] | None = None, historic_before: str = ""):
         self.database = database
         self.pinned = {s.upper() for s in stablecoins} | USD_PEGGED
         self.fallback = fallback
+        # N4: a moment before `historic_before` (the first fetched snapshot) has no snapshot price
+        # worth the name; `historic(symbol, 'YYYY-MM-DD')` gives that day's market close instead.
+        self.historic = historic
+        self.historic_before = historic_before
         self._series: dict[str, tuple[list[str], list[float]]] = {}
         self._live: dict[str, float] = {}
 
@@ -696,6 +701,13 @@ class PriceBook:
             return 0.0
         if symbol in self.pinned:
             return 1.0
+        if self.historic is not None and timestamp < self.historic_before:
+            try:
+                price = float(self.historic(symbol, timestamp[:10]) or 0.0)
+            except (requests.RequestException, BinanceError, TypeError, ValueError):
+                price = 0.0
+            if price > 0:
+                return price
         times, prices = self._load(symbol)
         if times:
             index = bisect.bisect_right(times, timestamp)

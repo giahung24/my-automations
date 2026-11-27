@@ -75,6 +75,7 @@ from services.analytics.attribution import (
     coverage_of,
     reference_snapshot,
 )
+from services.analytics.cost_basis import cost_basis_report
 from services.analytics.earn import earn_report
 from services.analytics.pnl import pnl_report
 from services.analytics.quant import quant_report
@@ -644,6 +645,16 @@ def create_app(
         `flow_adjusted: false` means no deposit/withdrawal history was synced yet.
         """
         return pnl_report(Database(config().db_path))
+
+    @app.get("/api/analytics/cost-basis")
+    def analytics_cost_basis():
+        """Average entry and unrealised PnL per coin, plus the latest buys and how they did since.
+
+        Reads SQLite only (`trades` and `cash_flows`, filled by the collector). `tracked` is the
+        share of a position the ledger explains; a coin below 1% has no figure.
+        """
+        cfg = config()
+        return cost_basis_report(Database(cfg.db_path), cfg.stablecoins, cfg.min_value)
 
     @app.get("/api/analytics/earn")
     def analytics_earn():

@@ -36,7 +36,7 @@ from services.cash_flows import (
     sync_states,
 )
 from services.db import Database, parse_timestamp, utc_now_iso
-from services.reconcile import inferred_items
+from services.reconcile import inferred_items, trade_items
 
 SOURCE_GROUPS = ("binance", "onchain", "manual")
 KINDS = ("deposit", "withdrawal", "transfer", "reward", "fee", "trade", "unexplained")
@@ -290,9 +290,10 @@ def activity_report(database: Database, *, settings: CashFlowSettings | None = N
         shown.add(row["id"])
         items.append(flow_item(row, now=now, transit=transit, tz_offset=tz_offset))
     items.extend(earn_item(day, day_rows, tz_offset) for day, day_rows in earn_days.items())
-    # N2: quantity changes no flow explains, read from the snapshots (inferred, never stored)
+    # N4: the trades synced from Binance. N2: the quantity changes nothing recorded explains,
+    # read from the snapshots (inferred, never stored)
     since = (now - timedelta(days=days)).replace(microsecond=0).isoformat() if days else None
-    for item in inferred_items(database, since, tz_offset):
+    for item in (*trade_items(database, since, tz_offset), *inferred_items(database, since, tz_offset)):
         legs = [*item.get("sold", []), *item.get("bought", []), *item.get("assets", [])]
         if not asset or any(leg["asset"] == asset for leg in legs):
             items.append(item)

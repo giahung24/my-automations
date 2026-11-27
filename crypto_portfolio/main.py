@@ -164,6 +164,12 @@ def cmd_record(args, config) -> int:
     from services.manual import after_snapshot
     after_snapshot(config, database, snapshot_id)
     sync_after_record(config, database)
+    try:  # N4: spot fills and conversions; like the flows above, never fails the snapshot
+        from services.trades import sync_trades
+        for error in sync_trades(config, database)["errors"]:
+            print(f"  warning: {error}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  warning: trade sync failed: {exc}", file=sys.stderr)
     if args.verbose:
         from services.visualizer import money
         print(f"snapshot #{snapshot_id} recorded: {money(portfolio.total_usd)} at {portfolio.timestamp}")
