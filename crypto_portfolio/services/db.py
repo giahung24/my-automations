@@ -203,6 +203,75 @@ CREATE INDEX IF NOT EXISTS idx_trades_ts   ON trades(timestamp);
 CREATE INDEX IF NOT EXISTS idx_trades_base ON trades(base, timestamp);
 """
 
+# v9 (N5): the analyst kit. Read-only views over the raw tables, so a notebook or `main.py export`
+# does not have to know the schema. They are a contract: change one with a new migration
+# (DROP VIEW + CREATE VIEW), never by editing this step. Timestamps are ISO8601 UTC, so the first
+# ten characters are the UTC day and string order is time order.
+ANALYST_VIEWS = ("v_nav_daily", "v_positions_daily", "v_external_flows", "v_daily_returns",
+                 "v_earn_income_daily", "v_trades")
+SCHEMA_V9 = """
+-- the newest healthy fetched snapshot of each UTC day: the daily close used by the analytics
+CREATE VIEW v_nav_daily AS
+SELECT substr(s.timestamp, 1, 10) AS day, s.id AS snapshot_id, s.timestamp, s.total_portfolio_usd AS nav_usd
+FROM snapshots s
+WHERE s.id = (
+    SELECT t.id FROM snapshots t
+    WHERE t.is_backfilled = 0 AND substr(t.timestamp, 1, 10) = substr(s.timestamp, 1, 10)
+      AND NOT EXISTS (SELECT 1 FROM snapshot_sources x
+                      WHERE x.snapshot_id = t.id AND x.status IN ('error', 'inferred_error'))
+    ORDER BY t.timestamp DESC, t.id DESC LIMIT 1);
+
+-- what was held at each daily close, all sources added up
+CREATE VIEW v_positions_daily AS
+SELECT d.day, a.symbol, SUM(a.quantity) AS quantity, MAX(a.price_usd) AS price_usd, SUM(a.value_usd) AS value_usd
+FROM v_nav_daily d JOIN snapshot_assets a ON a.snapshot_id = d.snapshot_id
+GROUP BY d.day, a.symbol;
+
+-- money entering or leaving the portfolio: completed deposits and withdrawals, internal transfers left out
+CREATE VIEW v_external_flows AS
+SELECT timestamp, substr(timestamp, 1, 10) AS day, source, asset, flow_type, channel, direction, amount,
+       value_usd, CASE direction WHEN 'in' THEN value_usd ELSE -value_usd END AS signed_usd
+FROM cash_flows
+WHERE status = 'completed' AND is_internal_transfer = 0 AND flow_type IN ('deposit', 'withdrawal');
+
+-- flow-adjusted return between consecutive daily closes (Modified Dietz, as services/analytics/quant.py):
+--   r = (nav - previous nav - net flow) / (previous nav + flows weighted by the time they were in)
+-- NULL on the first day and when the capital base is too small to mean anything
+CREATE VIEW v_daily_returns AS
+WITH closes AS (
+    SELECT day, timestamp, nav_usd,
+           LAG(timestamp) OVER (ORDER BY day) AS previous_timestamp,
+           LAG(nav_usd)   OVER (ORDER BY day) AS previous_nav_usd
+    FROM v_nav_daily),
+flows AS (
+    SELECT c.day, SUM(f.signed_usd) AS net,
+           SUM(f.signed_usd * (julianday(c.timestamp) - julianday(f.timestamp))
+                            / (julianday(c.timestamp) - julianday(c.previous_timestamp))) AS weighted
+    FROM closes c JOIN v_external_flows f
+      ON f.timestamp > c.previous_timestamp AND f.timestamp <= c.timestamp
+    GROUP BY c.day)
+SELECT c.day, c.nav_usd, COALESCE(f.net, 0.0) AS net_flow_usd,
+       CASE WHEN c.previous_nav_usd IS NULL THEN NULL
+            WHEN c.previous_nav_usd + COALESCE(f.weighted, 0.0) <= 1.0 THEN NULL
+            WHEN c.previous_nav_usd + COALESCE(f.weighted, 0.0) <= 0.01 * c.previous_nav_usd THEN NULL
+            ELSE (c.nav_usd - c.previous_nav_usd - COALESCE(f.net, 0.0))
+                 / (c.previous_nav_usd + COALESCE(f.weighted, 0.0)) END AS return
+FROM closes c LEFT JOIN flows f ON f.day = c.day;
+
+-- Simple Earn rewards per UTC day and asset, in USD at the time they were paid
+CREATE VIEW v_earn_income_daily AS
+SELECT substr(timestamp, 1, 10) AS day, asset, SUM(amount) AS amount, SUM(value_usd) AS value_usd, COUNT(*) AS payouts
+FROM cash_flows
+WHERE source = 'binance' AND channel = 'earn' AND flow_type = 'reward' AND status = 'completed'
+GROUP BY day, asset;
+
+CREATE VIEW v_trades AS
+SELECT timestamp, substr(timestamp, 1, 10) AS day, venue, pair, order_id, base, quote, side, quantity,
+       quote_quantity, CASE WHEN quantity > 0 THEN value_usd / quantity END AS price_usd, value_usd,
+       fee_amount, fee_asset, estimated
+FROM trades;
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
@@ -213,6 +282,7 @@ MIGRATIONS: list[str] = [
     SCHEMA_V6,  # v6
     SCHEMA_V7,  # v7
     SCHEMA_V8,  # v8
+    SCHEMA_V9,  # v9
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger

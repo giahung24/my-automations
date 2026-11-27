@@ -19,6 +19,7 @@ import argparse
 import ipaddress
 import json
 import sys
+from pathlib import Path
 
 from config import load_config
 from models import BINANCE_EARN, BINANCE_FUNDING, BINANCE_SPOT, MANUAL, ONCHAIN, SOURCE_LABELS, SOURCES
@@ -245,6 +246,25 @@ def render_pnl(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def cmd_export(args, config) -> int:
+    """One CSV per analyst view (N5), for a spreadsheet or a notebook."""
+    import csv
+
+    from services.db import ANALYST_VIEWS
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    with Database(config.db_path).connect() as connection:
+        for view in ANALYST_VIEWS:
+            cursor = connection.execute(f"SELECT * FROM {view}")
+            with open(out / f"{view.removeprefix('v_')}.csv", "w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerow([column[0] for column in cursor.description])
+                writer.writerows(cursor)
+    print(f"wrote {len(ANALYST_VIEWS)} CSV files to {out}")
+    return 0
+
+
 def cmd_pnl(args, config) -> int:
     """Real PnL over 7d / 30d: the NAV change minus net external deposits and withdrawals."""
     from services.analytics.pnl import pnl_report
@@ -377,6 +397,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="window lengths in days (default: 7 30)")
     pnl.add_argument("--json", action="store_true")
     pnl.set_defaults(func=cmd_pnl)
+
+    export = subparsers.add_parser("export", parents=[common],
+                                   help="write one CSV per analyst view (positions, returns, flows, Earn, trades)")
+    export.add_argument("--out", default="./export", help="output directory (default: ./export)")
+    export.set_defaults(func=cmd_export)
 
     serve = subparsers.add_parser("serve", parents=[common], help="run the mobile web dashboard")
     serve.add_argument("--host", default="127.0.0.1",
