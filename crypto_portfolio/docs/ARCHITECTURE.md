@@ -1,6 +1,7 @@
 # ARCHITECTURE — `crypto_portfolio`
 
-> Hệ thống đang chạy thế nào. Viết lại ngày 2026-11-27 theo code hiện tại; bản thẩm định chi tiết
+> Hệ thống đang chạy thế nào. Viết lại ngày 2026-11-27 theo code hiện tại (cập nhật cùng ngày cho
+> W4: schema v7, Earn, đối soát, peg check); bản thẩm định chi tiết
 > ngày 2026-11-25 nằm trong lịch sử git (`SYSTEM_ARCHITECTURE.md`), các phát hiện của nó được đối
 > chiếu ở [`LEDGER.md`](LEDGER.md) §4. Khi tài liệu này và code lệch nhau, code là chuẩn.
 
@@ -43,9 +44,17 @@ cũng không có Binance key để lấy, không có route ghi, không có code 
 - Transport: ký HMAC-SHA256, failover host (`api` → `api1` → `api2`; dữ liệu công khai qua
   `data-api.binance.vision`), retry có backoff, tự đồng bộ đồng hồ khi gặp lỗi `-1021`.
 - Số dư: Spot, Simple Earn flexible + locked, Funding. Mỗi phần lỗi độc lập.
+- APR niêm yết của Earn flexible: `listed_apr` = base `latestAnnualPercentageRate` + bonus
+  `tierAnnualPercentageRate` (band dạng `{"0-5000USDC": "0.03"}`) tính theo phần số dư nằm trong
+  từng band (`parse_tiers`, `effective_apr`), tức lãi suất cả vị thế thực hưởng. Giữ phần tách
+  `listed_base_apr`, `listed_tiers`.
 - Lịch sử (`HistoryStream`, cho dòng tiền): nạp/rút crypto, lệnh fiat, thanh toán fiat, P2P, lãi Earn
   flexible + locked.
 - Giá: stablecoin ghim $1.00 → cặp `<ASSET>USDT/FDUSD/USDC…` → cầu nối qua BTC/ETH/BNB → không có thì 0.
+
+**`services/peg.py`** (N3) — vì stablecoin bị ghim $1.00, mỗi `record` ghi thêm giá thật của từng
+stablecoin đang giữ theo hai tham chiếu: ticker `<SYM>USDT` đã tải và giá USD của DefiLlama. Tham
+chiếu lỗi được ghi kèm `error`, không chặn snapshot.
 
 **`clients/onchain.py`**
 - EVM (Ethereum, BSC, Arbitrum, Base, Polygon): coin gốc + các ERC-20 đã cấu hình, một `eth_call` mỗi
@@ -59,7 +68,8 @@ là atomic, mode 0600, giữ bản `.bak`; comment YAML mất sau khi ghi từ U
 
 ### 3.2 Tổng hợp — `models.py`, `services/portfolio.py`, `services/manual.py`
 
-- `Holding` (symbol, source, quantity, price, detail, price_id) → `aggregate()` gom theo symbol, tính
+- `Holding` (symbol, source, quantity, price, detail, price_id; với Earn thêm `listed_apr`,
+  `listed_base_apr`, `listed_tiers`) → `aggregate()` gom theo symbol, tính
   giá trung bình theo giá trị, tổng theo nguồn, lọc dust.
 - Năm nguồn: `binance_spot`, `binance_earn`, `binance_funding`, `onchain`, `manual`.
 - **Tài sản manual** (`manual_assets` trong config): ví lạnh, staking ngoài, sàn khác. Định giá qua
@@ -68,15 +78,17 @@ là atomic, mode 0600, giữ bản `.bak`; comment YAML mất sau khi ghi từ U
 
 ### 3.3 Lưu trữ — `services/db.py`
 
-SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v5**);
-migration chạy trong một transaction và sao lưu file trước.
+SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v7**);
+migration chạy trong một transaction và sao lưu file trước. v6 (N1.1, N3.1): `listed_apr`,
+`peg_checks`. v7: `listed_base_apr`, `listed_tiers` (dòng cũ NULL; `listed_apr` của chúng là base).
 
 | Bảng | Nội dung |
 |---|---|
 | `snapshots` | Một dòng mỗi lần ghi: tổng, năm tổng theo nguồn, `trigger` (cron / refresh), `is_backfilled` |
-| `snapshot_assets` | Một dòng mỗi `Holding`: symbol, source, số lượng, giá, `detail` (chain/ví, flexible/locked), `price_id` |
+| `snapshot_assets` | Một dòng mỗi `Holding`: symbol, source, số lượng, giá, `detail` (chain/ví, flexible/locked), `price_id`; với Earn: `listed_apr`, `listed_base_apr`, `listed_tiers` (JSON `[{"min", "max", "apr"}]`) |
 | `snapshot_sources` | Trạng thái từng nguồn của mỗi snapshot (ok / error / disabled) |
-| `cash_flows` | Nạp, rút, fiat, P2P, lãi Earn, thay đổi tài sản manual; cờ chuyển khoản nội bộ và cặp ghép |
+| `peg_checks` | Giá thật của mỗi stablecoin đang giữ theo từng tham chiếu (`binance:…`, `defillama:…`), `error` nếu lỗi; xoá snapshot thì xoá theo |
+| `cash_flows` | Nạp, rút, fiat, P2P, lãi Earn (giữ `earn_backfill_days` = 1827 ngày), thay đổi tài sản manual; cờ chuyển khoản nội bộ và cặp ghép |
 | `sync_state` | Con trỏ đồng bộ tăng dần của từng luồng lịch sử Binance |
 
 `services/backfill.py` dựng 60 checkpoint tháng (2021-11 đến 2026-10) từ giá lịch sử, gắn
@@ -90,8 +102,10 @@ migration chạy trong một transaction và sao lưu file trước.
 | `pnl.py` | Lãi/lỗ sau khi trừ nạp/rút, theo cửa sổ | `GET /api/portfolio/pnl` |
 | `quant.py` | TWR, Base 100 so với BTC/ETH, drawdown, volatility | `GET /api/analytics/quant` |
 | `allocation.py` | Lệch mục tiêu bao nhiêu, cần mua/bán gì (`target`, `band_edge`, `contribution`, góp vốn một phần) | `GET /api/analytics/allocation` |
+| `earn.py` (N1) | Mỗi tài sản Earn: APR niêm yết, APR thực nhận 7d/30d (`earned / mean_balance × 365 / span_days`, kèm `n_obs`, `sufficient`; không đủ ≥ 90% cửa sổ hoặc có hố > 6 giờ thì `None`), $/ngày, thu nhập luỹ kế theo năm | `GET /api/analytics/earn` |
 | `cash_flows.py` | Đồng bộ lịch sử Binance, ghép chuyển khoản nội bộ (địa chỉ → `tx_hash` → heuristic) | chạy sau mỗi `record` |
-| `activity.py` | Dòng thời gian đọc được và sửa được của `cash_flows` | `GET`/`PATCH /api/cash-flows` |
+| `reconcile.py` (N2) | Phần dư số lượng Binance giữa hai snapshot không flow nào giải thích → trade suy luận hoặc "Unexplained"; tính lúc đọc, không lưu | qua `GET /api/cash-flows` |
+| `activity.py` | Dòng thời gian đọc được và sửa được của `cash_flows`, cộng item suy luận của `reconcile.py` | `GET`/`PATCH /api/cash-flows` |
 
 Mọi engine là hàm thuần trên dữ liệu thường; chỉ các loader chạm SQLite. Chỉ dùng numpy và stdlib.
 Công thức và thuật toán: [`SPEC.md`](SPEC.md).
@@ -103,7 +117,7 @@ Công thức và thuật toán: [`SPEC.md`](SPEC.md).
 | Nhóm | Route |
 |---|---|
 | Danh mục | `GET /api/portfolio` · `POST /api/portfolio/refresh` · `GET /api/portfolio/history` |
-| Phân tích | `GET /api/portfolio/attribution` · `GET /api/portfolio/pnl` · `GET /api/analytics/quant` · `GET /api/analytics/allocation` |
+| Phân tích | `GET /api/portfolio/attribution` · `GET /api/portfolio/pnl` · `GET /api/analytics/quant` · `GET /api/analytics/allocation` · `GET /api/analytics/earn` |
 | Dòng tiền | `GET /api/cash-flows` · `GET /api/cash-flows/{id}/candidates` · `PATCH /api/cash-flows/{id}` |
 | Cấu hình | `GET`/`POST /api/settings` · `POST /api/settings/allocation` · `POST /api/settings/test-binance` · `POST /api/settings/test-wallet` |
 | Khác | `POST /api/auth` · `GET /api/health` · `/api/docs` |
@@ -115,9 +129,12 @@ bind ngoài loopback khi chưa đặt token.
 
 **PWA** (Vue 3, Tailwind, Lightweight Charts): ba tab ở thanh dưới.
 - **Portfolio:** Net Worth, chip 24h, chart có scrub, card "Why it moved", danh sách tài sản theo
-  All / Binance / Personal (Coins | Wallets).
-- **Analytics:** Insights (TWR, Base 100, underwater) và thẻ Allocation.
-- **Activity:** dòng thời gian nạp/rút/chuyển/lãi, bộ lọc, hàng chờ xác nhận.
+  All / Binance / Personal (Coins | Wallets). Dòng trạng thái dưới hero báo sức khoẻ dữ liệu (tuổi
+  snapshot, "stale" khi quá 130 phút, số hố 24h) và pill lệch peg (N2.4, N3.3).
+- **Analytics:** các thẻ gập được (A1), hai nhóm "Over the period" (Why it moved, Performance, Risk)
+  và "Right now" (Earn income, Allocation).
+- **Activity:** dòng thời gian nạp/rút/chuyển/lãi, trade suy luận (tag "inferred") và dòng
+  "Unexplained", bộ lọc, hàng chờ xác nhận.
 - Chế độ riêng tư làm mờ mọi số tiền (`.priv`). Settings sửa Binance key, ví, tài sản manual; secret
   chỉ hiển thị dạng đã che.
 - Service worker chỉ đăng ký trên HTTPS hoặc `localhost`; truy cập qua HTTP trên LAN/Tailscale nên
@@ -131,8 +148,9 @@ nguồn, thời điểm và cờ `stale`. Mọi request không hợp lệ (sai k
 
 ### 3.7 CLI — `main.py`
 
-`show` · `record` · `chart` · `history` · `backfill` · `pnl` · `serve`. Sau mỗi `record`: ghi dòng
-tiền của tài sản manual, rồi đồng bộ lịch sử Binance. Lỗi ở hai bước này không làm hỏng snapshot.
+`show` · `record` · `chart` · `history` · `backfill` · `pnl` · `serve`. Trong `record`: kiểm peg
+stablecoin (`peg_checks`). Sau mỗi `record`: ghi dòng tiền của tài sản manual, rồi đồng bộ lịch sử
+Binance. Lỗi ở hai bước này không làm hỏng snapshot.
 
 ## 4. Bảo mật
 
@@ -167,8 +185,8 @@ tiền của tài sản manual, rồi đồng bộ lịch sử Binance. Lỗi �
 | `main.py` | CLI |
 | `config.py`, `models.py` | Cấu hình; `Holding`, `AssetRow`, `Portfolio` |
 | `clients/` | Binance, on-chain |
-| `services/` | `portfolio`, `db`, `manual`, `cash_flows`, `activity`, `backfill`, `resample`, `visualizer` |
-| `services/analytics/` | `attribution`, `pnl`, `quant`, `allocation` |
+| `services/` | `portfolio`, `db`, `manual`, `cash_flows`, `activity`, `reconcile`, `peg`, `backfill`, `resample`, `visualizer` |
+| `services/analytics/` | `attribution`, `pnl`, `quant`, `allocation`, `earn` |
 | `web_api.py`, `static/` | Dashboard: API + PWA |
 | `api_gateway.py` | Gateway public chỉ đọc |
 | `deploy/` | Hai unit systemd |

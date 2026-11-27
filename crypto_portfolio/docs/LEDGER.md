@@ -33,7 +33,7 @@ F2 `ee13944` · F3 `65caece` (đều 2026-11-25) · P0.6 `b6ee685` (2026-11-26).
 
 | ID | Task | Ưu tiên | Trạng thái | Bằng chứng / Ghi chú |
 |---|---|---|---|---|
-| P0.1 | Migration `PRAGMA user_version` + backup | P0 | DONE | `services/db.py` (`MIGRATIONS`, hiện v5), `tests/test_all.py` |
+| P0.1 | Migration `PRAGMA user_version` + backup | P0 | DONE | `services/db.py` (`MIGRATIONS`, hiện v7), `tests/test_all.py` |
 | P0.2 | `snapshot_sources`, `snapshots.trigger` | P0 | DONE | `tests/test_snapshot_sources.py` |
 | P0.3 | `detail`, `price_id` trong `snapshot_assets` | P0 | DONE | `tests/test_snapshot_sources.py` |
 | P0.4 | WAL | P0 | DONE | `tests/test_wal.py` |
@@ -115,10 +115,27 @@ phần `53b4309` (2026-11-26).
 
 | Task | Việc | Trạng thái | Ghi chú |
 |---|---|---|---|
-| A1 | Analytics gập được, hai nhóm | DONE | `static/` |
-| N1.1–N1.4 | Earn: APR niêm yết, APR thực nhận 7d/30d, thu nhập luỹ kế, thẻ "Earn income" | DONE | `services/analytics/earn.py`, `GET /api/analytics/earn`; AC "USDC ≈ 5.0%" chưa đo trên dữ liệu thật |
-| N2.1–N2.4 | Phần dư, trade suy luận, dòng "Unexplained", sức khoẻ dữ liệu trên dòng trạng thái | DONE | `services/reconcile.py`; chỉ Binance; AC 25–27/11 chưa chạy trên dữ liệu thật |
-| N3.1–N3.3 | Peg check: bảng `peg_checks`, ghi mỗi snapshot, pill cảnh báo | DONE | `services/peg.py`; schema v6 |
+| A1 | Analytics gập được, hai nhóm | DONE | `static/`; AC PASS trên máy chủ thật (2026-11-27) |
+| N1.1 | APR niêm yết `listed_apr` | DONE | v6 thêm cột; v7 (2026-11-27): `listed_apr` = base `latestAnnualPercentageRate` + bonus `tierAnnualPercentageRate` theo phần số dư nằm trong từng band (`effective_apr`), phần tách ở `listed_base_apr`, `listed_tiers`; `tests/test_tier_apr.py` |
+| N1.2 | APR thực nhận 7d/30d | PARTIAL | `realised_apr` trong `services/analytics/earn.py`. AC "USDC 7d ≈ 5.0% (±0.2 pp)" giữ nguyên (D20), chưa đạt: xem ghi chú N1.2 bên dưới |
+| N1.3–N1.4 | Thu nhập luỹ kế, `GET /api/analytics/earn` + thẻ "Earn income" | DONE | `earn_backfill_days` mặc định 1827 |
+| N2.1–N2.4 | Phần dư, trade suy luận, dòng "Unexplained", sức khoẻ dữ liệu trên dòng trạng thái | DONE | `services/reconcile.py`; chỉ Binance; AC 25–27/11 PASS trên dữ liệu thật (2026-11-27) |
+| N3.1–N3.3 | Peg check: bảng `peg_checks`, ghi mỗi snapshot, pill cảnh báo | DONE | `services/peg.py`; schema v6; AC PASS trên máy chủ thật (2026-11-27) |
+
+**Ghi chú N1.2 (kiểm 2026-11-27, `PARTIAL`):**
+- Công thức: `earned / mean_balance × 365 / span_days`, `earned` chỉ gồm reward có
+  `first < when <= last` (trong khoảng snapshot của cửa sổ).
+- Hôm nay realised 7d của USDC = `None`, `sufficient = false`: snapshot phủ 5.42/7 ngày (< 6.3,
+  `MIN_COVERAGE` 0.9) và hố lớn nhất 25.35 giờ (23/11 23:00:05Z → 25/11 00:21:21Z) > 6 giờ
+  (`MAX_GAP_HOURS`). Các hố > 6 giờ khác: 10.89, 7.26, 11.56, 10.92 giờ.
+- Bỏ qua hai điều kiện: **3.34%** = 13.736688 USDC / 27,666.72 USDC bình quân (122 snapshot) ×
+  365 / 5.4197 ngày.
+- Cửa sổ 7d đủ điều kiện sớm nhất **~2026-12-01 07:33 UTC**; dự kiến realised **~2.0–2.4%** vì
+  reward USDC giảm từ ~7.1–7.7 xuống ~1.5 USDC/ngày từ 23/11. AC 5.0% **có nguy cơ FAIL**.
+- Việc tiếp: tìm nguyên nhân reward giảm (khuyến mãi kết thúc, hay rút ~3,500 USDC ngày 24–25/11
+  làm mất bonus), rồi đo lại vào cửa sổ đủ điều kiện đầu tiên.
+- Giới hạn đã biết, chưa sửa code: band tier chồng nhau chưa có test; `earn_report` lấy
+  `listed_tiers` từ dòng đầu tiên có giá trị của tài sản.
 
 ## 4. Bản thẩm định 2026-11-25 và tình trạng hôm nay
 
@@ -163,6 +180,7 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | D17 | ~~Không lật trạng thái khi sắp xếp roadmap~~ | Hết hiệu lực: thay bằng lượt đối soát 2026-11-27 (D18) |
 | D18 | Tách tài liệu: `ROADMAP.md` (việc sắp làm), `docs/LEDGER.md` (trạng thái), `docs/SPEC.md` (đặc tả, giữ số mục). Trạng thái ghi theo code, ba mức DONE/PARTIAL/TODO | File cũ 1.790 dòng trộn ba vai trò và bảng trạng thái trễ so với code |
 | D19 | Dashboard chỉ truy cập qua LAN và Tailscale, không mở public; phương án Cloudflare Access để dành | Xem AUTH_SPEC |
+| D20 | Giữ nguyên định nghĩa và đích AC N1.2 (USDC 7d ≈ 5.0% ±0.2 pp) dù số đo dự kiến thấp hơn; ghi `PARTIAL` tới khi đo được cửa sổ 7d đủ điều kiện (2026-11-27) | Jean: không đổi AC để hợp số liệu; số thấp là tín hiệu cần tìm nguyên nhân |
 
 ## 6. Changelog
 
@@ -177,3 +195,4 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | 2026-11-27 | Thêm `DESIGN.md` (rút từ `static/`) và sơ đồ vị trí UI cho N1–N9. Thêm A1 (Analytics gập được, hai nhóm). Sửa N1.4 (thẻ Earn sang Analytics) và N2.4 (dùng dòng trạng thái sẵn có, không thêm badge). UI giữ tiếng Anh. |
 | 2026-11-27 | Xong code W4: A1, N1, N2, N3. Schema v6 (`snapshot_assets.listed_apr`, `peg_checks`). `earn_backfill_days` mặc định 365 → 1827. N2 thu hẹp về Binance (on-chain chờ F2.5). Test 595 → 613. |
 | 2026-11-27 | Tách `ROADMAP_LEDGER.md` thành ROADMAP / LEDGER / SPEC (D18); đối soát toàn bộ trạng thái với code. Sửa các dòng sai của bảng cũ: F3.B1 không phải DONE; F2.2–F2.4, F2.10, F2.11, M4.1–M4.6, M6.1–M6.4, M7.1–M7.5 thực tế đã xong. Dời test vào `tests/`, script một lần vào `scripts/archive/`. |
+| 2026-11-27 | Kiểm W4 trên máy chủ thật: A1, N2, N3 PASS; **N1.2 PARTIAL** (realised 7d USDC = `None` do 5.42/7 ngày + hố 25.35 giờ; bỏ qua điều kiện ra 3.34%; cửa sổ đủ điều kiện sớm nhất ~2026-12-01 07:33 UTC, dự kiến ~2.0–2.4%), D20. Schema v7 (`listed_base_apr`, `listed_tiers`): `listed_apr` gồm bonus tier Binance theo số dư. Test 613 → 619. Cập nhật ARCHITECTURE theo v7. |

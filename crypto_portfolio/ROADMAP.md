@@ -12,7 +12,7 @@
 |---|---|---|
 | **Phase 1** (P0, F1–F3) | Dữ liệu sạch nhịp 1h, backfill 5 năm, attribution, dòng tiền Binance, TWR / Base 100 / drawdown / volatility | Phần lõi xong. Còn lại ở §4. |
 | **Phase 2, W1–W3** (M4, M6, M7) | Tab Activity, tài sản manual (ví lạnh, staking), trợ lý Allocation | Xong. |
-| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | W4 (A1, N1–N3) đã code, **chưa chạy trên dữ liệu thật**: xem "Còn phải kiểm" cuối mục W4. W5 là việc kế tiếp. |
+| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | W4 xong code/test (2026-11-27, 619 test, schema v7): A1, N2, N3 PASS; **N1.2 PARTIAL** (APR thực nhận 7d chưa đủ dữ liệu), xem "Kết quả kiểm" cuối mục W4. W5 là việc kế tiếp. |
 | **W7, W8** (M5, M8) | Telegram, widget mobile | Hoãn (D16), §3. |
 
 Nguyên tắc không đổi cho mọi việc bên dưới: app chỉ **mô tả** hiện trạng, không phát tín hiệu
@@ -118,14 +118,27 @@ lệch peg > 0.3% có chip cảnh báo.
 | N3.2 | `record` ghi một dòng cho mỗi (stablecoin đang giữ, tham chiếu): `USDCUSDT` lấy từ ticker đã tải, giá USD từ DefiLlama. | Tham chiếu lỗi → dòng có `error`, `record` vẫn thành công và NAV vẫn ghim $1.00. |
 | N3.3 | Pill trên dòng trạng thái dưới hero: độ lệch = tham chiếu lệch nhiều nhất còn dùng được của snapshot mới nhất. | \|lệch\| > 0.3% → chip "USDC −0.4%"; dưới ngưỡng → ẩn; mọi tham chiếu của một coin lỗi → chip "không kiểm được". |
 
-**Còn phải kiểm trên máy chủ thật (W4):**
-- AC của N1: USDC 7d ra ≈ 5.0% (±0.2 pp). Cần ≥ 7 ngày snapshot liên tục, không hố quá 6 giờ.
-- AC của N2: 25–27/11 hiện thành trade suy luận. Hai vế lệch nhau quá 15% thì bị xếp vào
-  "Unexplained" (`TRADE_TOLERANCE` trong `services/reconcile.py`).
-- Tên trường APR của Binance (`latestAnnualPercentageRate`) và id DefiLlama của stablecoin
-  (`services/peg.py`): cột "listed" trống hoặc pill "peg unchecked" nghĩa là sai tên.
-- `earn_backfill_days` mặc định nay là 1827. Nếu `config.yaml` đang ghi 365 thì sửa tay; lần
-  `record` kế tiếp tải lùi reward (vài phút, nối tiếp được nếu bị ngắt).
+**Kết quả kiểm trên máy chủ thật (W4, 2026-11-27):** code/test xong, `pytest -q` 619 pass, DB v7.
+- A1, N2, N3: **PASS**. N2: hai vế lệch nhau quá 15% vẫn bị xếp vào "Unexplained"
+  (`TRADE_TOLERANCE` trong `services/reconcile.py`).
+- **N1.2: PARTIAL.** AC giữ nguyên (USDC 7d ≈ 5.0% ±0.2 pp, quyết định D20). Hôm nay realised 7d
+  của USDC trả `None`, `sufficient = false`: snapshot mới phủ 5.42/7 ngày (cần ≥ 6.3, `MIN_COVERAGE`)
+  và có hố 25.35 giờ (23/11 23:00:05Z → 25/11 00:21:21Z) > 6 giờ (`MAX_GAP_HOURS`); các hố > 6 giờ
+  khác: 10.89, 7.26, 11.56, 10.92 giờ. Bỏ qua hai điều kiện thì ra **3.34%**
+  (`earned / mean_balance × 365 / span_days` = 13.736688 USDC / 27,666.72 USDC bình quân trên 122
+  snapshot / 5.4197 ngày; chỉ tính reward có `first < when <= last`).
+  - Cửa sổ 7d đủ cả hai điều kiện sớm nhất: **~2026-12-01 07:33 UTC**. Dự kiến realised chỉ
+    **~2.0–2.4%**: reward USDC giảm từ ~7.1–7.7 xuống ~1.5 USDC/ngày từ 23/11.
+  - AC 5.0% **có nguy cơ FAIL**. Cần tìm nguyên nhân reward giảm: khuyến mãi kết thúc, hay rút
+    ~3,500 USDC ngày 24–25/11 làm mất bonus.
+- `listed_apr` (v7) = base `latestAnnualPercentageRate` + bonus `tierAnnualPercentageRate` tính
+  theo phần số dư nằm trong từng band (`effective_apr` trong `clients/binance.py`); phần tách lưu ở
+  `listed_base_apr`, `listed_tiers`. Tên hai trường đã kiểm trên response thật. 25,949 USDC ở
+  2.02% + 3% trên 5,000 đầu niêm yết 2.60%.
+- Giới hạn đã biết (chưa sửa code): band tier chồng nhau chưa có test; `earn_report` lấy
+  `listed_tiers` từ dòng đầu tiên có giá trị của tài sản.
+- `earn_backfill_days` mặc định 1827. Nếu `config.yaml` đang ghi 365 thì sửa tay; lần `record` kế
+  tiếp tải lùi reward (vài phút, nối tiếp được nếu bị ngắt).
 
 ### W5 — Giá vốn & phân tích
 
