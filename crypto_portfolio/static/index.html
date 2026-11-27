@@ -1073,7 +1073,9 @@
                           </span>
                           <span class="min-w-0 flex-1 truncate font-bold">{{ a.asset }}<span v-if="a.count > 1" class="font-semibold text-ink-3"> · {{ a.count }}×</span></span>
                           <span class="priv priv-soft text-ink-2">{{ a.amount < 0 ? '−' : '+' }}{{ fmt.qty(Math.abs(a.amount)) }}</span>
-                          <span class="priv priv-soft w-20 text-right font-bold">{{ fmt.money(Math.abs(a.value_usd)) }}</span>
+                          <!-- a trade leg shows its unit price (public, so not blurred); anything else its value -->
+                          <span v-if="a.priceText !== undefined" class="min-w-20 whitespace-nowrap text-right font-bold">{{ a.priceText }}</span>
+                          <span v-else class="priv priv-soft w-20 text-right font-bold">{{ fmt.money(Math.abs(a.value_usd)) }}</span>
                         </li>
                       </ul>
                     </transition>

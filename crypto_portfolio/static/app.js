@@ -1474,6 +1474,15 @@
           const names = (legs) => legs.map((leg) => leg.asset).join(' + ');
           title = 'Trade';   // the legs can be many: they go on the second line, which may truncate
           route = `${names(item.sold)} → ${names(item.bought)}`;
+          // What one coin cost is the fact a trade is read for; the total is already on the row.
+          // A leg worth $1 a unit is the money side: it has no price worth showing.
+          const priced = item.assets.map((leg) => {
+            const unit = leg.amount ? Math.abs(num(leg.value_usd) / leg.amount) : 0;
+            return { ...leg, priceText: unit > 0 && Math.abs(unit - 1) > 0.005 ? '@ ' + unitPrice(unit) : '' };
+          });
+          const coins = priced.filter((leg) => leg.priceText);
+          if (coins.length === 1) route += ' ' + coins[0].priceText;
+          item = { ...item, assets: priced };
         } else if (item.kind === 'unexplained') {
           const n = item.assets.length;
           title = 'Unexplained';
