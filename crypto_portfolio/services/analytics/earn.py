@@ -2,7 +2,10 @@
 
 Per asset currently in Earn:
 
-* **listed APR** - the rate Binance advertised in the newest snapshot (``snapshot_assets.listed_apr``);
+* **listed APR** - the rate Binance advertised in the newest snapshot (``snapshot_assets.listed_apr``):
+  the base rate plus the tier bonus pro rata of the balance inside its band, i.e. what the position
+  earns overall (``clients.binance.effective_apr``). ``listed_base_apr`` / ``listed_tiers`` are the
+  breakdown (base rate alone, bonus bands), so 2.60% can be read as 2.02% + 3% on the first 5,000;
 * **realised APR** over 7 and 30 days - rewards received (``cash_flows``) over the average Earn
   balance of the fetched snapshots, scaled to a year:
 
@@ -94,12 +97,17 @@ def earn_report(database: Database, stablecoins: Iterable[str] = ()) -> dict:
     for row in database.assets(latest.id):
         if row["source"] != BINANCE_EARN or row["quantity"] <= 0:
             continue
-        position = positions.setdefault(row["symbol"], {"quantity": 0.0, "value_usd": 0.0, "rated": 0.0, "weight": 0.0})
+        position = positions.setdefault(row["symbol"], {"quantity": 0.0, "value_usd": 0.0, "rated": 0.0, "weight": 0.0,
+                                                        "base": 0.0, "base_weight": 0.0, "tiers": []})
         position["quantity"] += row["quantity"]
         position["value_usd"] += row["value_usd"]
         if row.get("listed_apr") is not None:  # weighted by quantity across flexible + locked
             position["rated"] += row["listed_apr"] * row["quantity"]
             position["weight"] += row["quantity"]
+        if row.get("listed_base_apr") is not None:
+            position["base"] += row["listed_base_apr"] * row["quantity"]
+            position["base_weight"] += row["quantity"]
+        position["tiers"] = position["tiers"] or row.get("listed_tiers") or []  # flexible only: one row has them
 
     total_per_day = 0.0
     for symbol, position in sorted(positions.items(), key=lambda item: -item[1]["value_usd"]):
@@ -118,6 +126,8 @@ def earn_report(database: Database, stablecoins: Iterable[str] = ()) -> dict:
             "quantity": position["quantity"],
             "value_usd": round(position["value_usd"], 2),
             "listed_apr": position["rated"] / position["weight"] if position["weight"] > 0 else None,
+            "listed_base_apr": position["base"] / position["base_weight"] if position["base_weight"] > 0 else None,
+            "listed_tiers": position["tiers"],
             "realised": realised,
             "usd_per_day": round(per_day, 4) if per_day is not None else None,
         })

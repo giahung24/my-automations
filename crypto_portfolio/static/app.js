@@ -813,9 +813,19 @@
       }
 
       const aprText = (apr) => (apr === null || apr === undefined ? '—' : (num(apr) * 100).toFixed(2) + '%');
+      // `listed_apr` already includes the tier bonus, pro rata of the balance inside each band
+      // (clients/binance.py effective_apr); this spells out how: "2.02% base + 3.00% on 0–5,000 USDC".
+      const listedBreakdown = (a) => {
+        const tiers = a.listed_tiers || [];
+        if (a.listed_apr === null || !tiers.length) return '';
+        const band = (t) => `${aprText(t.apr)} on ${num(t.min).toLocaleString()}–${num(t.max).toLocaleString()} ${a.symbol}`;
+        const base = a.listed_base_apr === null || a.listed_base_apr === undefined ? '' : aprText(a.listed_base_apr) + ' base + ';
+        return `Listed rate earned overall: ${base}${tiers.map(band).join(' + ')} (bonus only on the balance inside each band)`;
+      };
       const earnRows = computed(() => ((earn.data && earn.data.assets) || []).map((a) => ({
         symbol: a.symbol,
         listedText: a.listed_apr === null ? 'no listed rate' : 'listed ' + aprText(a.listed_apr),
+        listedHint: listedBreakdown(a),
         windows: earn.data.windows.map((days) => {
           const w = a.realised[days + 'd'] || {};
           return { id: days + 'd', text: aprText(w.apr), sufficient: !!w.sufficient,

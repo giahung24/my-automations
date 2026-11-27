@@ -297,7 +297,7 @@ def test_assets_return_detail_and_price_id(tmp_path):
     assert database.assets(snapshot_id) == [{
         "symbol": "ETH", "source": ONCHAIN, "quantity": 2.0, "price_usd": 3000.0,
         "value_usd": 6000.0, "detail": "base/cold", "price_id": "coingecko:ethereum",
-            "listed_apr": None}]
+            "listed_apr": None, "listed_base_apr": None, "listed_tiers": []}]
 
 
 def test_portfolio_from_db_returns_locations(tmp_path):

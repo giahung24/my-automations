@@ -155,7 +155,8 @@ def portfolio_from_db(database, min_value: float = 0.0) -> Portfolio | None:
     holdings = [
         Holding(symbol=row["symbol"], source=row["source"], quantity=row["quantity"],
                 price_usd=row["price_usd"], detail=row.get("detail") or "",
-                price_id=row.get("price_id") or "", listed_apr=row.get("listed_apr"))
+                price_id=row.get("price_id") or "", listed_apr=row.get("listed_apr"),
+                listed_base_apr=row.get("listed_base_apr"), listed_tiers=row.get("listed_tiers") or [])
         for row in database.assets(snapshot.id)
     ]
     portfolio = aggregate(holdings, min_value)

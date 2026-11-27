@@ -632,7 +632,7 @@ def backups(path):
 
 
 def test_migrations_list_defines_v3():
-    assert SCHEMA_VERSION == len(MIGRATIONS) == 6  # v6: listed_apr + peg_checks (N1.1, N3.1)
+    assert SCHEMA_VERSION == len(MIGRATIONS) == 7  # v7: listed_base_apr + listed_tiers (tier APR)
 
 
 def test_fresh_db_is_created_at_latest_version_without_backup(tmp_path):

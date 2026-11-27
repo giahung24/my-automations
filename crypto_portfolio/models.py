@@ -75,7 +75,14 @@ class Holding:
     price_usd: float = 0.0
     detail: str = ""  # chain / wallet label (on-chain rows), asset label (manual rows)
     price_id: str = ""
-    listed_apr: float | None = None  # Simple Earn only: the rate Binance advertises, as a fraction
+    # Simple Earn only, as fractions. `listed_apr` is what the position earns overall: the base
+    # rate plus each tier bonus on the part of the balance inside its band (clients/binance.py
+    # `effective_apr`). The breakdown keeps Binance's own figures: `listed_base_apr` is
+    # `latestAnnualPercentageRate`, `listed_tiers` the parsed `tierAnnualPercentageRate` bands,
+    # [{"min": 0.0, "max": 5000.0, "apr": 0.03}] (empty when there is no bonus).
+    listed_apr: float | None = None
+    listed_base_apr: float | None = None
+    listed_tiers: list[dict] = field(default_factory=list)
 
     @property
     def value_usd(self) -> float:

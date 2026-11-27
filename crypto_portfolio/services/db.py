@@ -21,6 +21,7 @@ while the collector is writing, instead of failing with `database is locked`.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -166,6 +167,15 @@ CREATE TABLE IF NOT EXISTS peg_checks (
 );
 """
 
+# v7: the breakdown of `listed_apr`, which now includes Binance's tier bonus (the rate earned
+# overall). `listed_base_apr` is `latestAnnualPercentageRate`; `listed_tiers` the bonus bands as
+# JSON, [{"min": 0, "max": 5000, "apr": 0.03}]. NULL on older rows (their `listed_apr` was the
+# base rate alone).
+SCHEMA_V7 = """
+ALTER TABLE snapshot_assets ADD COLUMN listed_base_apr REAL;
+ALTER TABLE snapshot_assets ADD COLUMN listed_tiers TEXT;
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
@@ -174,6 +184,7 @@ MIGRATIONS: list[str] = [
     SCHEMA_V4,  # v4
     SCHEMA_V5,  # v5
     SCHEMA_V6,  # v6
+    SCHEMA_V7,  # v7
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
@@ -436,11 +447,12 @@ class Database:
     def assets(self, snapshot_id: int) -> list[dict]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT symbol, source, quantity, price_usd, value_usd, detail, price_id, listed_apr "
+                "SELECT symbol, source, quantity, price_usd, value_usd, detail, price_id, listed_apr, "
+                "listed_base_apr, listed_tiers "
                 "FROM snapshot_assets WHERE snapshot_id = ? ORDER BY value_usd DESC",
                 (snapshot_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [{**dict(row), "listed_tiers": _tiers(row["listed_tiers"])} for row in rows]
 
     def failed_snapshots_since(self, timestamp: str, hours: int = 24) -> int:
         """Snapshots taken in the `hours` up to `timestamp` in which at least one source failed."""
@@ -502,15 +514,25 @@ def _insert_snapshot(connection: sqlite3.Connection, portfolio: Portfolio, trigg
     connection.executemany(
         """INSERT INTO snapshot_assets
                (snapshot_id, symbol, source, quantity, price_usd, value_usd, detail, price_id,
-                listed_apr)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                listed_apr, listed_base_apr, listed_tiers)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         [
             (snapshot_id, h.symbol, h.source, float(h.quantity), float(h.price_usd),
-             float(h.value_usd), h.detail or "", h.price_id or "", h.listed_apr)
+             float(h.value_usd), h.detail or "", h.price_id or "", h.listed_apr, h.listed_base_apr,
+             json.dumps(h.listed_tiers) if h.listed_tiers else None)
             for h in portfolio.holdings
         ],
     )
     return snapshot_id
+
+
+def _tiers(raw: str | None) -> list[dict]:
+    """`snapshot_assets.listed_tiers` back to a list (empty for NULL or a damaged value)."""
+    try:
+        tiers = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    return tiers if isinstance(tiers, list) else []
 
 
 def is_hole(before: float, value: float, after: float) -> bool:

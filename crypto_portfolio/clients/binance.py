@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -280,10 +281,13 @@ class BinanceClient:
         for row in self._paged("/sapi/v1/simple-earn/flexible/position"):
             quantity = _to_float(row.get("totalAmount"))
             if quantity > 0:
+                base = _to_float(row.get("latestAnnualPercentageRate")) or None
+                tiers = parse_tiers(row.get("tierAnnualPercentageRate"))
                 holdings.append(
                     Holding(symbol=str(row.get("asset", "")).upper(), source=BINANCE_EARN,
                             quantity=quantity, detail="flexible",
-                            listed_apr=_to_float(row.get("latestAnnualPercentageRate")) or None)
+                            listed_apr=effective_apr(base, tiers, quantity),
+                            listed_base_apr=base, listed_tiers=tiers)
                 )
         return holdings
 
@@ -444,6 +448,52 @@ class BinanceClient:
                 cache[holding.symbol] = self.price_usd(holding.symbol, stablecoins)
             holding.price_usd = cache[holding.symbol]
         return holdings, errors
+
+
+# Simple Earn flexible rows carry two rates (verified live, 2026-11-27):
+#   "latestAnnualPercentageRate": "0.02017994"                 base rate, on the whole balance
+#   "tierAnnualPercentageRate":   {"0-5000USDC": "0.03000000"}  bonus, on the part inside a band
+# The tier field is left out when the product pays no bonus. The bonus is paid separately (reward
+# type BONUS) and only on the balance inside the band: with 25,949 USDC the BONUS reward was
+# 0.41095 USDC/day = 5,000 x 3% / 365, not 25,949 x 3% / 365.
+TIER_BAND = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*[A-Za-z0-9]*\s*$")
+
+
+def parse_tiers(raw) -> list[dict]:
+    """`tierAnnualPercentageRate` -> [{"min": 0.0, "max": 5000.0, "apr": 0.03}], lowest band first.
+
+    A key that is not a plain `<min>-<max><ASSET>` band, or a rate that is not a number, is
+    skipped rather than guessed: the position then lists less than it may earn, never more.
+    """
+    if not isinstance(raw, dict):
+        return []
+    tiers = []
+    for band, rate in raw.items():
+        match = TIER_BAND.match(str(band))
+        try:
+            apr = float(rate)
+        except (TypeError, ValueError):
+            continue
+        if match and apr > 0:
+            low, high = float(match.group(1)), float(match.group(2))
+            if high > low:
+                tiers.append({"min": low, "max": high, "apr": apr})
+    return sorted(tiers, key=lambda tier: tier["min"])
+
+
+def effective_apr(base: float | None, tiers: list[dict], quantity: float) -> float | None:
+    """What a balance of `quantity` earns overall: base + each band's bonus pro rata.
+
+        APR = base + sum(tier_apr x overlap(balance, band) / balance)
+
+    So the listed figure is the rate actually received on this position, not the headline of
+    the first band: 1,000 USDC at 2% + 3% on 0-5,000 lists 5%, 25,000 USDC lists 2.6%. With no
+    tier it is the base rate; with neither it is None ("no listed rate").
+    """
+    if not tiers or quantity <= 0:
+        return base
+    bonus = sum(tier["apr"] * max(0.0, min(quantity, tier["max"]) - tier["min"]) for tier in tiers) / quantity
+    return (base or 0.0) + bonus
 
 
 def _to_float(value) -> float:

@@ -87,6 +87,11 @@ clients, aggregation and SQLite history. Three tabs:
 - **Analytics** - time-weighted return, base-100 comparison with BTC and ETH, drawdown and
   volatility, and the allocation assistant (drift against your targets and the orders that
   would close it; off until enabled).
+  The Earn card's "listed" rate is what a Simple Earn position earns overall: Binance's base
+  rate (`latestAnnualPercentageRate`) plus each tier bonus (`tierAnnualPercentageRate`, bands
+  such as `{"0-5000USDC": "0.03"}`) pro rata of the balance inside its band. 25,949 USDC at
+  2.02% + 3% on the first 5,000 lists 2.60%, not 5.02%; a balance under 5,000 lists 5.02%.
+  Hover the rate for the breakdown. A position with no tier lists the base rate.
 - **Activity** - deposits, withdrawals, internal transfers and Earn rewards as a timeline,
   with a queue of the items that need your confirmation.
 
