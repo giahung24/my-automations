@@ -26,6 +26,7 @@ key Binance chỉ đọc; `GET` không gọi mạng; gateway public không thêm
 | N4 | Tỷ lệ "tracked" của từng coin có hợp lý không; 33 lần nạp crypto có giá ngày nạp đúng không; stderr của `record` có `warning: binance convert history` không. |
 | N8 | Đường nét đứt "vốn đã nạp" trên chart: chưa được thấy vẽ thật (dữ liệu thử có NAV đứng yên). Xem ở khoảng 1M hoặc 1Y. |
 | N5 | Notebook mẫu chưa chạy thử (cần pandas, matplotlib cài riêng). |
+| Sao lưu | Bản sao cục bộ đã có test. Phần đẩy lên cloud qua `rclone` chưa chạy với tài khoản thật: sau khi đặt `backup.remote`, bấm "Back up now" trong Settings và xem dòng "Off-site". Thử khôi phục một bản ít nhất một lần. |
 
 ## 3. Ứng viên cải thiện, chưa xếp lịch
 
@@ -33,7 +34,6 @@ Rút từ các giới hạn đã biết của Phase 3. Lấy ra làm khi có lý
 
 | Việc | Vì sao | Cỡ |
 |---|---|---|
-| Sao lưu DB định kỳ | Ghi chú (N9) là dữ liệu duy nhất không tải lại được; hiện chỉ có bản `.bak` lúc migrate và `main.py export`. | S |
 | Heartbeat khi cron dừng (M5.5, đang hoãn) | Snapshot bị lỡ là mất vĩnh viễn; cảnh báo "stale" chỉ thấy khi mở app. | S |
 | Dòng tiền on-chain (F2.5) | Mở khoá ba thứ: "Net deposited" đúng cho ví nạp thẳng từ ngoài, đối soát ngoài Binance, giá vốn cho coin mua on-chain. | M/L |
 | Cặp đã huỷ niêm yết | Coin từng mua bằng BUSD thiếu giá vốn. Lấy danh sách cặp từ `exchangeInfo` thay vì ticker hiện tại. | S |

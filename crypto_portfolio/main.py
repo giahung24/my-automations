@@ -171,6 +171,13 @@ def cmd_record(args, config) -> int:
             print(f"  warning: {error}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(f"  warning: trade sync failed: {exc}", file=sys.stderr)
+    try:  # last, so the copy holds what was just synced; never fails the snapshot either
+        from services.backup import run_if_due
+        status = run_if_due(config, database)
+        if status and status["error"]:
+            print(f"  warning: {status['error']}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  warning: backup failed: {exc}", file=sys.stderr)
     if args.verbose:
         from services.visualizer import money
         print(f"snapshot #{snapshot_id} recorded: {money(portfolio.total_usd)} at {portfolio.timestamp}")
@@ -244,6 +251,19 @@ def render_pnl(report: dict) -> str:
             + ("" if window["complete"] else "  (history shorter than the window)")
         )
     return "\n".join(lines) + "\n"
+
+
+def cmd_backup(args, config) -> int:
+    """Take a backup now (and upload it when `backup.remote` is set), whatever the schedule says."""
+    from services.backup import run_backup
+
+    status = run_backup(config, Database(config.db_path))
+    if status["file"]:
+        where = {True: f", uploaded to {status['remote']}", False: ", NOT uploaded", None: ""}[status["uploaded"]]
+        print(f"{status['file']} ({status['size'] / 1e6:.1f} MB){where}")
+    if status["error"]:
+        print(status["error"], file=sys.stderr)
+    return 1 if status["error"] else 0
 
 
 def cmd_export(args, config) -> int:
@@ -397,6 +417,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="window lengths in days (default: 7 30)")
     pnl.add_argument("--json", action="store_true")
     pnl.set_defaults(func=cmd_pnl)
+
+    backup = subparsers.add_parser("backup", parents=[common],
+                                   help="back up the history database now (local copy, plus rclone when configured)")
+    backup.set_defaults(func=cmd_backup)
 
     export = subparsers.add_parser("export", parents=[common],
                                    help="write one CSV per analyst view (positions, returns, flows, Earn, trades)")

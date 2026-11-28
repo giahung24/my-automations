@@ -219,6 +219,10 @@
           </span>
           <span aria-hidden="true">·</span>
           <time :datetime="portfolio.timestamp" :title="fmt.fullDate(portfolio.timestamp)" :class="{ 'text-warn': dataStale }">updated {{ updatedAgo }}<template v-if="dataStale"> · stale</template></time>
+          <template v-if="portfolio.backup_overdue">
+            <span aria-hidden="true">·</span>
+            <button type="button" class="link-btn hit text-warn" @click="openSettings">no recent backup</button>
+          </template>
           <template v-if="portfolio.gaps_24h">
             <span aria-hidden="true">·</span>
             <span class="text-warn" title="Snapshots of the last 24 hours in which at least one source failed">{{ portfolio.gaps_24h }} {{ portfolio.gaps_24h === 1 ? 'gap' : 'gaps' }} in 24h</span>
@@ -1553,6 +1557,51 @@
                   <button v-if="!manualDraft" type="button" class="btn btn-secondary mt-4 w-full" @click="newManual">
                     <svg class="icon icon-sm"><use href="#i-plus"/></svg>Add manual asset
                   </button>
+                </section>
+
+                <!-- Backups: the history cannot be fetched again, the diary least of all -->
+                <section class="card mt-4 p-4" aria-labelledby="backup-title" :aria-busy="backup.busy">
+                  <div class="flex items-center gap-3">
+                    <span class="grid size-10 flex-none place-items-center rounded-xl bg-surface-3 text-ink"><svg class="icon"><use href="#i-copy"/></svg></span>
+                    <div class="min-w-0 flex-1">
+                      <h3 id="backup-title" class="font-extrabold">Backups</h3>
+                      <p class="text-[12px] font-semibold text-ink-3">A copy of your history and notes</p>
+                    </div>
+                    <span v-if="backupView" class="status" :class="backupView.tone">{{ backupView.word }}</span>
+                  </div>
+
+                  <template v-if="backupView">
+                    <dl class="mt-3 space-y-1.5 text-[13px]">
+                      <div class="flex gap-3"><dt class="w-20 flex-none font-semibold text-ink-3">Latest</dt>
+                        <dd class="min-w-0 break-words font-semibold num">{{ backupView.latest }}</dd></div>
+                      <div class="flex gap-3"><dt class="w-20 flex-none font-semibold text-ink-3">Schedule</dt>
+                        <dd class="min-w-0 font-semibold">{{ backupView.schedule }}</dd></div>
+                      <div class="flex gap-3"><dt class="w-20 flex-none font-semibold text-ink-3">Off-site</dt>
+                        <dd class="min-w-0 break-words font-semibold">{{ backupView.remote }}</dd></div>
+                    </dl>
+                    <div v-if="backupView.error" class="notice mt-3" role="alert">
+                      <svg class="icon icon-sm"><use href="#i-alert"/></svg>
+                      <span class="min-w-0 break-words">{{ backupView.error }}</span>
+                    </div>
+                    <p v-if="!backup.data.remote" class="hint mt-3">
+                      Copies stay on this machine. To also send them to Google Drive, Mega, iCloud Drive or another cloud,
+                      set up <span class="font-mono">rclone</span> and put its destination in
+                      <span class="font-mono">backup.remote</span> of config.yaml.
+                    </p>
+                  </template>
+                  <p v-else-if="backup.error" class="field-msg error mt-3" role="alert">
+                    <svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ backup.error }}</span>
+                  </p>
+                  <div v-else class="skeleton mt-3 h-16 w-full"></div>
+
+                  <div class="mt-4 flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-secondary" @click="backupNow()" :disabled="backup.busy">
+                      {{ backup.busy ? 'Backing up…' : 'Back up now' }}
+                    </button>
+                    <a v-if="backup.data && backup.data.latest" class="btn btn-ghost no-underline" href="/api/backup/download" download>
+                      Download latest
+                    </a>
+                  </div>
                 </section>
 
                 <p class="mt-4 px-1 text-[12px] leading-relaxed text-ink-3">

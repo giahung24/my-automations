@@ -111,6 +111,7 @@ migration chạy trong một transaction và sao lưu file trước. Phase 3 th�
 | `reconcile.py` (N2, N4) | Phần dư số lượng Binance giữa hai snapshot sau khi trừ flow và trade thật → trade suy luận hoặc "Unexplained" (tính lúc đọc, không lưu); cộng item cho trade thật, gộp theo lệnh | qua `GET /api/cash-flows` |
 | `trades.py` (N4) | Sau mỗi `record`: fill Spot (`myTrades` theo cặp) và Convert vào bảng `trades`; lần đầu định giá lại dòng tiền cũ theo giá đóng cửa ngày | collector |
 | `cost_basis.py` (N4) | Giá vào bình quân theo coin trên toàn danh mục, PnL chưa thực hiện trên phần sổ giải thích được (`tracked`), cờ `estimated`, bảng điểm các lần mua | `GET /api/analytics/cost-basis` |
+| `backup.py` | Sao lưu DB: bản sao nhất quán (backup API của SQLite, kiểm `integrity_check`), gzip vào `backups/` cạnh DB, giữ `backup.keep` bản; đẩy lên cloud bằng `rclone copy` khi có `backup.remote` (app không giữ thông tin đăng nhập cloud) | chạy sau `record` mỗi `backup.every_hours`; `GET`/`POST /api/backup`, `GET /api/backup/download` |
 | `activity.py` | Dòng thời gian đọc được và sửa được của `cash_flows` (reward Earn gộp theo ngày trong SQL), cộng trade thật, item suy luận của `reconcile.py` (chỉ 90 ngày gần nhất) và ghi chú của từng ngày | `GET`/`PATCH /api/cash-flows` |
 
 Mọi engine là hàm thuần trên dữ liệu thường; chỉ các loader chạm SQLite. Chỉ dùng numpy và stdlib.
@@ -126,6 +127,7 @@ Công thức và thuật toán: [`SPEC.md`](SPEC.md).
 | Phân tích | `GET /api/portfolio/attribution` · `GET /api/portfolio/pnl` · `GET /api/analytics/quant` · `GET /api/analytics/allocation` · `GET /api/analytics/earn` · `GET /api/analytics/cost-basis` |
 | Dòng tiền | `GET /api/cash-flows` · `GET /api/cash-flows/{id}/candidates` · `PATCH /api/cash-flows/{id}` |
 | Nhật ký | `PUT /api/notes/{day}` (body rỗng = xoá) |
+| Sao lưu | `GET /api/backup` (trạng thái) · `POST /api/backup` (sao lưu ngay) · `GET /api/backup/download` (tải bản mới nhất) |
 | Cấu hình | `GET`/`POST /api/settings` · `POST /api/settings/allocation` · `POST /api/settings/test-binance` · `POST /api/settings/test-wallet` |
 | Khác | `POST /api/auth` · `GET /api/health` · `/api/docs` |
 
@@ -155,9 +157,10 @@ nguồn, thời điểm và cờ `stale`. Mọi request không hợp lệ (sai k
 
 ### 3.7 CLI — `main.py`
 
-`show` · `record` · `chart` · `history` · `backfill` · `pnl` · `export` · `serve`. Trong `record`:
+`show` · `record` · `chart` · `history` · `backfill` · `pnl` · `export` · `backup` · `serve`. Trong `record`:
 kiểm peg stablecoin (`peg_checks`). Sau mỗi `record`: ghi dòng tiền của tài sản manual, đồng bộ lịch
-sử Binance, rồi đồng bộ lệnh Spot và Convert. Lỗi ở ba bước này không làm hỏng snapshot. `export`
+sử Binance, đồng bộ lệnh Spot và Convert, rồi sao lưu nếu tới hạn. Lỗi ở các bước này không làm
+hỏng snapshot. `export`
 ghi một CSV cho mỗi view `v_*` và `notes.csv`.
 
 ## 4. Bảo mật

@@ -2016,6 +2016,45 @@
         showSecret.value = false;
       }
 
+      // -- backups ---------------------------------------------------------------
+      const backup = reactive({ data: null, busy: false, error: '' });
+      async function loadBackup() {
+        try {
+          backup.data = await api('/api/backup');
+          backup.error = '';
+        } catch (error) {
+          handleError(error, { silent: true });
+          backup.error = error.status === 401 ? '' : 'Could not read the backup status: ' + error.message;
+        }
+      }
+      async function backupNow() {
+        backup.busy = true;
+        try {
+          backup.data = await api('/api/backup', { method: 'POST' });
+          backup.error = '';
+          portfolio.value = { ...portfolio.value, backup_overdue: backup.data.overdue };
+        } catch (error) {
+          handleError(error, { silent: true });
+          backup.error = 'The backup did not run: ' + error.message;
+        } finally {
+          backup.busy = false;
+        }
+      }
+      const backupView = computed(() => {
+        const b = backup.data;
+        if (!b) return null;
+        const run = b.last_run;
+        const error = b.config_error || (run && run.error) || '';
+        const state = !b.enabled ? ['Off', ''] : error ? ['Needs a look', 'warn'] : b.overdue ? ['Overdue', 'warn'] : b.latest ? ['Up to date', 'ok'] : ['None yet', 'warn'];
+        return {
+          word: state[0], tone: state[1], error,
+          latest: b.latest ? `${fmt.ago(b.latest_at, nowMs.value)} · ${(num(b.latest_size) / 1e6).toFixed(1)} MB · ${b.count} kept` : 'No backup yet',
+          schedule: b.enabled ? `every ${b.every_hours} h, after a snapshot · newest ${b.keep} kept` : 'off (backup.enabled is false in config.yaml)',
+          remote: !b.remote ? 'none, local copies only'
+            : `${b.remote}${run && run.uploaded === true ? ' · last upload worked' : run && run.uploaded === false ? ' · last upload failed' : ''}`,
+        };
+      });
+
       async function openSettings() {
         closePeek({ restoreFocus: false });
         lastFocus = document.activeElement;
@@ -2023,6 +2062,7 @@
         document.body.classList.add('sheet-open');
         await nextTick();
         if (sheetClose.value) sheetClose.value.focus();
+        loadBackup();
         try {
           populateForm(await api('/api/settings'));
         } catch (error) {
@@ -2535,6 +2575,7 @@
         why, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
         folds, toggleFold, foldSums, earn, earnRows, earnGapNote, earnLife, earnMessage, dataStale,
         noteEdit, openNote, closeNote, saveNote, whyNotes,
+        backup, backupView, backupNow,
         basis, basisRows, basisBy, basisTrend, basisBuys, basisMoreBuys, basisBenchNote, basisMessage,
         insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
         alloc, allocEnabled, allocReady, allocRows, allocActions, allocMessage, loadAllocation, toggleAllocation,

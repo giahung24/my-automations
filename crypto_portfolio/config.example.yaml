@@ -78,6 +78,17 @@ cash_flows:
   sync_fiat: true           # bank deposits/withdrawals and card purchases
   sync_p2p: true            # P2P buy/sell orders
 
+# Backups of the history database. A consistent copy is taken after a `record` once every
+# `every_hours`, gzipped into `dir`, and the newest `keep` are kept. Set `remote` to an rclone
+# destination to also send each copy off-site (see README, "Backups").
+backup:
+  enabled: true
+  dir: ""                   # empty = a "backups" folder next to the database
+  every_hours: 24
+  keep: 7
+  remote: ""                # e.g. "gdrive:crypto-backups" or "mega:crypto-backups"
+  remote_keep_days: 0       # delete remote copies older than this many days; 0 = keep all
+
 # Balances no API can read: BTC on a hardware wallet, a validator, another exchange (Epic M6).
 # `label` is unique and keys the history (snapshots, cash flows) - avoid renaming it.
 # `linked_wallet` (optional) names a wallet configured above that is the SAME device, e.g. the

@@ -205,6 +205,40 @@ and `trigger = 'backfill'`: they are drawn on the chart but never used as the la
 as a 24h-change reference, or by the hole heuristic. Re-running replaces them; months that
 already have fetched snapshots are skipped. `--dry-run` prints the series without writing.
 
+## Backups
+
+The history cannot be fetched again: a missed snapshot is gone, and the diary notes exist nowhere
+else. After a `record`, once every `backup.every_hours` (24 by default), the collector takes a
+consistent copy of the database, checks it, gzips it into a `backups` folder next to the database
+and keeps the newest `backup.keep` (7). Settings → Backups shows the state, takes one on demand and
+lets you download the newest copy to your phone. `python main.py backup` does the same from a shell.
+
+**Off-site copy.** Set `backup.remote` in `config.yaml` to an [rclone](https://rclone.org)
+destination and every backup is also sent there. rclone holds the credentials; this app never
+sees them.
+
+```bash
+sudo apt install rclone            # or https://rclone.org/install/
+rclone config                      # add a remote, e.g. "gdrive" (Google Drive) or "mega"
+rclone lsd gdrive:                 # must list your folders before going further
+```
+
+```yaml
+backup:
+  remote: "gdrive:crypto-backups"  # <remote>:<folder>
+  remote_keep_days: 90             # optional: prune remote copies older than this
+```
+
+Run the collector as the same user that ran `rclone config`: the remote lives in that user's
+`~/.config/rclone/rclone.conf`. On a machine with no browser, `rclone config` explains how to
+finish a Google sign-in from another computer (`rclone authorize`). The copy holds balances and
+wallet addresses in clear: on a cloud that is not end-to-end encrypted, wrap the remote in an
+rclone `crypt` remote and point `backup.remote` at that one.
+
+**Restore.** Stop the dashboard and the cron job, then
+`gunzip -c backups/portfolio-<stamp>.db.gz > portfolio_history.db`, remove any
+`portfolio_history.db-wal` / `-shm` left beside it, and start them again.
+
 ## Failure behaviour
 
 Every source degrades on its own. A dead RPC, a geo-blocked host, an expired key or a

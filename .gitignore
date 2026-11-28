@@ -8,6 +8,7 @@ credentials/
 *.json
 !crypto_portfolio/static/manifest.json
 !crypto_portfolio/.impeccable/design.json
+crypto_portfolio/backups/
 *.pickle
 token.pickle
 client_secret_*.json

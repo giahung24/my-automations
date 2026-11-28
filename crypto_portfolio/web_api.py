@@ -77,6 +77,7 @@ from services.analytics.attribution import (
     reference_snapshot,
 )
 from services.analytics.cost_basis import cost_basis_report
+from services.backup import backup_files, backup_status, run_backup
 from services.analytics.earn import earn_report
 from services.analytics.pnl import add_net_deposited, pnl_report
 from services.analytics.quant import quant_report
@@ -411,6 +412,8 @@ def portfolio_payload(portfolio: Portfolio, *, origin: str, database: Database,
         peg=peg_warnings(portfolio.peg_checks),  # N3: empty while every stablecoin held is on peg
         # N2.4: snapshots of the last 24h in which a source failed (the holes of the chart)
         gaps_24h=database.failed_snapshots_since(portfolio.timestamp, hours=24) if origin != "empty" else 0,
+        # no backup for two periods: said on the status line, quiet otherwise
+        backup_overdue=origin != "empty" and backup_status(config, database)["overdue"],
     )
     return data
 
@@ -799,6 +802,30 @@ def create_app(
                                    limit=limit, tz_offset=tz_offset)
         except ActivityError as exc:
             raise HTTPException(exc.status, exc.message) from exc
+
+    @app.get("/api/backup")
+    def backup_state():
+        """The newest local backup, the last run and its error, whether one is overdue. No network."""
+        cfg = config()
+        return backup_status(cfg, Database(cfg.db_path))
+
+    @app.post("/api/backup")
+    def backup_now():
+        """Take a backup now and, when `backup.remote` is set, upload it with rclone."""
+        cfg = config()
+        database = Database(cfg.db_path)
+        with app.state.refresh_lock:   # not while a refresh is recording, and never two at once
+            run_backup(cfg, database)
+        return backup_status(cfg, database)
+
+    @app.get("/api/backup/download")
+    def backup_download():
+        """The newest local backup as a file, to keep a copy on the device asking for it."""
+        cfg = config()
+        files = backup_files(cfg.backup_dir)
+        if not files:
+            raise HTTPException(404, "No backup yet: take one first.")
+        return FileResponse(files[0], media_type="application/gzip", filename=files[0].name)
 
     @app.put("/api/notes/{day}")
     def put_note(body: NoteIn, day: str = FastPath(pattern=r"^\d{4}-\d{2}-\d{2}$")):

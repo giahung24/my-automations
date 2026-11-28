@@ -6,6 +6,7 @@ in the environment (or a ``.env`` next to this file) always win over it.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from collections.abc import Iterable
 from copy import deepcopy
@@ -125,6 +126,16 @@ DEFAULTS = {
         "max_workers": 8,          # parallel chain / wallet fetches
         "stablecoins": ["USDT", "USDC", "FDUSD", "DAI", "TUSD", "USDP", "PYUSD", "USDE"],
     },
+    # Backups of the SQLite history (services/backup.py). Local copies by default; `remote` is an
+    # rclone destination ("gdrive:crypto-backups") for an off-site copy.
+    "backup": {
+        "enabled": True,
+        "dir": "",                 # empty = a `backups` folder next to the database
+        "every_hours": 24,
+        "keep": 7,                 # local copies kept
+        "remote": "",              # rclone remote:path; empty = local only
+        "remote_keep_days": 0,     # delete remote copies older than this; 0 = keep them all
+    },
     # Epic F2 (docs/SPEC.md §3.8): deposit / withdrawal / fiat / P2P history from Binance.
     "cash_flows": {
         "enabled": True,
@@ -226,6 +237,49 @@ class CashFlowSettings:
             in_transit_hours=days("in_transit_hours", 0, 720),
             amount_tolerance_pct=percent("amount_tolerance_pct", 0.0, 10.0),
             match_window_minutes=days("match_window_minutes", 1, 1440),
+        )
+
+
+# An rclone destination, "<remote>:<path>". It is passed to rclone as one argument, never through
+# a shell; the pattern only keeps obvious mistakes (a flag, a local path) out.
+BACKUP_REMOTE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*:[A-Za-z0-9_ ./-]*$")
+
+
+@dataclass(frozen=True)
+class BackupSettings:
+    """The validated `backup:` block. Anything missing or malformed falls back to the default."""
+
+    enabled: bool = True
+    dir: str = ""            # empty: a `backups` folder next to the database
+    every_hours: int = 24
+    keep: int = 7
+    remote: str = ""
+    remote_keep_days: int = 0
+    remote_error: str = ""   # why a configured `remote` was refused
+
+    @classmethod
+    def from_raw(cls, raw) -> "BackupSettings":
+        raw = raw if isinstance(raw, dict) else {}
+        default = cls()
+
+        def number(name: str, low: int, high: int) -> int:
+            try:
+                return min(max(int(raw.get(name, getattr(default, name))), low), high)
+            except (TypeError, ValueError):
+                return getattr(default, name)
+
+        enabled = raw.get("enabled", default.enabled)
+        remote = str(raw.get("remote") or "").strip()
+        error = "" if not remote or BACKUP_REMOTE.match(remote) else \
+            f"backup.remote '{remote}' is not an rclone destination like 'gdrive:crypto-backups'"
+        return cls(
+            enabled=_as_bool(enabled) if isinstance(enabled, str) else bool(enabled),
+            dir=str(raw.get("dir") or default.dir),
+            every_hours=number("every_hours", 1, 24 * 30),
+            keep=number("keep", 1, 365),
+            remote="" if error else remote,
+            remote_keep_days=number("remote_keep_days", 0, 3650),
+            remote_error=error,
         )
 
 
@@ -680,6 +734,7 @@ class Config:
     cash_flows: dict = field(default_factory=dict)
     manual_assets: list = field(default_factory=list)  # raw `manual_assets:` block
     allocation: dict = field(default_factory=dict)     # raw `allocation:` block
+    backup: dict = field(default_factory=dict)         # raw `backup:` block
 
     # -- convenience accessors -------------------------------------------------
     @property
@@ -731,6 +786,16 @@ class Config:
     @property
     def has_wallets(self) -> bool:
         return bool(self.evm_wallets or self.solana_wallets)
+
+    @property
+    def backup_settings(self) -> BackupSettings:
+        return BackupSettings.from_raw(self.backup)
+
+    @property
+    def backup_dir(self) -> Path:
+        """Where local backups go: `backup.dir`, else a `backups` folder beside the database."""
+        configured = self.backup_settings.dir
+        return self.resolve(configured) if configured else self.db_path.parent / "backups"
 
     @property
     def cash_flow_settings(self) -> CashFlowSettings:
@@ -915,6 +980,7 @@ def load_config(path: str | Path | None = None, missing_ok: bool = False) -> Con
         settings=merged["settings"],
         path=config_path if config_path.is_file() else None,
         cash_flows=merged["cash_flows"] if isinstance(merged.get("cash_flows"), dict) else {},
+        backup=merged["backup"] if isinstance(merged.get("backup"), dict) else {},
         manual_assets=merged.get("manual_assets") if merged.get("manual_assets") is not None else [],
         allocation=merged["allocation"] if isinstance(merged.get("allocation"), dict) else
         ({} if merged.get("allocation") is None else merged["allocation"]),
