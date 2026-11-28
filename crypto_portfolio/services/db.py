@@ -29,7 +29,7 @@ import sqlite3
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from models import (
@@ -209,6 +209,7 @@ CREATE INDEX IF NOT EXISTS idx_trades_base ON trades(base, timestamp);
 # ten characters are the UTC day and string order is time order.
 ANALYST_VIEWS = ("v_nav_daily", "v_positions_daily", "v_external_flows", "v_daily_returns",
                  "v_earn_income_daily", "v_trades")
+EXPORT_TABLES = (*ANALYST_VIEWS, "notes")   # `main.py export`: the views, plus the diary (N9)
 SCHEMA_V9 = """
 -- the newest healthy fetched snapshot of each UTC day: the daily close used by the analytics
 CREATE VIEW v_nav_daily AS
@@ -325,6 +326,16 @@ FROM closes c LEFT JOIN flows f ON f.day = c.day;
 CREATE INDEX IF NOT EXISTS idx_sources_status ON snapshot_sources(status, snapshot_id);
 """
 
+# v11 (N9): the investment diary, one free-text note per day. The first data in this file that
+# no API can give back: it lives or dies with the backups of the database.
+SCHEMA_V11 = """
+CREATE TABLE IF NOT EXISTS notes (
+    day         TEXT PRIMARY KEY CHECK (day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    body        TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
@@ -337,6 +348,7 @@ MIGRATIONS: list[str] = [
     SCHEMA_V8,  # v8
     SCHEMA_V9,  # v9
     SCHEMA_V10,  # v10
+    SCHEMA_V11,  # v11
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
@@ -616,6 +628,30 @@ class Database:
                 "WHERE x.status IN (?, ?) AND s.timestamp > ? AND s.timestamp <= ?",
                 (STATUS_ERROR, STATUS_INFERRED_ERROR, start, timestamp),
             ).fetchone()[0])
+
+    def notes(self, start_day: str = "", end_day: str = "9999-12-31") -> list[dict]:
+        """The diary notes of `start_day..end_day` (`YYYY-MM-DD`, inclusive), newest first."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT day, body, updated_at FROM notes WHERE day >= ? AND day <= ? ORDER BY day DESC",
+                (start_day, end_day),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_note(self, day: str, body: str) -> dict | None:
+        """Write the note of one day; an empty body deletes it. Returns the stored note, or None."""
+        date.fromisoformat(day)  # ValueError on anything that is not a real calendar day
+        body = body.strip()
+        with self.connect() as connection:
+            if not body:
+                connection.execute("DELETE FROM notes WHERE day = ?", (day,))
+                return None
+            connection.execute(
+                "INSERT INTO notes (day, body, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(day) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+                (day, body, utc_now_iso()),
+            )
+        return {"day": day, "body": body}
 
     def peg_checks(self, snapshot_id: int) -> list[dict]:
         """`peg_checks` of one snapshot (empty before v6, or when no stablecoin was held)."""

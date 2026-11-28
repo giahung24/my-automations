@@ -350,6 +350,8 @@ def activity_report(database: Database, *, settings: CashFlowSettings | None = N
         "items": page,
         "last_sync": states,
         "synced": bool(states),
+        # N9: the diary notes of the window, keyed by day (the day the user wrote them for)
+        "notes": {note["day"]: note["body"] for note in database.notes(since[:10] if since else "")},
     }
 
 

@@ -686,6 +686,22 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
 .review-banner .icon:first-child { color: var(--warn); }
 .review-banner:active { background: rgba(245, 184, 75, 0.14); }
 
+/* -- Diary notes (N9) --------------------------------------------------------------- */
+.note-body, .note-quote { white-space: pre-line; overflow-wrap: anywhere; font-size: 13px; color: var(--ink-2); }
+.note-body { margin: 0; padding: 10px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
+.note-quote { color: var(--ink-3); font-weight: 600; }
+.note-btn { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 9px; background: transparent; color: var(--ink-3); transition: background-color 0.2s ease, color 0.2s ease; }
+.note-btn:active { background: var(--surface-3); color: var(--ink); }
+@media (hover: hover) { .note-btn:hover { background: var(--surface-2); color: var(--ink); } }
+.note-input {
+  display: block; width: 100%; min-height: 88px; padding: 10px 14px; border-radius: 14px; resize: vertical;
+  background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--ink);
+  font: inherit; font-size: 16px;   /* 16px stops iOS Safari zooming into the field */
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.note-input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px rgba(138, 180, 255, 0.16); }
+.note-input::placeholder { color: var(--ink-3); opacity: 1; }
+
 /* -- Activity: timeline ------------------------------------------------------------ */
 .day-head { padding: 0 4px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
 .flow-list { overflow: hidden; transition: opacity 0.2s ease; }

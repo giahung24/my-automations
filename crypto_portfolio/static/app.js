@@ -1557,7 +1557,51 @@
           }
           group.items.push(presentFlow(item));
         }
+        // N9: a note is the first thing of its day, and a day can have a note and nothing else.
+        // Today is always there, so there is a place to write. Older note-only days wait until
+        // the items around them are loaded, or they would sit in the wrong place.
+        const notes = (act.data && act.data.notes) || {};
+        const oldest = act.data && act.data.next_cursor && groups.length ? groups[groups.length - 1].day : '';
+        const unfiltered = act.source === 'all' && act.kind === 'all' && !act.review;
+        const days = new Set(Object.keys(notes).filter((day) => day >= oldest));
+        if (act.data && unfiltered) days.add(today);
+        for (const day of days) {
+          if (!groups.some((g) => g.day === day)) groups.push({ day, label: dayLabel(day, today, yesterday), items: [] });
+        }
+        groups.sort((a, b) => (a.day < b.day ? 1 : -1));
+        for (const group of groups) group.note = notes[group.day] || '';
         return groups;
+      });
+
+      const noteEdit = reactive({ day: '', text: '', saving: false, error: '' });
+      function openNote(group) {
+        Object.assign(noteEdit, { day: group.day, text: group.note, saving: false, error: '' });
+        nextTick(() => { const el = document.getElementById('note-' + group.day); if (el) el.focus(); });
+      }
+      function closeNote() {
+        noteEdit.day = '';
+      }
+      async function saveNote(text = noteEdit.text) {
+        noteEdit.saving = true;
+        try {
+          const note = await api('/api/notes/' + noteEdit.day, { method: 'PUT', body: { body: text } });
+          const notes = { ...((act.data && act.data.notes) || {}) };
+          if (note.body) notes[note.day] = note.body; else delete notes[note.day];
+          if (act.data) act.data.notes = notes;
+          closeNote();
+          loadAttribution();   // "Why it moved" quotes the notes of its period
+        } catch (error) {
+          handleError(error, { silent: true });
+          noteEdit.error = 'Could not save the note: ' + error.message;
+        } finally {
+          noteEdit.saving = false;
+        }
+      }
+      const whyNotes = computed(() => {
+        const now = Date.now();
+        return ((why.data && why.data.notes) || []).map((n) => ({
+          ...n, label: dayLabel(n.day, localDay(now), localDay(now - 86400000)),
+        }));
       });
 
       const actFacet = (axis, id) => {
@@ -2490,6 +2534,7 @@
         periods: ANALYTICS_PERIODS, periodId, analyticsPeriod, setPeriod,
         why, whyReady, whyBuckets, whyRows, whyOthers, whyMessage, whyTrend, whySpan,
         folds, toggleFold, foldSums, earn, earnRows, earnGapNote, earnLife, earnMessage, dataStale,
+        noteEdit, openNote, closeNote, saveNote, whyNotes,
         basis, basisRows, basisBy, basisTrend, basisBuys, basisMoreBuys, basisBenchNote, basisMessage,
         insights, insightsReady, insightMessage, insightTiles, benchLegend, benchEl, underwaterEl,
         alloc, allocEnabled, allocReady, allocRows, allocActions, allocMessage, loadAllocation, toggleAllocation,

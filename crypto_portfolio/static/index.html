@@ -498,6 +498,12 @@
                   </p>
                   <p v-if="whyRows.length" class="legend-note px-5 pt-2">Striped bar: moved by a change in holdings rather than by price.</p>
                 </template>
+                <template v-if="whyNotes.length">
+                  <h3 class="block-sub mt-4 px-5">Your notes</h3>
+                  <ul class="mt-1 space-y-1.5 px-5">
+                    <li v-for="n in whyNotes" :key="n.day" class="note-quote"><span class="font-extrabold text-ink-2">{{ n.label }}</span> {{ n.body }}</li>
+                  </ul>
+                </template>
                 <p v-if="whyMessage" class="px-5 pt-3 text-[13px] font-semibold text-ink-3">{{ whyMessage }}</p>
                 <div class="h-4"></div>
               </template>
@@ -1043,8 +1049,30 @@
             <template v-else>
               <!-- timeline, one block per day -->
               <section v-for="group in actGroups" :key="group.day" class="mt-4" :aria-label="group.label">
-                <h3 class="day-head">{{ group.label }}</h3>
-                <ul class="card flow-list mt-1.5" :class="{ 'is-dim': act.loading }">
+                <div class="flex min-h-[28px] items-center justify-between gap-3">
+                  <h3 class="day-head">{{ group.label }}</h3>
+                  <!-- a quiet pencil: a text link on every day would shout louder than the days themselves -->
+                  <button v-if="noteEdit.day !== group.day" type="button" class="note-btn hit" @click="openNote(group)"
+                          :aria-label="(group.note ? 'Edit the note for ' : 'Add a note for ') + group.label" :title="group.note ? 'Edit note' : 'Add note'">
+                    <svg class="icon icon-xs"><use href="#i-pencil"/></svg>
+                  </button>
+                </div>
+                <!-- N9: the diary note of the day, above what happened that day -->
+                <p v-if="group.note && noteEdit.day !== group.day" class="note-body mt-1.5">{{ group.note }}</p>
+                <form v-if="noteEdit.day === group.day" class="mt-1.5" @submit.prevent="saveNote()">
+                  <label class="sr-only" :for="'note-' + group.day">Note for {{ group.label }}</label>
+                  <textarea :id="'note-' + group.day" v-model="noteEdit.text" class="note-input" rows="3" maxlength="2000"
+                            placeholder="Why you did what you did. Plain text, only you read it."></textarea>
+                  <p v-if="noteEdit.error" class="field-msg error" role="alert">
+                    <svg class="icon icon-xs"><use href="#i-alert"/></svg><span>{{ noteEdit.error }}</span>
+                  </p>
+                  <div class="mt-2 flex items-center gap-2">
+                    <button type="submit" class="btn btn-primary btn-sm" :disabled="noteEdit.saving">{{ noteEdit.saving ? 'Saving…' : 'Save note' }}</button>
+                    <button type="button" class="btn btn-ghost btn-sm" @click="closeNote()">Cancel</button>
+                    <button v-if="group.note" type="button" class="btn btn-danger btn-sm ml-auto" :disabled="noteEdit.saving" @click="saveNote('')">Delete</button>
+                  </div>
+                </form>
+                <ul v-if="group.items.length" class="card flow-list mt-1.5" :class="{ 'is-dim': act.loading }">
                   <li v-for="item in group.items" :key="item.key" :class="{ 'needs-review': item.needs_review }">
                     <component :is="item.group ? 'button' : 'div'" class="flow-row" :type="item.group ? 'button' : null"
                                :aria-expanded="item.group ? !!act.open[item.key] : null"

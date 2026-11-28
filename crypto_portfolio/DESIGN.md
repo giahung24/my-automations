@@ -257,10 +257,10 @@ the Analytics tab folds (see Folding card) so its length no longer grows with it
 | N3 | Peg check | Portfolio status line | One amber status pill ("USDC -0.4%" or "peg unchecked"), absent when on peg. |
 | N4 | Cost basis | Analytics, group "Right now", new card "Cost basis" before Earn income; Portfolio asset row, expanded detail | Card: total unrealised, then per coin entry over current price and unrealised amount over percent, then "Your buys" (since, vs USDC Earn). A caveat ("72% tracked", deposits priced at market) sits on its own line under the row. Asset row: two more lines of the detail list. Real trades replace the inferred rows in Activity. Folded: total unrealised and the share tracked. |
 | N5 | Analyst kit | none | CLI and SQL only. |
-| N6 | Disbursement plan and stress | Analytics: Allocation card (plan), Risk card (stress) | Plan progress and the next order reuse the suggested-orders rows; the stress line and its slider join Risk. |
-| N7 | EUR lens | Hero label row; "Why it moved" buckets | A two-option switch (USD / EUR) beside the privacy eye; the FX effect is one more bucket tile. |
-| N8 | NAV vs deposited capital | Hero chart | A second, dashed, Ink Faint line with a one-line legend; hidden where flow history is missing. |
-| N9 | Investment notes | Activity day block; "Why it moved" | A note is a row of its day; the attribution card quotes the notes of its period. |
+| N6 | Disbursement plan and stress | dropped (D21) | Not built. |
+| N7 | EUR lens | dropped (D21) | Not built. |
+| N8 | NAV vs deposited capital | Hero, under the range line; hero chart | One line: "Net deposited $X · gain $Y". A dashed Ink Faint line on the same price scale as the NAV, drawn only when the NAV keeps at least a third of the chart height; never over reconstructed history. |
+| N9 | Investment notes | Activity day block; "Why it moved" | One note per day, shown above the day's rows in a quiet bordered panel; a pencil at the right of each day header opens a textarea in place. Today always has a header. The attribution card quotes the notes of its period. |
 
 Open at this level: the status line can now hold four things on a bad day (origin, age, gaps,
 peg). It wraps today; if it wraps to three lines on a 360px screen, peg and gaps merge into

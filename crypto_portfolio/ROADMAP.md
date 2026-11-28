@@ -12,7 +12,7 @@
 |---|---|---|
 | **Phase 1** (P0, F1–F3) | Dữ liệu sạch nhịp 1h, backfill 5 năm, attribution, dòng tiền Binance, TWR / Base 100 / drawdown / volatility | Phần lõi xong. Còn lại ở §4. |
 | **Phase 2, W1–W3** (M4, M6, M7) | Tab Activity, tài sản manual (ví lạnh, staking), trợ lý Allocation | Xong. |
-| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | W4 xong code/test (2026-11-27, 619 test, schema v7): A1, N2, N3 PASS; **N1.2 PARTIAL** (APR thực nhận 7d chưa đủ dữ liệu), xem "Kết quả kiểm" cuối mục W4. W5 là việc kế tiếp. **W5 (N4, N5) đã code (schema v9, 629 test), chưa chạy trên dữ liệu thật**: xem "Còn phải kiểm" cuối mục W5. W6 là việc kế tiếp. |
+| **Phase 3, W4–W6** (N1–N9) | Chín ý rút ra sau khi vận hành thật | W4 xong code/test (2026-11-27, 619 test, schema v7): A1, N2, N3 PASS; **N1.2 PARTIAL** (APR thực nhận 7d chưa đủ dữ liệu), xem "Kết quả kiểm" cuối mục W4. W5 là việc kế tiếp. **W5 (N4, N5) đã code (schema v9, 629 test), chưa chạy trên dữ liệu thật**: xem "Còn phải kiểm" cuối mục W5. **W6: N8, N9 đã code (schema v11, 636 test), chưa chạy trên dữ liệu thật; N6, N7 bỏ (D21).** |
 | **W7, W8** (M5, M8) | Telegram, widget mobile | Hoãn (D16), §3. |
 
 Nguyên tắc không đổi cho mọi việc bên dưới: app chỉ **mô tả** hiện trạng, không phát tín hiệu
@@ -201,7 +201,23 @@ lệch peg > 0.3% có chip cảnh báo.
 
 ### W6 — Kế hoạch & góc nhìn
 
-**Xong khi:** có thẻ kế hoạch giải ngân + stress, toggle EUR, đường vốn đã nạp, ghi chú theo ngày.
+> **Phạm vi W6 đã chốt (2026-11-28, D21):** chỉ làm **N8** và **N9**. **N6** (kế hoạch giải ngân +
+> stress) và **N7** (EUR) bỏ: Jean không cần. Thẻ ý tưởng bên dưới giữ lại để mở lại nếu đổi ý.
+
+| Task | Nội dung | AC |
+|---|---|---|
+| N8.1 | `GET /api/portfolio/history`: mỗi điểm có `net_deposited_usd` = nạp − rút ngoài luỹ kế tới thời điểm đó (theo `v_external_flows`, giá ngày phát sinh). Điểm trước snapshot thật đầu tiên trả `null`. | Thay đổi khoảng cách NAV − vốn đã nạp trên một cửa sổ = ΔNAV − dòng tiền ròng (PnL); chuyển nội bộ không làm đường nhảy; chưa có dòng tiền nào → `null`. |
+| N8.2 | Hero: dòng "Net deposited $X · gain $Y" dưới chart; đường nét đứt cùng thang giá với NAV, **chỉ vẽ khi NAV còn chiếm ≥ 1/3 chiều cao** (nếu không NAV bị ép thành một vạch). | Số tiền mang `.priv`; đoạn lịch sử dựng lại không có đường; ẩn hết khi chưa có dòng tiền. |
+| N9.1 | Migration v11: bảng `notes` (`day` khoá chính, `body`, `updated_at`). `PUT /api/notes/{day}` (sau token; body rỗng = xoá; tối đa 2,000 ký tự). | Thêm/sửa/xoá được; ngày không hợp lệ hoặc quá dài → 422; không token → 401. |
+| N9.2 | Activity: ghi chú nằm đầu khối ngày, sửa tại chỗ (bút chì ở đầu mỗi ngày); "Today" luôn có để viết. "Why it moved" trích ghi chú của kỳ. | Văn bản thuần, xuống dòng giữ nguyên, HTML không được diễn giải; ngày chỉ có ghi chú vẫn hiện. |
+| N9.3 | Ghi chú đi theo sao lưu: nằm trong file SQLite (bản `.bak` của migration có đủ) và trong `main.py export` (`notes.csv`). | Có test: ghi chú còn nguyên sau migrate và trong bản sao lưu. |
+
+**Giới hạn đã biết (W6):**
+- "Net deposited" chỉ gồm dòng tiền app ghi được: Binance và tài sản manual. Ví on-chain nạp thẳng
+  từ ngoài không có lịch sử (F2.5), nên số dư của ví đó được tính là "gain".
+- Ghi chú là dữ liệu duy nhất không tái tạo được: cần sao lưu file DB (hoặc chạy `export` định kỳ).
+
+**Xong khi:** có đường vốn đã nạp và ghi chú theo ngày (N6, N7 đã bỏ, D21).
 Không chặn việc nào; làm khi W4–W5 đã cho số liệu đáng tin.
 
 **N6 · Kế hoạch giải ngân + stress** (M)

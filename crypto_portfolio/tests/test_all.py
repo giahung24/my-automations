@@ -632,7 +632,7 @@ def backups(path):
 
 
 def test_migrations_list_defines_v3():
-    assert SCHEMA_VERSION == len(MIGRATIONS) == 10  # v8: trades, v9-v10: analyst views
+    assert SCHEMA_VERSION == len(MIGRATIONS) == 11  # v8: trades, v9-v10: analyst views, v11: notes
 
 
 def test_fresh_db_is_created_at_latest_version_without_backup(tmp_path):

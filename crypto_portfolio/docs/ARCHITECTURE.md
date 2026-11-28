@@ -78,7 +78,7 @@ là atomic, mode 0600, giữ bản `.bak`; comment YAML mất sau khi ghi từ U
 
 ### 3.3 Lưu trữ — `services/db.py`
 
-SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v9**; v8: bảng `trades`, v9: sáu view `v_*` cho phân tích);
+SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v11**; v8: bảng `trades`, v9–v10: sáu view `v_*` cho phân tích, v11: bảng `notes` (nhật ký, dữ liệu duy nhất không tái tạo được));
 migration chạy trong một transaction và sao lưu file trước. v6 (N1.1, N3.1): `listed_apr`,
 `peg_checks`. v7: `listed_base_apr`, `listed_tiers` (dòng cũ NULL; `listed_apr` của chúng là base).
 

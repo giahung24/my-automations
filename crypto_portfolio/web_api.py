@@ -33,6 +33,7 @@ from typing import Callable, Literal
 
 import requests
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Path as FastPath
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -168,6 +169,10 @@ class CashFlowPatchIn(BaseModel):
     reset: bool = False
     matched_flow_id: int | None = Field(default=None, ge=1)
     note: str | None = Field(default=None, max_length=200)
+
+
+class NoteIn(BaseModel):
+    body: str = Field(default="", max_length=2000)   # empty deletes the note
 
 
 class TestBinanceIn(BaseModel):
@@ -634,11 +639,17 @@ def create_app(
         it up and down. Never touches the network.
         """
         cfg = config()
+        database = Database(cfg.db_path)
         try:
-            return attribution_report(Database(cfg.db_path), window=window, method=method,
-                                      group_by=group_by, top=top)
+            report = attribution_report(database, window=window, method=method, group_by=group_by, top=top)
         except ValueError as exc:  # 0h or over 365d: the regex cannot say it
             raise HTTPException(422, str(exc)) from exc
+        if report.get("from") and report.get("to"):   # N9: what was written down during the period
+            # a note is filed under the writer's local day, the window ends on a UTC instant: one day
+            # of slack keeps "today's" note in a window that ends at the last snapshot
+            until = (parse_timestamp(report["to"]) + timedelta(days=1)).strftime("%Y-%m-%d")
+            report["notes"] = database.notes(report["from"][:10], until)
+        return report
 
     @app.get("/api/portfolio/pnl")
     def portfolio_pnl():
@@ -788,6 +799,15 @@ def create_app(
                                    limit=limit, tz_offset=tz_offset)
         except ActivityError as exc:
             raise HTTPException(exc.status, exc.message) from exc
+
+    @app.put("/api/notes/{day}")
+    def put_note(body: NoteIn, day: str = FastPath(pattern=r"^\d{4}-\d{2}-\d{2}$")):
+        """Write the diary note of one day (N9); an empty body deletes it. Plain text only."""
+        try:
+            note = Database(config().db_path).set_note(day, body.body)
+        except ValueError as exc:
+            raise HTTPException(422, f"Not a calendar day: {day}") from exc
+        return note or {"day": day, "body": ""}
 
     @app.get("/api/cash-flows/{flow_id}/candidates")
     def cash_flow_candidates(flow_id: int):

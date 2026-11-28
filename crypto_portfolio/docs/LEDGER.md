@@ -111,7 +111,7 @@ phần `53b4309` (2026-11-26).
 | M8.1–M8.3 | Gateway `/summary`, mô hình bảo mật, widget iOS | P2 | DEFERRED | D16, wave W8 |
 | M8.4, M8.5 | Sparkline, Shortcut / Android | P3 | TODO | Bị chặn bởi W8 |
 
-**Phase 3 (N1–N9):** N6–N9 `TODO`. Bảng xếp hạng và thẻ ý tưởng nằm ở ROADMAP §2.
+**Phase 3 (N1–N9):** không còn `TODO`. Bảng xếp hạng và thẻ ý tưởng nằm ở ROADMAP §2.
 
 | Task | Việc | Trạng thái | Ghi chú |
 |---|---|---|---|
@@ -123,6 +123,9 @@ phần `53b4309` (2026-11-26).
 | N3.1–N3.3 | Peg check: bảng `peg_checks`, ghi mỗi snapshot, pill cảnh báo | DONE | `services/peg.py`; schema v6; AC PASS trên máy chủ thật (2026-11-27) |
 | N4.1–N4.6 | Sổ lệnh `trades`, giá vốn bình quân, PnL chưa thực hiện, thẻ "Cost basis" | DONE | `services/trades.py`, `services/analytics/cost_basis.py`, `GET /api/analytics/cost-basis`; schema v8; chưa chạy trên dữ liệu thật |
 | N5.1–N5.3 | Analyst kit: 6 view SQL, `main.py export`, notebook mẫu | DONE | schema v9; `v_daily_returns` có test khớp `quant.py`; notebook chưa chạy thử |
+| N6, N7 | Kế hoạch giải ngân + stress; EUR lens | DROPPED | D21: Jean không cần |
+| N8.1–N8.2 | NAV vs vốn đã nạp: `net_deposited_usd` trên từng điểm chart, dòng "Net deposited · gain", đường nét đứt | DONE | `add_net_deposited` trong `services/analytics/pnl.py`; chưa chạy trên dữ liệu thật |
+| N9.1–N9.3 | Nhật ký: bảng `notes`, `PUT /api/notes/{day}`, ghi chú trong Activity và "Why it moved", `notes.csv` | DONE | schema v11 |
 
 **Ghi chú N1.2 (kiểm 2026-11-27, `PARTIAL`):**
 - Công thức: `earned / mean_balance × 365 / span_days`, `earned` chỉ gồm reward có
@@ -183,6 +186,7 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | D18 | Tách tài liệu: `ROADMAP.md` (việc sắp làm), `docs/LEDGER.md` (trạng thái), `docs/SPEC.md` (đặc tả, giữ số mục). Trạng thái ghi theo code, ba mức DONE/PARTIAL/TODO | File cũ 1.790 dòng trộn ba vai trò và bảng trạng thái trễ so với code |
 | D19 | Dashboard chỉ truy cập qua LAN và Tailscale, không mở public; phương án Cloudflare Access để dành | Xem AUTH_SPEC |
 | D20 | Giữ nguyên định nghĩa và đích AC N1.2 (USDC 7d ≈ 5.0% ±0.2 pp) dù số đo dự kiến thấp hơn; ghi `PARTIAL` tới khi đo được cửa sổ 7d đủ điều kiện (2026-11-27) | Jean: không đổi AC để hợp số liệu; số thấp là tín hiệu cần tìm nguyên nhân |
+| D21 | Bỏ N6 (kế hoạch giải ngân + stress) và N7 (EUR) khỏi W6 | Jean, 2026-11-28: không cần. Thẻ ý tưởng giữ trong ROADMAP |
 
 ## 6. Changelog
 
@@ -199,3 +203,5 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | 2026-11-27 | Tách `ROADMAP_LEDGER.md` thành ROADMAP / LEDGER / SPEC (D18); đối soát toàn bộ trạng thái với code. Sửa các dòng sai của bảng cũ: F3.B1 không phải DONE; F2.2–F2.4, F2.10, F2.11, M4.1–M4.6, M6.1–M6.4, M7.1–M7.5 thực tế đã xong. Dời test vào `tests/`, script một lần vào `scripts/archive/`. |
 | 2026-11-27 | Kiểm W4 trên máy chủ thật: A1, N2, N3 PASS; **N1.2 PARTIAL** (realised 7d USDC = `None` do 5.42/7 ngày + hố 25.35 giờ; bỏ qua điều kiện ra 3.34%; cửa sổ đủ điều kiện sớm nhất ~2026-12-01 07:33 UTC, dự kiến ~2.0–2.4%), D20. Schema v7 (`listed_base_apr`, `listed_tiers`): `listed_apr` gồm bonus tier Binance theo số dư. Test 613 → 619. Cập nhật ARCHITECTURE theo v7. |
 | 2026-11-27 | Xong code W5: N4 (bảng `trades`, giá vốn, thẻ "Cost basis", trade thật trong đối soát và Activity) và N5 (view SQL, `export`, notebook). Schema v7 → v9. Dòng tiền cũ hơn snapshot đầu tiên được định giá lại theo giá đóng cửa ngày. AC đối soát N4 thu hẹp về từ 11/2026. Test 619 → 629. |
+| 2026-11-28 | Đo sức chịu của SQLite trên DB giả 10 năm (87,601 snapshot, 2.19 triệu dòng tài sản, 441 MB): màn hình hằng ngày ≤ 0.1 giây; chậm nhất là Activity "all history" 10.9 giây và Performance ALL 2.9 giây (chưa sửa). Sửa ba view N5 chậm theo bình phương (migration v10: > 60 giây → ≤ 0.3 giây). |
+| 2026-11-28 | W6: bỏ N6, N7 (D21). Xong code N8 (vốn đã nạp cạnh NAV) và N9 (nhật ký, schema v11). Dòng trade ở Activity hiện giá một đơn vị thay vì lặp tổng tiền. Test 629 → 636. |

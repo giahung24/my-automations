@@ -86,7 +86,7 @@ def test_other_views_and_export(tmp_path, capsys):
 
     out = tmp_path / "csv"
     assert cli.cmd_export(SimpleNamespace(out=str(out)), SimpleNamespace(db_path=database.path)) == 0
-    assert sorted(p.name for p in out.iterdir()) == sorted(f"{name.removeprefix('v_')}.csv" for name in ANALYST_VIEWS)
+    assert sorted(p.name for p in out.iterdir()) == sorted([f"{name.removeprefix('v_')}.csv" for name in ANALYST_VIEWS] + ["notes.csv"])
     with open(out / "daily_returns.csv", newline="", encoding="utf-8") as handle:
         table = list(csv.reader(handle))
     assert table[0] == ["day", "nav_usd", "net_flow_usd", "return"] and len(table) == 6

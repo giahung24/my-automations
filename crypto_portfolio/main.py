@@ -247,21 +247,21 @@ def render_pnl(report: dict) -> str:
 
 
 def cmd_export(args, config) -> int:
-    """One CSV per analyst view (N5), for a spreadsheet or a notebook."""
+    """One CSV per analyst view (N5) plus the diary notes (N9), for a spreadsheet or a notebook."""
     import csv
 
-    from services.db import ANALYST_VIEWS
+    from services.db import EXPORT_TABLES
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     with Database(config.db_path).connect() as connection:
-        for view in ANALYST_VIEWS:
+        for view in EXPORT_TABLES:
             cursor = connection.execute(f"SELECT * FROM {view}")
             with open(out / f"{view.removeprefix('v_')}.csv", "w", newline="", encoding="utf-8") as handle:
                 writer = csv.writer(handle)
                 writer.writerow([column[0] for column in cursor.description])
                 writer.writerows(cursor)
-    print(f"wrote {len(ANALYST_VIEWS)} CSV files to {out}")
+    print(f"wrote {len(EXPORT_TABLES)} CSV files to {out}")
     return 0
 
 
