@@ -272,6 +272,59 @@ SELECT timestamp, substr(timestamp, 1, 10) AS day, venue, pair, order_id, base, 
 FROM trades;
 """
 
+# v10: the v9 daily-close view looked up "the newest snapshot of this day" once per snapshot, which
+# is quadratic: 4 s on one year of hourly snapshots, unusable on ten. Ranking the snapshots of each
+# day reads the table once. Same rows as before. The index makes "which snapshots had a failed
+# source" a lookup instead of a scan of every status ever stored.
+SCHEMA_V10 = """
+DROP VIEW v_daily_returns;
+DROP VIEW v_positions_daily;
+DROP VIEW v_nav_daily;
+
+CREATE VIEW v_nav_daily AS
+SELECT day, snapshot_id, timestamp, nav_usd
+FROM (
+    SELECT substr(s.timestamp, 1, 10) AS day, s.id AS snapshot_id, s.timestamp, s.total_portfolio_usd AS nav_usd,
+           ROW_NUMBER() OVER (PARTITION BY substr(s.timestamp, 1, 10) ORDER BY s.timestamp DESC, s.id DESC) AS position
+    FROM snapshots s
+    WHERE s.is_backfilled = 0
+      AND NOT EXISTS (SELECT 1 FROM snapshot_sources x
+                      WHERE x.snapshot_id = s.id AND x.status IN ('error', 'inferred_error')))
+WHERE position = 1;
+
+-- what was held at each daily close, all sources added up
+CREATE VIEW v_positions_daily AS
+SELECT d.day, a.symbol, SUM(a.quantity) AS quantity, MAX(a.price_usd) AS price_usd, SUM(a.value_usd) AS value_usd
+FROM v_nav_daily d JOIN snapshot_assets a ON a.snapshot_id = d.snapshot_id
+GROUP BY d.day, a.symbol;
+
+-- flow-adjusted return between consecutive daily closes (Modified Dietz, as services/analytics/quant.py):
+--   r = (nav - previous nav - net flow) / (previous nav + flows weighted by the time they were in)
+-- NULL on the first day and when the capital base is too small to mean anything
+CREATE VIEW v_daily_returns AS
+WITH closes AS (
+    SELECT day, timestamp, nav_usd,
+           LAG(timestamp) OVER (ORDER BY day) AS previous_timestamp,
+           LAG(nav_usd)   OVER (ORDER BY day) AS previous_nav_usd
+    FROM v_nav_daily),
+flows AS (
+    SELECT c.day, SUM(f.signed_usd) AS net,
+           SUM(f.signed_usd * (julianday(c.timestamp) - julianday(f.timestamp))
+                            / (julianday(c.timestamp) - julianday(c.previous_timestamp))) AS weighted
+    FROM closes c JOIN v_external_flows f
+      ON f.timestamp > c.previous_timestamp AND f.timestamp <= c.timestamp
+    GROUP BY c.day)
+SELECT c.day, c.nav_usd, COALESCE(f.net, 0.0) AS net_flow_usd,
+       CASE WHEN c.previous_nav_usd IS NULL THEN NULL
+            WHEN c.previous_nav_usd + COALESCE(f.weighted, 0.0) <= 1.0 THEN NULL
+            WHEN c.previous_nav_usd + COALESCE(f.weighted, 0.0) <= 0.01 * c.previous_nav_usd THEN NULL
+            ELSE (c.nav_usd - c.previous_nav_usd - COALESCE(f.net, 0.0))
+                 / (c.previous_nav_usd + COALESCE(f.weighted, 0.0)) END AS return
+FROM closes c LEFT JOIN flows f ON f.day = c.day;
+
+CREATE INDEX IF NOT EXISTS idx_sources_status ON snapshot_sources(status, snapshot_id);
+"""
+
 # Step i (0-based) upgrades the database from version i to version i + 1. Append only.
 MIGRATIONS: list[str] = [
     SCHEMA,     # v1
@@ -283,6 +336,7 @@ MIGRATIONS: list[str] = [
     SCHEMA_V7,  # v7
     SCHEMA_V8,  # v8
     SCHEMA_V9,  # v9
+    SCHEMA_V10,  # v10
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 SOURCES_SCHEMA_VERSION = 2  # first version with snapshot_sources / snapshots.trigger
