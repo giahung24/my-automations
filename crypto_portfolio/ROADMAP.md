@@ -90,6 +90,9 @@ lệch peg > 0.3% có chip cảnh báo.
 - **AC:** chạy lại 25–27/11 → các cặp stablecoin ↔ BTC/SOL/PEPE/LINK hiện thành trade suy luận, phần
   còn lại gom vào một dòng "chưa giải thích"; snapshot cũ quá 130 phút hoặc một nguồn lỗi → badge
   đổi trạng thái.
+- **Giới hạn (2026-11-28):** trade suy luận và "Unexplained" chỉ tính cho **90 ngày gần nhất**
+  (`RECONCILE_DAYS` trong `services/activity.py`), kể cả khi xem "all history": tính cả lịch sử mất
+  11 giây trên 10 năm dữ liệu. Trade thật không bị giới hạn.
 - **Phạm vi đã chốt (2026-11-27):** trade suy luận **tính lúc đọc**, không lưu bảng nào: khi N4 có
   trade thật thì xoá đoạn tính, không phải dọn dữ liệu. Một giờ mua nhiều coin → một dòng
   "USDC → BTC + SOL", không chia stablecoin cho từng coin.

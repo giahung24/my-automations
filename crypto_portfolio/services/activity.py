@@ -45,6 +45,10 @@ CANDIDATE_WINDOW_DAYS = 7    # how far apart two legs of one transfer can plausi
 CANDIDATE_LIMIT = 10
 REVIEWABLE_CHANNELS = (CHANNEL_CRYPTO, CHANNEL_ONCHAIN)   # fiat / P2P are external by nature
 MAX_LIMIT = 200
+# Inferred trades and unexplained changes are only looked for this far back. Reading them means
+# loading every Binance asset row of the window (11 s for "all history" on ten years of hourly
+# snapshots), and an old residue is not something anyone can act on. Synced trades have no limit.
+RECONCILE_DAYS = 90
 
 
 class ActivityError(Exception):
@@ -177,14 +181,19 @@ def flow_item(row, *, partner=None, now: datetime, transit: timedelta, tz_offset
     }
 
 
-def earn_item(day: str, rows: list, tz_offset: int = 0) -> dict:
-    """All Earn rewards of one local day as a single collapsible item."""
+def earn_item(day: str, rows: list) -> dict:
+    """All Earn rewards of one local day as a single collapsible item.
+
+    ``rows`` are the day's rewards already summed per asset and source in SQL (``amount``,
+    ``value_usd``, ``count``, ``timestamp`` and ``id`` of the newest): five years of hourly
+    payouts are a third of a million rows, far too many to fold one by one on every request.
+    """
     per_asset: dict[str, dict] = {}
     for row in rows:
         entry = per_asset.setdefault(row["asset"], {"asset": row["asset"], "amount": 0.0, "value_usd": 0.0, "count": 0})
         entry["amount"] += float(row["amount"])
         entry["value_usd"] += float(row["value_usd"] or 0.0)
-        entry["count"] += 1
+        entry["count"] += int(row["count"])
     assets = sorted(per_asset.values(), key=lambda a: (-a["value_usd"], a["asset"]))
     for entry in assets:
         entry["value_usd"] = round(entry["value_usd"], 2)
@@ -202,7 +211,7 @@ def earn_item(day: str, rows: list, tz_offset: int = 0) -> dict:
         "direction": IN,
         "from": "Binance Earn",
         "to": "Binance",
-        "count": len(rows),
+        "count": sum(a["count"] for a in assets),
         "assets": assets,
         "source": "binance",
         "sources": sorted({source_group(r["source"]) for r in rows}),
@@ -247,16 +256,24 @@ def activity_report(database: Database, *, settings: CashFlowSettings | None = N
     limit = max(1, min(int(limit), MAX_LIMIT))
     after = parse_cursor(cursor)
 
-    query, params = "SELECT * FROM cash_flows WHERE status <> 'failed'", []
+    where, params = "status <> 'failed'", []
     if days:
-        query += " AND timestamp >= ?"
+        where += " AND timestamp >= ?"
         params.append((now - timedelta(days=days)).replace(microsecond=0).isoformat())
     asset = asset.strip().upper()
     if asset:
-        query += " AND asset = ?"
+        where += " AND asset = ?"
         params.append(asset)
     with database.connect() as connection:
-        rows = connection.execute(query + " ORDER BY timestamp DESC, id DESC", params).fetchall()
+        rows = connection.execute(
+            f"SELECT * FROM cash_flows WHERE {where} AND flow_type NOT IN ('reward', 'airdrop') "
+            "ORDER BY timestamp DESC, id DESC", params).fetchall()
+        # rewards: one row per local day, asset and source, summed by SQLite
+        rewards = connection.execute(
+            f"""SELECT date(timestamp, ?) AS day, asset, source, SUM(amount) AS amount, SUM(value_usd) AS value_usd,
+                       COUNT(*) AS count, MAX(timestamp) AS timestamp, MAX(id) AS id
+                FROM cash_flows WHERE {where} AND flow_type IN ('reward', 'airdrop')
+                GROUP BY day, asset, source""", [f"{tz_offset:+d} minutes", *params]).fetchall()
         by_id = {row["id"]: row for row in rows}
         missing = sorted({row["matched_flow_id"] for row in rows
                           if row["matched_flow_id"] is not None and row["matched_flow_id"] not in by_id})
@@ -268,12 +285,11 @@ def activity_report(database: Database, *, settings: CashFlowSettings | None = N
 
     items: list[dict] = []
     earn_days: dict[str, list] = defaultdict(list)
+    for row in rewards:
+        earn_days[row["day"]].append(row)
     shown: set[int] = set()
     for row in rows:
         if row["id"] in shown:
-            continue
-        if kind_of(row) == "reward":
-            earn_days[_local_day(row["timestamp"], tz_offset)].append(row)
             continue
         partner = partners.get(row["matched_flow_id"]) if row["matched_flow_id"] is not None else None
         if partner is not None and row["is_internal_transfer"] and partner["matched_flow_id"] == row["id"]:
@@ -289,11 +305,12 @@ def activity_report(database: Database, *, settings: CashFlowSettings | None = N
             continue
         shown.add(row["id"])
         items.append(flow_item(row, now=now, transit=transit, tz_offset=tz_offset))
-    items.extend(earn_item(day, day_rows, tz_offset) for day, day_rows in earn_days.items())
+    items.extend(earn_item(day, day_rows) for day, day_rows in earn_days.items())
     # N4: the trades synced from Binance. N2: the quantity changes nothing recorded explains,
     # read from the snapshots (inferred, never stored)
     since = (now - timedelta(days=days)).replace(microsecond=0).isoformat() if days else None
-    for item in (*trade_items(database, since, tz_offset), *inferred_items(database, since, tz_offset)):
+    recent = (now - timedelta(days=min(days or RECONCILE_DAYS, RECONCILE_DAYS))).replace(microsecond=0).isoformat()
+    for item in (*trade_items(database, since, tz_offset), *inferred_items(database, recent, tz_offset)):
         legs = [*item.get("sold", []), *item.get("bought", []), *item.get("assets", [])]
         if not asset or any(leg["asset"] == asset for leg in legs):
             items.append(item)
@@ -326,14 +343,13 @@ def activity_report(database: Database, *, settings: CashFlowSettings | None = N
         next_cursor = f"{last[0]}|{last[1]}"
 
     external = 0.0
-    earned = 0.0
     for row in rows:
         if not source_ok({"sources": [source_group(row["source"])]}):
             continue
         if row["status"] == COMPLETED and row["flow_type"] in ("deposit", "withdrawal") and not row["is_internal_transfer"]:
             external += float(row["value_usd"] or 0.0) * (1 if row["direction"] == IN else -1)
-        elif kind_of(row) == "reward":
-            earned += float(row["value_usd"] or 0.0)
+    earned = sum(float(row["value_usd"] or 0.0) for row in rewards
+                 if source_ok({"sources": [source_group(row["source"])]}))
 
     for item in page:
         item.pop("_last_id", None)

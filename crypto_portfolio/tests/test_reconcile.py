@@ -109,3 +109,13 @@ def test_activity_lists_filters_and_pages_the_inferred_items(tmp_path):
     second = activity_report(database, days=0, limit=1, cursor=first["next_cursor"], now=now)
     assert first["items"][0]["key"] != second["items"][0]["key"]
     assert all("_last_id" not in item for item in first["items"] + second["items"])
+
+
+def test_old_history_is_not_reconciled_but_recent_history_is(tmp_path):
+    database = Database(tmp_path / "p.db")
+    snap(database, 0, spot={"LINK": 100.0})
+    snap(database, 1, spot={"LINK": 130.0})   # unexplained
+    recent = activity_report(database, days=0, now=T0 + timedelta(days=89))
+    assert kinds(recent["items"]) == ["unexplained"]
+    late = activity_report(database, days=0, now=T0 + timedelta(days=91))
+    assert late["items"] == [] and late["facets"]["kind"]["unexplained"] == 0
