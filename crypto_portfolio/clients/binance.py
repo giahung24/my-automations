@@ -286,7 +286,7 @@ class BinanceClient:
             quantity = _to_float(row.get("totalAmount"))
             if quantity > 0:
                 base = _to_float(row.get("latestAnnualPercentageRate")) or None
-                tiers = parse_tiers(row.get("tierAnnualPercentageRate"))
+                tiers = parse_tiers(row.get("tierAnnualPercentageRate"), str(row.get("asset", "")))
                 holdings.append(
                     Holding(symbol=str(row.get("asset", "")).upper(), source=BINANCE_EARN,
                             quantity=quantity, detail="flexible",
@@ -520,7 +520,7 @@ class BinanceClient:
 TIER_BAND = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*[A-Za-z0-9]*\s*$")
 
 
-def parse_tiers(raw) -> list[dict]:
+def parse_tiers(raw, asset: str = "") -> list[dict]:
     """`tierAnnualPercentageRate` -> [{"min": 0.0, "max": 5000.0, "apr": 0.03}], lowest band first.
 
     A key that is not a plain `<min>-<max><ASSET>` band, or a rate that is not a number, is
@@ -530,7 +530,11 @@ def parse_tiers(raw) -> list[dict]:
         return []
     tiers = []
     for band, rate in raw.items():
-        match = TIER_BAND.match(str(band))
+        band = str(band).strip()
+        # "0-2001INCH" is 0-200 of 1INCH: drop the symbol before reading the numbers
+        if asset and band.upper().endswith(asset.upper()):
+            band = band[:len(band) - len(asset)]
+        match = TIER_BAND.match(band)
         try:
             apr = float(rate)
         except (TypeError, ValueError):

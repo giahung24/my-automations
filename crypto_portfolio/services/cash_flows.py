@@ -702,12 +702,12 @@ class PriceBook:
         if symbol in self.pinned:
             return 1.0
         if self.historic is not None and timestamp < self.historic_before:
-            try:
-                price = float(self.historic(symbol, timestamp[:10]) or 0.0)
-            except (requests.RequestException, BinanceError, TypeError, ValueError):
-                price = 0.0
-            if price > 0:
-                return price
+            # None: the source could not be reached, fall back to the guess below. A number, 0
+            # included ("no market that day"), is the answer: the oldest snapshot's price is not
+            # what the asset was worth years earlier.
+            price = self.historic(symbol, timestamp[:10])
+            if price is not None:
+                return float(price)
         times, prices = self._load(symbol)
         if times:
             index = bisect.bisect_right(times, timestamp)

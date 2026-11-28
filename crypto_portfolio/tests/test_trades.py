@@ -201,3 +201,120 @@ def test_a_synced_trade_explains_the_change_and_is_listed_as_real(tmp_path):
     [item] = activity_report(database, days=0, now=T0 + timedelta(hours=2))["items"]
     assert item["kind"] == "trade" and item["inferred"] is False and item["value_usd"] == 4400.0
     assert [(leg["asset"], leg["amount"]) for leg in item["assets"]] == [("BTC", 0.05), ("USDC", -4400.0)]
+
+
+# -- regressions from the Phase 3 review -----------------------------------------------------------
+class FlakyClient(FakeClient):
+    """BTCUSDC answers an error; `closes_fail` makes the daily closes unreachable."""
+
+    def __init__(self, broken=("BTCUSDC",), closes_fail=False, error="HTTP 400 pair in break status"):
+        super().__init__()
+        self.broken, self.closes_fail, self.error, self.close_calls = broken, closes_fail, error, 0
+
+    def my_trades(self, symbol, from_id=0):
+        if symbol in self.broken:
+            self.calls.append((symbol, from_id))
+            raise RuntimeError(self.error)
+        return super().my_trades(symbol, from_id)
+
+    def daily_closes(self, asset, start_ms, end_ms):
+        self.close_calls += 1
+        if self.closes_fail:
+            raise RuntimeError("klines unreachable")
+        return super().daily_closes(asset, start_ms, end_ms)
+
+
+def test_one_failing_pair_does_not_hide_the_pairs_after_it(tmp_path):
+    database = Database(tmp_path / "p.db")
+    snap(database, 0, spot={"BTC": 0.1, "SOL": 5.0, "USDC": 9000.0})
+    client = FlakyClient()
+    report = sync_trades(config(), database, client, now_ms=ms(2))
+    assert report["spot"] == 1 and [row["pair"] for row in rows(database) if row["venue"] == "spot"] == ["SOLBTC"]
+    assert "BTCUSDC" in report["errors"][0]
+    client.calls.clear()
+    sync_trades(config(), database, client, now_ms=ms(3))
+    assert ("SOLUSDC", 0) not in client.calls   # the daily scan was completed: not redone every hour
+
+    limited = FlakyClient(error="HTTP 429 Too Many Requests")
+    other = Database(tmp_path / "q.db")
+    snap(other, 0, spot={"BTC": 0.1, "SOL": 5.0, "USDC": 9000.0})
+    sync_trades(config(), other, limited, now_ms=ms(2))
+    assert [call[0] for call in limited.calls] == ["BTCUSDC"]   # asked to slow down: stop there...
+    limited.calls.clear()
+    sync_trades(config(), other, limited, now_ms=ms(3))
+    assert limited.calls                                        # ...and take the scan up again next run
+
+
+def test_historic_repricing_waits_for_the_prices_and_catches_late_rows(tmp_path):
+    database = Database(tmp_path / "p.db")
+    snap(database, 0, spot={"LINK": 100.0})
+    old = lambda key, day: CashFlow(timestamp=f"2024-03-{day:02d}T08:00:00+00:00", asset="LINK", direction=IN,  # noqa: E731
+                                    amount=10.0, flow_type="deposit", external_id=key, price_usd=14.0)
+    upsert_flows(database, [old("a", 1), old("b", 1), old("c", 1)])
+    down = FlakyClient(broken=(), closes_fail=True)
+    assert sync_trades(config(), database, down, now_ms=ms(2))["repriced"] == 0
+    assert down.close_calls == 1   # asked once for LINK, not once per row (stablecoins are never asked)
+    assert sync_trades(config(), database, FakeClient(), now_ms=ms(3))["repriced"] == 3   # prices back: done now
+    upsert_flows(database, [old("late", 1)])   # a history backfill that finished afterwards
+    assert sync_trades(config(), database, FakeClient(), now_ms=ms(4))["repriced"] == 1
+    assert {row["price_usd"] for row in rows(database, "SELECT price_usd FROM cash_flows")} == {7.0}
+
+
+def test_a_trade_with_no_price_that_day_is_untracked_not_guessed(tmp_path):
+    database = Database(tmp_path / "p.db")
+    snap(database, 0, spot={"SOL": 10.0})
+    client = FakeClient()
+    client.fills = {"SOLBTC": [{"id": 1, "orderId": 1, "qty": "10", "quoteQty": "0.02", "commission": "0",
+                                "commissionAsset": "BNB", "time": int(datetime(2019, 5, 1, tzinfo=timezone.utc).timestamp() * 1000),
+                                "isBuyer": True}]}
+    sync_trades(config(), database, client, now_ms=ms(2))
+    [trade] = [row for row in rows(database) if row["venue"] == "spot"]
+    assert trade["value_usd"] == 0 and trade["estimated"] == 1   # not 0.02 x today's BTC price
+    [sol] = cost_basis_report(database, STABLE)["assets"]
+    assert sol["avg_entry"] is None and sol["tracked"] == 0
+
+
+def test_fee_taken_from_the_asset_sold_is_an_event():
+    from services.analytics.cost_basis import trade_events
+
+    row = {"timestamp": "t", "base": "BNB", "quote": "USDT", "side": "sell", "quantity": 10.0, "quote_quantity": 6000.0,
+           "fee_amount": 0.0075, "fee_asset": "BNB", "value_usd": 6000.0, "estimated": 0}
+    assert sum(q for _, asset, q, _, _ in trade_events(row) if asset == "BNB") == pytest.approx(-10.0075)
+    bought = {**row, "side": "buy", "fee_asset": "USDT", "fee_amount": 6.0}
+    assert sum(q for _, asset, q, _, _ in trade_events(bought) if asset == "USDT") == pytest.approx(-6006.0)
+    netted = {**row, "side": "buy", "fee_asset": "BNB"}
+    assert [(a, q) for _, a, q, _, _ in trade_events(netted)] == [("BNB", pytest.approx(9.9925)), ("USDT", -6000.0)]
+
+
+def test_same_second_deposit_and_sale_leave_no_phantom_position():
+    positions = replay([("2026-01-01T00:00:00+00:00", "BTC", -1.0, 0.0, False),
+                        ("2026-01-01T00:00:00+00:00", "BTC", 1.0, 90_000.0, True)])
+    assert positions["BTC"].quantity == 0
+
+
+def test_order_ids_are_per_pair(tmp_path):
+    database = Database(tmp_path / "p.db")
+    snap(database, 0, spot={"BTC": 1.0, "SOL": 1.0})
+    upsert_trades(database, [buy(-2, "BTC", 0.01, 90_000.0, order="7"), buy(-2, "SOL", 1.0, 150.0, order="7")])
+    report = activity_report(database, days=0, now=T0 + timedelta(hours=1))
+    assert sorted(item["bought"][0]["asset"] for item in report["items"]) == ["BTC", "SOL"]
+    assert len(cost_basis_report(database, STABLE)["buys"]) == 2
+
+
+def test_a_failed_newest_snapshot_does_not_empty_the_reports(tmp_path):
+    from services.analytics.earn import earn_report
+
+    database = Database(tmp_path / "p.db")
+    upsert_trades(database, [buy(-5, "BTC", 0.1, 80_000.0)])
+    snap(database, 0, earn={"BTC": 0.1, "USDC": 500.0}, apr=0.02)
+    failed = {s: SourceStatus("error", "timeout") for s in (BINANCE_SPOT, BINANCE_EARN, BINANCE_FUNDING)}
+    database.record(Portfolio(timestamp=at(1), holdings=[], totals={}, sources=failed))
+    assert [a["symbol"] for a in cost_basis_report(database, STABLE)["assets"]] == ["BTC"]
+    assert {a["symbol"] for a in earn_report(database, STABLE)["assets"]} == {"BTC", "USDC"}
+
+
+def test_tier_band_of_an_asset_whose_name_starts_with_a_digit():
+    from clients.binance import parse_tiers
+
+    assert parse_tiers({"0-2001INCH": "0.03"}, "1INCH") == [{"min": 0.0, "max": 200.0, "apr": 0.03}]
+    assert parse_tiers({"0-5000USDC": "0.03"}, "USDC") == [{"min": 0.0, "max": 5000.0, "apr": 0.03}]

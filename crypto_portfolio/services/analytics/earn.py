@@ -94,7 +94,8 @@ def earn_report(database: Database, stablecoins: Iterable[str] = ()) -> dict:
         rewards[row["asset"]].append((parse_timestamp(row["timestamp"]), float(row["amount"]), float(row["value_usd"])))
 
     positions: dict[str, dict] = {}
-    for row in database.assets(latest.id):
+    # positions as of the newest snapshot whose Earn fetch worked: a failed one has no Earn rows
+    for row in database.assets(snapshots[-1]["id"] if snapshots else latest.id):
         if row["source"] != BINANCE_EARN or row["quantity"] <= 0:
             continue
         position = positions.setdefault(row["symbol"], {"quantity": 0.0, "value_usd": 0.0, "rated": 0.0, "weight": 0.0,

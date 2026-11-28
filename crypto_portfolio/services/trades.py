@@ -11,9 +11,9 @@ A trade against a stablecoin is valued at $1.00 per unit of quote. Against anyth
 quote is valued from the price series (``estimated = 1``). Fills are immutable, so a re-read
 replaces the row.
 
-The first run also re-prices the cash flows older than the first snapshot from daily market
-closes: until then they carried the price of the oldest snapshot, which is not what a deposit
-of three years ago was worth.
+Each run also re-prices the cash flows older than the first snapshot that it has not seen yet,
+from daily market closes: until then they carry the price of the oldest snapshot, which is not
+what a deposit of three years ago was worth.
 """
 from __future__ import annotations
 
@@ -45,7 +45,8 @@ QUOTES = (*USD_QUOTES, *BRIDGE_QUOTES)
 FULL_SCAN_MS = DAY_MS          # how often pairs that never traded are asked again
 KEY_FULL_SCAN = "binance.trades.full_scan"
 KEY_CONVERT = "binance.convert"
-KEY_HISTORIC = "prices.historic_v1"
+KEY_HISTORIC = "prices.historic_upto"   # id of the newest cash flow already re-priced
+RATE_LIMITED = ("429", "418")           # Binance asking us to stop: do not try the next pair
 
 
 @dataclass
@@ -147,25 +148,33 @@ def _priced(trade: Trade, prices: PriceBook, stablecoins: set[str]) -> Trade:
     return trade
 
 
-def reprice_before_history(database: Database, prices: PriceBook) -> int:
-    """Once: value the cash flows older than the first snapshot at that day's market close."""
+def reprice_before_history(database: Database, prices: PriceBook, after_id: int = 0) -> tuple[int, int]:
+    """Value the cash flows older than the first snapshot at that day's market close.
+
+    Only rows with ``id > after_id`` are looked at, so each run handles what earlier runs have
+    not seen (a history backfill that finished later). Returns ``(re-priced, newest id seen)``.
+    """
     if not prices.historic_before:
-        return 0
-    repriced = 0
+        return 0, after_id
     with database.connect() as connection:
         rows = connection.execute(
-            "SELECT id, asset, timestamp, amount, price_usd FROM cash_flows WHERE timestamp < ?",
-            (prices.historic_before,)).fetchall()
-        for row in rows:
-            if row["asset"].upper() in prices.pinned:
-                continue
-            price = prices.price(row["asset"], row["timestamp"])
-            if price > 0 and price != row["price_usd"]:
-                connection.execute(
-                    "UPDATE cash_flows SET price_usd = ?, value_usd = ?, updated_at = ? WHERE id = ?",
-                    (price, float(row["amount"]) * price, utc_now_iso(), row["id"]))
-                repriced += 1
-    return repriced
+            "SELECT id, asset, timestamp, amount, price_usd FROM cash_flows WHERE timestamp < ? AND id > ? "
+            "ORDER BY id", (prices.historic_before, after_id)).fetchall()
+    # Prices first, with no transaction open: they may need the network, and a write lock held
+    # across HTTP calls would stall the dashboard's own writes.
+    # shortcut: a flow with no close that day (no <asset>USDT pair then) keeps the price it had;
+    # mark such rows unpriced once the cash-flow sync stops re-guessing unpriced rows.
+    updates = []
+    for row in rows:
+        if row["asset"].upper() in prices.pinned:
+            continue
+        price = prices.price(row["asset"], row["timestamp"])
+        if price > 0 and price != row["price_usd"]:
+            updates.append((price, float(row["amount"]) * price, utc_now_iso(), row["id"]))
+    with database.connect() as connection:
+        connection.executemany(
+            "UPDATE cash_flows SET price_usd = ?, value_usd = ?, updated_at = ? WHERE id = ?", updates)
+    return len(updates), max((row["id"] for row in rows), default=after_id)
 
 
 def sync_trades(config, database: Database, client: BinanceClient | None = None,
@@ -180,12 +189,17 @@ def sync_trades(config, database: Database, client: BinanceClient | None = None,
     start_ms = max(now_ms - settings.backfill_days * DAY_MS, 0)
     stablecoins = {str(s).upper() for s in getattr(config, "stablecoins", ()) or ()}
 
-    closes: dict[str, dict[str, float]] = {}
+    closes: dict[str, dict[str, float] | None] = {}   # None: the fetch failed, asked once per run
 
-    def historic(symbol: str, day: str) -> float:
+    def historic(symbol: str, day: str) -> float | None:
         if symbol not in closes:
-            closes[symbol] = client.daily_closes(symbol, start_ms, now_ms)
-        return closes[symbol].get(day, 0.0)
+            try:  # from the very first candle: spot fills are read from the first one ever
+                closes[symbol] = client.daily_closes(symbol, 0, now_ms)
+            except Exception as exc:  # noqa: BLE001 - unknown pair, network: this asset has no series today
+                log.debug("daily closes of %s unavailable: %s", symbol, exc)
+                closes[symbol] = None
+        series = closes[symbol]
+        return None if series is None else series.get(day, 0.0)
 
     with database.connect() as connection:
         first = connection.execute("SELECT MIN(timestamp) FROM snapshots WHERE is_backfilled = 0").fetchone()[0]
@@ -196,18 +210,29 @@ def sync_trades(config, database: Database, client: BinanceClient | None = None,
         tickers = client.prices()
         pairs = candidate_pairs(known_assets(database), tickers)
         full = now_ms - (get_cursor(database, KEY_FULL_SCAN) or 0) >= FULL_SCAN_MS
+        failed: list[str] = []
         for base, quote in pairs:
             key = f"binance.trades.{base}{quote}"
             cursor = get_cursor(database, key)
             if cursor is None and not full:
                 continue
-            rows = client.my_trades(base + quote, (cursor or 0) + 1 if cursor is not None else 0)
+            try:  # one pair that fails (in "break" status, say) must not hide the pairs after it
+                rows = client.my_trades(base + quote, (cursor or 0) + 1 if cursor is not None else 0)
+            except Exception as exc:  # noqa: BLE001
+                failed.append(f"{base}{quote}: {exc}")
+                if any(code in str(exc) for code in RATE_LIMITED):
+                    full = False   # stopped early: the scan is not done, try again next run
+                    break
+                continue
             trades = [_priced(t, prices, stablecoins) for t in (parse_spot(r, base, quote) for r in rows) if t]
             report["spot"] += upsert_trades(database, trades)
             if rows:
                 set_cursor(database, key, max(int(row["id"]) for row in rows))
         if full:
             set_cursor(database, KEY_FULL_SCAN, now_ms)
+        if failed:
+            more = f" (and {len(failed) - 3} more)" if len(failed) > 3 else ""
+            report["errors"].append("binance spot trades: " + "; ".join(failed[:3]) + more)
     except Exception as exc:  # noqa: BLE001 - the snapshot is safe; the next run resumes from the cursors
         report["errors"].append(f"binance spot trades: {exc}")
 
@@ -221,9 +246,9 @@ def sync_trades(config, database: Database, client: BinanceClient | None = None,
         report["errors"].append(f"binance convert history: {exc}")
 
     try:
-        if get_cursor(database, KEY_HISTORIC) is None:
-            report["repriced"] = reprice_before_history(database, prices)
-            set_cursor(database, KEY_HISTORIC, 1)
+        report["repriced"], newest = reprice_before_history(database, prices, get_cursor(database, KEY_HISTORIC) or 0)
+        if None not in closes.values():   # a failed fetch left rows at their old price: look again next run
+            set_cursor(database, KEY_HISTORIC, newest)
     except Exception as exc:  # noqa: BLE001
         report["errors"].append(f"historic prices: {exc}")
     return report

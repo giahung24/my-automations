@@ -64,10 +64,14 @@ def replay(events: Iterable[tuple], stablecoins: Iterable[str] = ()) -> dict[str
     """``events``: ``(timestamp, asset, signed quantity, usd, estimated)``, any order."""
     skip = {s.upper() for s in stablecoins}
     positions: dict[str, Position] = defaultdict(Position)
-    for _, asset, quantity, usd, estimated in sorted(events, key=lambda event: event[0]):
+    # within one second what comes in is booked before what goes out: a coin deposited and sold
+    # in the same second must not leave a phantom position behind
+    for _, asset, quantity, usd, estimated in sorted(events, key=lambda event: (event[0], event[2] <= 0)):
         if asset in skip:
             continue
         if quantity > 0:
+            if usd <= 0:   # no price known: untracked, rather than quantity added at zero cost
+                continue
             positions[asset].add(quantity, usd, estimated)
         else:
             positions[asset].remove(-quantity)
@@ -80,12 +84,13 @@ def trade_events(row) -> list[tuple]:
     quantity, quote_quantity = float(row["quantity"]), float(row["quote_quantity"])
     fee, fee_asset = float(row["fee_amount"] or 0), row["fee_asset"] or ""
     estimated = bool(row["estimated"])
-    net = lambda asset, amount: amount - (fee if fee_asset == asset else 0.0)  # noqa: E731
+    received = base if row["side"] == "buy" else quote
+    netted = fee if fee_asset == received else 0.0   # a fee in the asset received shrinks what arrives
     if row["side"] == "buy":
-        events = [(when, base, net(base, quantity), value, estimated), (when, quote, -quote_quantity, 0.0, False)]
+        events = [(when, base, quantity - netted, value, estimated), (when, quote, -quote_quantity, 0.0, False)]
     else:
-        events = [(when, base, -quantity, 0.0, False), (when, quote, net(quote, quote_quantity), value, True)]
-    if fee > 0 and fee_asset not in (base, quote):
+        events = [(when, base, -quantity, 0.0, False), (when, quote, quote_quantity - netted, value, True)]
+    if fee > 0 and fee_asset and fee_asset != received:   # paid from another balance: BNB, or the asset sold
         events.append((when, fee_asset, -fee, 0.0, False))
     return events
 
@@ -93,9 +98,7 @@ def trade_events(row) -> list[tuple]:
 def flow_events(row) -> list[tuple]:
     """The quantity effect of one external ``cash_flows`` row."""
     amount, usd = float(row["amount"]), float(row["value_usd"] or 0)
-    if row["direction"] == IN:
-        if usd <= 0:          # no price: leave it untracked rather than add quantity at zero cost
-            return []
+    if row["direction"] == IN:   # with no price it stays untracked: see `replay`
         guess = row["flow_type"] == DEPOSIT and row["channel"] not in PAID_CHANNELS
         return [(row["timestamp"], row["asset"], amount, usd, guess)]
     fee = float(row["fee_amount"] or 0) if (row["fee_asset"] or row["asset"]) == row["asset"] else 0.0
@@ -104,7 +107,7 @@ def flow_events(row) -> list[tuple]:
 
 def cost_basis_report(database: Database, stablecoins: Iterable[str] = (), min_value: float = 1.0) -> dict:
     stable = {str(s).upper() for s in stablecoins}
-    latest = database.latest()
+    latest = database.latest_healthy()   # a failed source is stored as no rows, not as coins sold
     payload = {"as_of": latest.timestamp if latest else None, "assets": [], "buys": [],
                "unrealised_usd": None, "tracked_pct": None, "benchmark_apr": None, "trades": 0}
     if latest is None:
@@ -166,7 +169,7 @@ def _buys(trades, stable: set[str], prices: dict[str, float], benchmark_apr, now
     for row in trades:
         if row["side"] != "buy" or row["base"] in stable or float(row["value_usd"] or 0) <= 0:
             continue
-        key = (row["venue"], row["order_id"] or row["external_id"], row["base"])
+        key = (row["venue"], row["pair"], row["order_id"] or row["external_id"], row["base"])   # order ids are per pair
         order = orders.setdefault(key, {"timestamp": row["timestamp"], "symbol": row["base"], "quantity": 0.0,
                                         "value_usd": 0.0, "estimated": False})
         order["timestamp"] = max(order["timestamp"], row["timestamp"])

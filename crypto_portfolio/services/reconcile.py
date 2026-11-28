@@ -135,7 +135,8 @@ def trade_items(database: Database, since_iso: str | None = None, tz_offset: int
     offset = timedelta(minutes=tz_offset)
     orders: dict[tuple, dict] = {}
     for row in rows:
-        order = orders.setdefault((row["venue"], row["order_id"] or row["external_id"]),
+        # Binance numbers its orders per pair: the pair is part of the identity
+        order = orders.setdefault((row["venue"], f'{row["pair"]}:{row["order_id"] or row["external_id"]}'),
                                   {"legs": defaultdict(lambda: [0.0, 0.0]), "value": 0.0})
         order.update(timestamp=row["timestamp"], last_id=row["id"], venue=row["venue"],
                      estimated=order.get("estimated", False) or bool(row["estimated"]))

@@ -672,6 +672,17 @@ class Database:
             ).fetchall()
         return {row["source"]: SourceStatus(row["status"], row["error"]) for row in rows}
 
+    def latest_healthy(self) -> Snapshot | None:
+        """The newest fetched snapshot in which no source failed, else the newest one."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM snapshots s WHERE s.is_backfilled = 0 AND NOT EXISTS ("
+                "SELECT 1 FROM snapshot_sources x WHERE x.snapshot_id = s.id AND x.status IN (?, ?)) "
+                "ORDER BY s.timestamp DESC, s.id DESC LIMIT 1",
+                (STATUS_ERROR, STATUS_INFERRED_ERROR),
+            ).fetchone()
+        return _as_snapshot(row) if row else self.latest()
+
     def latest_assets(self) -> list[dict]:
         snapshot = self.latest()
         return self.assets(snapshot.id) if snapshot else []

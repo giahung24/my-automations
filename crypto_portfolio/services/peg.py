@@ -17,7 +17,7 @@ import requests
 
 from clients.onchain import LLAMA_PRICES
 
-THRESHOLD = 0.003  # |price - 1| above this is shown as off peg (ROADMAP N3)
+THRESHOLD = 0.003  # |price - 1| above this is shown as off peg (docs/SPEC.md §11.4)
 
 LLAMA_IDS = {
     "USDT": "coingecko:tether",

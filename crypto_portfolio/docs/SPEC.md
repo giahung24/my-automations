@@ -1436,7 +1436,15 @@ ghim $1.00. Tham chiếu lỗi không chặn `record`.
   đó; coin `tracked` < 1% không có con số nào.
 - **Bảng điểm lần mua** (20 lệnh gần nhất): thay đổi giá từ lúc mua, và so với để nguyên số tiền
   trong Earn ở APR niêm yết hôm nay của vị thế stablecoin lớn nhất.
-- Dòng tiền cũ hơn snapshot đầu tiên được định giá lại một lần theo giá đóng cửa ngày.
+- Dòng tiền cũ hơn snapshot đầu tiên được định giá lại theo giá đóng cửa ngày (mỗi lần chạy xử lý
+  các dòng chưa thấy; lấy giá lỗi thì thử lại lần sau). Trade hay dòng tiền không có giá ngày đó
+  thì **không được theo dõi**, không đoán bằng giá của snapshot cũ nhất.
+- Một cặp lỗi không chặn các cặp sau; Binance báo 429/418 thì dừng và quét lại ở lần chạy kế.
+- Phí trả bằng tài sản không phải tài sản nhận về (BNB, hoặc chính tài sản đem bán) là một sự kiện
+  giảm số lượng riêng. Lệnh được nhận diện theo (sàn, cặp, mã lệnh): mã lệnh Binance chỉ duy nhất
+  trong một cặp.
+- Vị thế hiện tại lấy từ snapshot lành mới nhất: nguồn lỗi được lưu là không có dòng nào, không
+  phải là đã bán hết.
 - Không có PnL đã thực hiện, không có báo cáo thuế.
 
 ### 11.6 Analyst kit (N5) — migration v9–v10, `main.py export`
