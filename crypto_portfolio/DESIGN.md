@@ -226,11 +226,11 @@ bottom sheet that becomes a centred dialog from 640px up. Toasts float just abov
 
 ### Screen map
 
-| Tab | Its question | What lives there today |
+| Tab | Its question | What lives there |
 |---|---|---|
-| **Portfolio** | What is it worth right now? | Hero (total, 24h chip, chart, range pills), status line (origin, age), failed-sources notice, source filter, asset list with expandable rows |
-| **Analytics** | Why, and how well? | One period selector pinned under the title, then two groups of folding cards: "Over the period" (Why it moved, Performance, Risk) and "Right now" (Cost basis, Earn income, Allocation & rebalancing) |
-| **Activity** | What happened to the money? | Period select, source and kind filter chips, review banner, one card per day of flows |
+| **Portfolio** | What is it worth right now? | Hero: total, 24h chip, chart with range pills, the range change, and "Net deposited · gain" (a dashed capital line joins the chart when it does not flatten the NAV). Status line: origin, age (amber and "stale" past 130 min), failed snapshots of the last 24h, one amber pill per stablecoin off its peg. Failed-sources notice. Source filter. Asset list; an open row shows where the coin sits, its average entry and its unrealised P&L. |
+| **Analytics** | Why, and how well? | One period selector pinned under the title, then two groups of folding cards. "Over the period": Why it moved (with the diary notes of the period), Performance, Risk. "Right now": Cost basis (per coin, then "Your buys"), Earn income (listed and realised APR, lifetime income), Allocation & rebalancing. |
+| **Activity** | What happened to the money? | Period select, source and kind filter chips, review banner, then one block per day: the day's diary note (a pencil in the day header edits it in place; Today is always there), then its rows. A trade row carries the unit price; a trade read from the snapshots carries an "inferred" tag; what nothing explains is one "Unexplained" row per day. |
 
 ### Named Rules
 **The One-Second Rule.** The Portfolio tab must stay readable in one second: total, 24h move,
@@ -243,28 +243,8 @@ extends the card that already owns its question before it earns a card of its ow
 **The Quiet When Healthy Rule.** A warning element takes no space while there is nothing to
 warn about. No "all good" chips.
 
-### Phase 3 placement (N1-N9)
-
-Where each roadmap idea lands. Detailed design happens per wave, on real data; this map only
-fixes location so nine features do not become nine cards. Net result: **two** new cards (Earn income, Cost basis), and
-the Analytics tab folds (see Folding card) so its length no longer grows with its content.
-
-| ID | Idea | Lands in | Form |
-|---|---|---|---|
-| N1 | Earn yield | Analytics, group "Right now", new card "Earn income" before Allocation | Table per asset (listed APR, realised 7d / 30d, per day) and one line of lifetime income by year. Folded: income per day and the APR of the largest Earn position. |
-| N2 | Inferred trades | Activity timeline | A new kind with a filter chip; neutral icon; an "inferred" tag on every such row; one "Unexplained" row per day when a residue remains. |
-| N2 | Data health | Portfolio status line (existing) | The age text turns amber past 130 min; the existing failed-sources notice stays the place for source errors; gap count joins the line only when above zero. No new badge. |
-| N3 | Peg check | Portfolio status line | One amber status pill ("USDC -0.4%" or "peg unchecked"), absent when on peg. |
-| N4 | Cost basis | Analytics, group "Right now", new card "Cost basis" before Earn income; Portfolio asset row, expanded detail | Card: total unrealised, then per coin entry over current price and unrealised amount over percent, then "Your buys" (since, vs USDC Earn). A caveat ("72% tracked", deposits priced at market) sits on its own line under the row. Asset row: two more lines of the detail list. Real trades replace the inferred rows in Activity. Folded: total unrealised and the share tracked. |
-| N5 | Analyst kit | none | CLI and SQL only. |
-| N6 | Disbursement plan and stress | dropped (D21) | Not built. |
-| N7 | EUR lens | dropped (D21) | Not built. |
-| N8 | NAV vs deposited capital | Hero, under the range line; hero chart | One line: "Net deposited $X · gain $Y". A dashed Ink Faint line on the same price scale as the NAV, drawn only when the NAV keeps at least a third of the chart height; never over reconstructed history. |
-| N9 | Investment notes | Activity day block; "Why it moved" | One note per day, shown above the day's rows in a quiet bordered panel; a pencil at the right of each day header opens a textarea in place. Today always has a header. The attribution card quotes the notes of its period. |
-
-Open at this level: the status line can now hold four things on a bad day (origin, age, gaps,
-peg). It wraps today; if it wraps to three lines on a 360px screen, peg and gaps merge into
-one "2 warnings" pill that opens the detail.
+**The Caveat Line Rule.** A caveat about a table row ("72% tracked", "deposits priced at that
+day's market") gets its own line under the row. Beside the symbol it is cut off on a phone.
 
 ## Elevation & Depth
 

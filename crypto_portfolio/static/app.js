@@ -75,8 +75,8 @@
     period: 'portfolio.analytics.period', actPeriod: 'portfolio.activity.period',
     actSource: 'portfolio.activity.source', actKind: 'portfolio.activity.kind', assetView: 'portfolio.assetView',
     folds: 'portfolio.analytics.folds' };
-  const FOLDS = ['why', 'perf', 'risk', 'basis', 'earn', 'alloc'];
-  const BUYS_SHOWN = 5;   // buys listed before "Show all" (N4)   // Analytics cards, in page order (A1)
+  const FOLDS = ['why', 'perf', 'risk', 'basis', 'earn', 'alloc'];   // Analytics cards, in page order (A1)
+  const BUYS_SHOWN = 5;   // buys listed before "Show all" (N4)
   const STALE_MS = 130 * 60 * 1000;   // two missed hourly snapshots, plus slack (N2.4)
   const SECTIONS = ['portfolio', 'analytics', 'activity'];
   const SECTION_TITLES = { portfolio: 'Portfolio', analytics: 'Analytics', activity: 'Activity' };
@@ -946,7 +946,7 @@
           ? { money: '', text: 'TWR ' + fmt.signedPct(twr), trend: trendOf(num(twr)) } : none(insights.loading);
         const mdd = insightsReady.value ? (insights.data.drawdown || {}).max_drawdown_pct : null;
         out.risk = mdd !== null && mdd !== undefined
-          ? { money: '', text: num(mdd).toFixed(2) + '% from peak', trend: num(mdd) < 0 ? 'down' : '' } : none(insights.loading);
+          ? { money: '', text: (num(mdd) < 0 ? '−' : '') + Math.abs(num(mdd)).toFixed(2) + '% from peak', trend: num(mdd) < 0 ? 'down' : '' } : none(insights.loading);
         const top = earn.data && earn.data.assets[0];
         if (earn.data && earn.data.usd_per_day !== null) {
           const best = top.realised['7d'].apr ?? top.listed_apr;

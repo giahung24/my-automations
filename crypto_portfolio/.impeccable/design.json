@@ -394,6 +394,11 @@
         "name": "The Flat At Rest Rule",
         "body": "Nothing that scrolls with the page casts a shadow. A card that needs emphasis gets a tinted wash at its top edge (the hero) or a tinted border (a notice).",
         "section": "elevation"
+      },
+      {
+        "name": "The Caveat Line Rule",
+        "section": "layout",
+        "body": "A caveat about a table row (\"72% tracked\", \"deposits priced at that day's market\") gets its own line under the row. Beside the symbol it is cut off on a phone."
       }
     ],
     "dos": [

@@ -1,7 +1,7 @@
 # ARCHITECTURE — `crypto_portfolio`
 
-> Hệ thống đang chạy thế nào. Viết lại ngày 2026-11-27 theo code hiện tại (cập nhật cùng ngày cho
-> W4: schema v7, Earn, đối soát, peg check); bản thẩm định chi tiết
+> Hệ thống đang chạy thế nào. Viết lại ngày 2026-11-27 theo code hiện tại, cập nhật 2026-11-28 sau
+> Phase 3 (schema v11); bản thẩm định chi tiết
 > ngày 2026-11-25 nằm trong lịch sử git (`SYSTEM_ARCHITECTURE.md`), các phát hiện của nó được đối
 > chiếu ở [`LEDGER.md`](LEDGER.md) §4. Khi tài liệu này và code lệch nhau, code là chuẩn.
 
@@ -78,9 +78,10 @@ là atomic, mode 0600, giữ bản `.bak`; comment YAML mất sau khi ghi từ U
 
 ### 3.3 Lưu trữ — `services/db.py`
 
-SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v11**; v8: bảng `trades`, v9–v10: sáu view `v_*` cho phân tích, v11: bảng `notes` (nhật ký, dữ liệu duy nhất không tái tạo được));
-migration chạy trong một transaction và sao lưu file trước. v6 (N1.1, N3.1): `listed_apr`,
-`peg_checks`. v7: `listed_base_apr`, `listed_tiers` (dòng cũ NULL; `listed_apr` của chúng là base).
+SQLite ở chế độ WAL, file mode 0600. Schema có phiên bản (`PRAGMA user_version`, hiện **v11**);
+migration chạy trong một transaction và sao lưu file trước. Phase 3 thêm v6–v11: `listed_apr` và
+`peg_checks`, phần tách APR theo tier, `trades`, sáu view phân tích (v9, viết lại ở v10), `notes`.
+Đo trên DB giả 10 năm (87,601 snapshot, 441 MB): các màn hình hằng ngày vẫn ≤ 0.1 giây.
 
 | Bảng | Nội dung |
 |---|---|
@@ -89,7 +90,10 @@ migration chạy trong một transaction và sao lưu file trước. v6 (N1.1, N
 | `snapshot_sources` | Trạng thái từng nguồn của mỗi snapshot (ok / error / disabled) |
 | `peg_checks` | Giá thật của mỗi stablecoin đang giữ theo từng tham chiếu (`binance:…`, `defillama:…`), `error` nếu lỗi; xoá snapshot thì xoá theo |
 | `cash_flows` | Nạp, rút, fiat, P2P, lãi Earn (giữ `earn_backfill_days` = 1827 ngày), thay đổi tài sản manual; cờ chuyển khoản nội bộ và cặp ghép |
-| `sync_state` | Con trỏ đồng bộ tăng dần của từng luồng lịch sử Binance |
+| `trades` | Mỗi fill Spot và mỗi lần Convert trên Binance: cặp, `side` theo `base`, số lượng, giá trị USD, cờ `estimated` khi quote không phải stablecoin |
+| `notes` | Nhật ký: một ghi chú văn bản mỗi ngày. Dữ liệu duy nhất không tải lại được từ API nào |
+| `sync_state` | Con trỏ đồng bộ tăng dần của từng luồng lịch sử Binance (kể cả id fill cuối của từng cặp) |
+| view `v_*` | `v_nav_daily`, `v_positions_daily`, `v_external_flows`, `v_daily_returns`, `v_earn_income_daily`, `v_trades`: lớp đọc cho notebook và `main.py export` |
 
 `services/backfill.py` dựng 60 checkpoint tháng (2021-11 đến 2026-10) từ giá lịch sử, gắn
 `is_backfilled = 1`: số dư hôm nay nhân với giá của tháng đó.
@@ -99,15 +103,15 @@ migration chạy trong một transaction và sao lưu file trước. v6 (N1.1, N
 | Module | Trả lời câu hỏi | Endpoint |
 |---|---|---|
 | `attribution.py` | Vì sao NAV đổi: giá, số lượng, tương tác, định giá lại, thiếu dữ liệu | `GET /api/portfolio/attribution` |
-| `pnl.py` | Lãi/lỗ sau khi trừ nạp/rút, theo cửa sổ | `GET /api/portfolio/pnl` |
+| `pnl.py` | Lãi/lỗ sau khi trừ nạp/rút, theo cửa sổ; vốn đã nạp ròng luỹ kế cho từng điểm của chart (N8) | `GET /api/portfolio/pnl`, `GET /api/portfolio/history` |
 | `quant.py` | TWR, Base 100 so với BTC/ETH, drawdown, volatility | `GET /api/analytics/quant` |
 | `allocation.py` | Lệch mục tiêu bao nhiêu, cần mua/bán gì (`target`, `band_edge`, `contribution`, góp vốn một phần) | `GET /api/analytics/allocation` |
-| `earn.py` (N1) | Mỗi tài sản Earn: APR niêm yết, APR thực nhận 7d/30d (`earned / mean_balance × 365 / span_days`, kèm `n_obs`, `sufficient`; không đủ ≥ 90% cửa sổ hoặc có hố > 6 giờ thì `None`), $/ngày, thu nhập luỹ kế theo năm | `GET /api/analytics/earn` · `GET /api/analytics/cost-basis` |
+| `earn.py` (N1) | Mỗi tài sản Earn: APR niêm yết, APR thực nhận 7d/30d (`earned / mean_balance × 365 / span_days`, kèm `n_obs`, `sufficient`; không đủ ≥ 90% cửa sổ hoặc có hố > 6 giờ thì `None`), $/ngày, thu nhập luỹ kế theo năm | `GET /api/analytics/earn` |
 | `cash_flows.py` | Đồng bộ lịch sử Binance, ghép chuyển khoản nội bộ (địa chỉ → `tx_hash` → heuristic) | chạy sau mỗi `record` |
 | `reconcile.py` (N2, N4) | Phần dư số lượng Binance giữa hai snapshot sau khi trừ flow và trade thật → trade suy luận hoặc "Unexplained" (tính lúc đọc, không lưu); cộng item cho trade thật, gộp theo lệnh | qua `GET /api/cash-flows` |
 | `trades.py` (N4) | Sau mỗi `record`: fill Spot (`myTrades` theo cặp) và Convert vào bảng `trades`; lần đầu định giá lại dòng tiền cũ theo giá đóng cửa ngày | collector |
 | `cost_basis.py` (N4) | Giá vào bình quân theo coin trên toàn danh mục, PnL chưa thực hiện trên phần sổ giải thích được (`tracked`), cờ `estimated`, bảng điểm các lần mua | `GET /api/analytics/cost-basis` |
-| `activity.py` | Dòng thời gian đọc được và sửa được của `cash_flows`, cộng item suy luận của `reconcile.py` | `GET`/`PATCH /api/cash-flows` |
+| `activity.py` | Dòng thời gian đọc được và sửa được của `cash_flows` (reward Earn gộp theo ngày trong SQL), cộng trade thật, item suy luận của `reconcile.py` (chỉ 90 ngày gần nhất) và ghi chú của từng ngày | `GET`/`PATCH /api/cash-flows` |
 
 Mọi engine là hàm thuần trên dữ liệu thường; chỉ các loader chạm SQLite. Chỉ dùng numpy và stdlib.
 Công thức và thuật toán: [`SPEC.md`](SPEC.md).
@@ -119,8 +123,9 @@ Công thức và thuật toán: [`SPEC.md`](SPEC.md).
 | Nhóm | Route |
 |---|---|
 | Danh mục | `GET /api/portfolio` · `POST /api/portfolio/refresh` · `GET /api/portfolio/history` |
-| Phân tích | `GET /api/portfolio/attribution` · `GET /api/portfolio/pnl` · `GET /api/analytics/quant` · `GET /api/analytics/allocation` · `GET /api/analytics/earn` |
+| Phân tích | `GET /api/portfolio/attribution` · `GET /api/portfolio/pnl` · `GET /api/analytics/quant` · `GET /api/analytics/allocation` · `GET /api/analytics/earn` · `GET /api/analytics/cost-basis` |
 | Dòng tiền | `GET /api/cash-flows` · `GET /api/cash-flows/{id}/candidates` · `PATCH /api/cash-flows/{id}` |
+| Nhật ký | `PUT /api/notes/{day}` (body rỗng = xoá) |
 | Cấu hình | `GET`/`POST /api/settings` · `POST /api/settings/allocation` · `POST /api/settings/test-binance` · `POST /api/settings/test-wallet` |
 | Khác | `POST /api/auth` · `GET /api/health` · `/api/docs` |
 
@@ -150,9 +155,10 @@ nguồn, thời điểm và cờ `stale`. Mọi request không hợp lệ (sai k
 
 ### 3.7 CLI — `main.py`
 
-`show` · `record` · `chart` · `history` · `backfill` · `pnl` · `serve`. Trong `record`: kiểm peg
-stablecoin (`peg_checks`). Sau mỗi `record`: ghi dòng tiền của tài sản manual, rồi đồng bộ lịch sử
-Binance. Lỗi ở hai bước này không làm hỏng snapshot.
+`show` · `record` · `chart` · `history` · `backfill` · `pnl` · `export` · `serve`. Trong `record`:
+kiểm peg stablecoin (`peg_checks`). Sau mỗi `record`: ghi dòng tiền của tài sản manual, đồng bộ lịch
+sử Binance, rồi đồng bộ lệnh Spot và Convert. Lỗi ở ba bước này không làm hỏng snapshot. `export`
+ghi một CSV cho mỗi view `v_*` và `notes.csv`.
 
 ## 4. Bảo mật
 

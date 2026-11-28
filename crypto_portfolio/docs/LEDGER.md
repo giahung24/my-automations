@@ -111,7 +111,7 @@ phần `53b4309` (2026-11-26).
 | M8.1–M8.3 | Gateway `/summary`, mô hình bảo mật, widget iOS | P2 | DEFERRED | D16, wave W8 |
 | M8.4, M8.5 | Sparkline, Shortcut / Android | P3 | TODO | Bị chặn bởi W8 |
 
-**Phase 3 (N1–N9):** không còn `TODO`. Bảng xếp hạng và thẻ ý tưởng nằm ở ROADMAP §2.
+**Phase 3 (N1–N9):** không còn `TODO`. Đặc tả như đã làm ở SPEC §11; việc còn phải kiểm ở ROADMAP §2.
 
 | Task | Việc | Trạng thái | Ghi chú |
 |---|---|---|---|
@@ -186,7 +186,7 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | D18 | Tách tài liệu: `ROADMAP.md` (việc sắp làm), `docs/LEDGER.md` (trạng thái), `docs/SPEC.md` (đặc tả, giữ số mục). Trạng thái ghi theo code, ba mức DONE/PARTIAL/TODO | File cũ 1.790 dòng trộn ba vai trò và bảng trạng thái trễ so với code |
 | D19 | Dashboard chỉ truy cập qua LAN và Tailscale, không mở public; phương án Cloudflare Access để dành | Xem AUTH_SPEC |
 | D20 | Giữ nguyên định nghĩa và đích AC N1.2 (USDC 7d ≈ 5.0% ±0.2 pp) dù số đo dự kiến thấp hơn; ghi `PARTIAL` tới khi đo được cửa sổ 7d đủ điều kiện (2026-11-27) | Jean: không đổi AC để hợp số liệu; số thấp là tín hiệu cần tìm nguyên nhân |
-| D21 | Bỏ N6 (kế hoạch giải ngân + stress) và N7 (EUR) khỏi W6 | Jean, 2026-11-28: không cần. Thẻ ý tưởng giữ trong ROADMAP |
+| D21 | Bỏ N6 (kế hoạch giải ngân + stress) và N7 (EUR) khỏi W6 | Jean, 2026-11-28: không cần. Ghi chú để mở lại ở SPEC §11.9 |
 
 ## 6. Changelog
 
@@ -196,13 +196,9 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | 2026-11-25 | Thêm Phase 2 (M4–M8: 31 task), D11–D15. Trong ngày: xong M6, M4, M7 và UI ba tab. |
 | 2026-11-26 | Hoãn Telegram và widget (D16). Đánh số lại wave: W1–W3 Phase 2, W4–W6 Phase 3, W7–W8 hoãn. |
 | 2026-11-26 | Bảo mật dashboard (P0.6): token bắt buộc ngoài loopback, cookie phiên đã ký, rate limit, DB 0600, unit systemd. Thêm góp vốn một phần cho Allocation. |
-| 2026-11-27 | Thêm Phase 3 (N1–N9), gộp từ 7 đề xuất của Fable 5.2 và 6 gợi ý của Jean/assistant. |
-| 2026-11-27 | Mở W4: tách N1.1–N1.4, N2.1–N2.4, N3.1–N3.3 trong ROADMAP §2. Chốt: N1 không dựng lại số dư Earn quá khứ (chỉ tổng thu nhập); N2 tính trade suy luận lúc đọc, gộp Binance theo symbol; thứ tự N3 → N1 → N2. |
-| 2026-11-27 | Thêm `DESIGN.md` (rút từ `static/`) và sơ đồ vị trí UI cho N1–N9. Thêm A1 (Analytics gập được, hai nhóm). Sửa N1.4 (thẻ Earn sang Analytics) và N2.4 (dùng dòng trạng thái sẵn có, không thêm badge). UI giữ tiếng Anh. |
-| 2026-11-27 | Xong code W4: A1, N1, N2, N3. Schema v6 (`snapshot_assets.listed_apr`, `peg_checks`). `earn_backfill_days` mặc định 365 → 1827. N2 thu hẹp về Binance (on-chain chờ F2.5). Test 595 → 613. |
+| 2026-11-27 | Thêm Phase 3 (N1–N9), gộp từ 7 đề xuất của Fable 5.2 và 6 gợi ý của Jean/assistant. Thêm `DESIGN.md` (rút từ `static/`). |
 | 2026-11-27 | Tách `ROADMAP_LEDGER.md` thành ROADMAP / LEDGER / SPEC (D18); đối soát toàn bộ trạng thái với code. Sửa các dòng sai của bảng cũ: F3.B1 không phải DONE; F2.2–F2.4, F2.10, F2.11, M4.1–M4.6, M6.1–M6.4, M7.1–M7.5 thực tế đã xong. Dời test vào `tests/`, script một lần vào `scripts/archive/`. |
-| 2026-11-27 | Kiểm W4 trên máy chủ thật: A1, N2, N3 PASS; **N1.2 PARTIAL** (realised 7d USDC = `None` do 5.42/7 ngày + hố 25.35 giờ; bỏ qua điều kiện ra 3.34%; cửa sổ đủ điều kiện sớm nhất ~2026-12-01 07:33 UTC, dự kiến ~2.0–2.4%), D20. Schema v7 (`listed_base_apr`, `listed_tiers`): `listed_apr` gồm bonus tier Binance theo số dư. Test 613 → 619. Cập nhật ARCHITECTURE theo v7. |
-| 2026-11-27 | Xong code W5: N4 (bảng `trades`, giá vốn, thẻ "Cost basis", trade thật trong đối soát và Activity) và N5 (view SQL, `export`, notebook). Schema v7 → v9. Dòng tiền cũ hơn snapshot đầu tiên được định giá lại theo giá đóng cửa ngày. AC đối soát N4 thu hẹp về từ 11/2026. Test 619 → 629. |
-| 2026-11-28 | Đo sức chịu của SQLite trên DB giả 10 năm (87,601 snapshot, 2.19 triệu dòng tài sản, 441 MB): màn hình hằng ngày ≤ 0.1 giây; chậm nhất là Activity "all history" 10.9 giây và Performance ALL 2.9 giây (chưa sửa). Sửa ba view N5 chậm theo bình phương (migration v10: > 60 giây → ≤ 0.3 giây). |
-| 2026-11-28 | W6: bỏ N6, N7 (D21). Xong code N8 (vốn đã nạp cạnh NAV) và N9 (nhật ký, schema v11). Dòng trade ở Activity hiện giá một đơn vị thay vì lặp tổng tiền. Test 629 → 636. |
-| 2026-11-28 | Activity "all history" trên DB 10 năm: 10.9 giây → 0.88 giây. Đối soát N2 (trade suy luận, "Unexplained") chỉ nhìn lại 90 ngày (`RECONCILE_DAYS`); reward Earn được SQLite gộp theo ngày thay vì nạp từng dòng. Trade thật vẫn hiện toàn bộ lịch sử. Test 636 → 637. |
+| 2026-11-27 | **W4** xong: A1 (Analytics gập), N1 (Earn), N2 (đối soát, chỉ Binance), N3 (peg). Schema v6–v7 (`listed_apr` gồm bonus tier, `peg_checks`). `earn_backfill_days` 365 → 1827. Kiểm trên máy chủ thật: A1, N2, N3 PASS; N1.2 PARTIAL (D20). |
+| 2026-11-27 | **W5** xong: N4 (bảng `trades`, giá vốn bình quân, thẻ "Cost basis", trade thật trong đối soát và Activity; dòng tiền cũ được định giá lại theo giá đóng cửa ngày) và N5 (view SQL, `export`, notebook). Schema v8–v9. |
+| 2026-11-28 | **W6** xong: N8 (vốn đã nạp cạnh NAV), N9 (nhật ký, schema v11); N6, N7 bỏ (D21). Đo SQLite trên DB giả 10 năm (87,601 snapshot, 441 MB): màn hình hằng ngày ≤ 0.1 giây. Sửa ba view N5 chậm theo bình phương (v10) và Activity "all history" 10.9 → 0.9 giây (đối soát chỉ nhìn lại 90 ngày, reward gộp trong SQL). |
+| 2026-11-28 | Tự rà lại Phase 3 và dọn tài liệu: đặc tả N1–N9 chuyển sang SPEC §11, ROADMAP chỉ còn việc sắp làm, sơ đồ vị trí UI gộp vào bảng màn hình của `DESIGN.md`. |

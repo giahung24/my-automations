@@ -2,7 +2,8 @@
 
 > **Vai trò:** đặc tả gốc (công thức, schema, thuật toán, Acceptance Criteria) của Phase 1 và
 > Phase 2, tách từ `ROADMAP_LEDGER.md` ngày 2026-11-27. Nội dung giữ nguyên, **số mục giữ nguyên**
-> (§1–§4, §9.1–§9.5) vì docstring trong code trỏ tới chúng (`docs/SPEC.md §3.6`…).
+> (§1–§4, §9.1–§9.5) vì docstring trong code trỏ tới chúng (`docs/SPEC.md §3.6`…). Phase 3 (§11)
+> được viết sau khi làm xong, nên mô tả đúng cái đang chạy.
 >
 > - Việc sắp làm: [`../ROADMAP.md`](../ROADMAP.md).
 > - Trạng thái từng task, quyết định, changelog: [`LEDGER.md`](LEDGER.md). File này **không** ghi
@@ -20,9 +21,9 @@ Khi đặc tả và code lệch nhau, **code và docstring của nó là chuẩn
 | Mục | Đặc tả viết | Code hiện tại |
 |---|---|---|
 | §1.1 | Migration v5 = `benchmark_prices` | v5 = `snapshots.manual_usd` (M6.2). Không có bảng `benchmark_prices`. |
-| §2.5 | Bottom sheet + waterfall | Một **card** "Why it moved" trong tab Portfolio (24H/7D/30D, bucket, diverging bar). Không có sheet, waterfall, câu `summary`. |
+| §2.5 | Bottom sheet + waterfall | Một **thẻ gập** "Why it moved" trong tab Analytics (bucket, diverging bar, ghi chú của kỳ), cộng sheet tóm tắt 24h mở từ chip ở hero. Không có waterfall, câu `summary`. |
 | §2.2.5 | Tách quantity thành flow/transfer/income/trade | Chưa làm (F1.8). |
-| §3.4 | Đồng bộ deposit/withdraw, backfill 365 ngày | Đồng bộ thêm fiat, P2P, lãi Earn flexible + locked. Nạp/rút lùi 5 năm; lãi Earn giữ 1 năm, mỗi lần hỏi 30 ngày (giới hạn API). Chưa có `assetDividend`. |
+| §3.4 | Đồng bộ deposit/withdraw, backfill 365 ngày | Đồng bộ thêm fiat, P2P, lãi Earn flexible + locked. Nạp/rút và lãi Earn lùi 5 năm (`earn_backfill_days` mặc định 1827 từ N1.3), lãi Earn mỗi lần hỏi 30 ngày (giới hạn API). Chưa có `assetDividend`. |
 | §3.5 | Phát hiện flow on-chain từ delta snapshot | Chưa làm (F2.5). Vế ngoài Binance của một chuyển khoản hiện chỉ đến từ tài sản manual (M6.3). |
 | §3.6 | Tầng 2 tra `tx_hash` on-chain, tầng 4 swap | Tầng 2 chỉ so khớp hai `tx_hash` giống nhau; chưa tra RPC, chưa có tầng 4 (F2.9). |
 | §3.7 | `GET /api/cash-flows?type=external\|internal…` | Dạng mới của §9.1: lọc `source`/`type`/`asset`/`review`, phân trang bằng cursor, `facets`, lãi Earn gộp theo ngày. |
@@ -1376,3 +1377,89 @@ GET https://api.tytony.link/v1/crypto/portfolio/summary?currency=USD      // hea
   - AC: mỗi tích hợp là một file hướng dẫn trong `widgets/`, không cần đổi gì ở gateway.
 
 ---
+
+---
+
+## 11. Phase 3: N1–N9 như đã làm
+
+Viết sau khi code xong (2026-11-28). Chi tiết nằm ở docstring của module được nêu; trạng thái ở
+LEDGER §3. Nguyên tắc chung giữ nguyên: chỉ mô tả, không tín hiệu mua/bán; `GET` không gọi mạng;
+số nào là ước lượng thì nói rõ, không đủ dữ liệu thì trả `null` chứ không ra số giả.
+
+### 11.1 Giao diện (A1)
+
+Tab Analytics là hai nhóm thẻ gập: "Over the period" (Why it moved, Performance, Risk: theo bộ chọn
+kỳ) và "Right now" (Cost basis, Earn income, Allocation: không theo kỳ). Thẻ gập còn tiêu đề và một
+con số trả lời câu hỏi của thẻ; thẻ đang mở được nhớ trên thiết bị. Quy tắc trình bày ở `DESIGN.md`.
+
+### 11.2 Earn (N1) — `services/analytics/earn.py`, `GET /api/analytics/earn`
+
+- **APR niêm yết** = base `latestAnnualPercentageRate` + bonus từng band `tierAnnualPercentageRate`
+  theo phần số dư nằm trong band (`effective_apr`, `clients/binance.py`). Lưu mỗi snapshot ở
+  `snapshot_assets.listed_apr`, phần tách ở `listed_base_apr`, `listed_tiers`.
+- **APR thực nhận** 7d và 30d = `reward / số dư Earn bình quân × 365 / số ngày phủ`. Chỉ ra số khi
+  snapshot phủ ≥ 90% cửa sổ và không có hố > 6 giờ (`MIN_COVERAGE`, `MAX_GAP_HOURS`); snapshot có
+  nguồn Earn lỗi bị loại. Đây là lãi suất năm hoá, không phải return, nên không vướng D10.
+- **Thu nhập luỹ kế** = tổng reward theo năm, quy USD lúc nhận; không cần số dư quá khứ. Số dư Earn
+  quá khứ **không** được dựng lại.
+- AC còn treo (D20): USDC 7d ≈ 5.0% ±0.2 pp.
+
+### 11.3 Đối soát (N2) — `services/reconcile.py`
+
+- Giữa hai snapshot lành liên tiếp, theo coin trên **tổng Binance** (Spot + Earn + Funding):
+  `phần dư = Δ số lượng − reward − nạp + rút (+ phí) − trade thật`. Phần dư dưới $1 bỏ qua.
+- Hai phần dư ngược dấu trong cùng khoảng, lệch nhau ≤ 15% giá trị (`TRADE_TOLERANCE`) ⇒ một
+  **trade suy luận** theo giá snapshot. Phần còn lại ⇒ một dòng **Unexplained** mỗi ngày.
+- Tính lúc đọc, không lưu. Chỉ nhìn lại 90 ngày (`RECONCILE_DAYS`). Chỉ Binance: ví on-chain chưa
+  có lịch sử dòng tiền (F2.5).
+- Sức khoẻ dữ liệu: dòng trạng thái dưới hero báo "stale" khi snapshot cũ quá 130 phút và đếm
+  snapshot có nguồn lỗi trong 24 giờ (`gaps_24h`).
+
+### 11.4 Peg (N3) — `services/peg.py`, bảng `peg_checks`
+
+Mỗi snapshot lưu giá của từng stablecoin đang giữ theo hai tham chiếu: ticker `<COIN>USDT` của
+Binance (đo so với USDT, nên USDT không có) và giá USD của DefiLlama. Lệch nhiều nhất trong các
+tham chiếu còn dùng được > 0.3% ⇒ pill cảnh báo; mọi tham chiếu lỗi ⇒ "peg unchecked". NAV vẫn
+ghim $1.00. Tham chiếu lỗi không chặn `record`.
+
+### 11.5 Sổ lệnh và giá vốn (N4) — `services/trades.py`, `services/analytics/cost_basis.py`
+
+- **Bảng `trades`** (v8): fill Spot (`myTrades`, hỏi theo từng cặp: mọi tài sản Binance từng giữ ×
+  USDT/FDUSD/USDC/BUSD/TUSD/BTC/ETH/BNB **đang niêm yết**) và Convert (cửa sổ 30 ngày). Cặp đã có
+  lệnh đọc sau mỗi `record`, cả danh sách mỗi ngày một lần. Quote không phải stablecoin được định
+  giá từ chuỗi giá và gắn `estimated`.
+- **Giá vốn bình quân theo coin trên toàn danh mục** (không tách ví; chuyển nội bộ bỏ qua;
+  stablecoin không theo dõi). Vào: trade = giá khớp; mua thẻ/P2P = giá đã trả; nạp crypto từ ngoài
+  = giá đóng cửa ngày nạp, gắn cờ `estimated`; reward = giá lúc nhận. Ra: số lượng và giá vốn giảm
+  cùng tỷ lệ.
+- **`tracked`** = phần số dư hôm nay mà sổ giải thích được. PnL chưa thực hiện chỉ tính trên phần
+  đó; coin `tracked` < 1% không có con số nào.
+- **Bảng điểm lần mua** (20 lệnh gần nhất): thay đổi giá từ lúc mua, và so với để nguyên số tiền
+  trong Earn ở APR niêm yết hôm nay của vị thế stablecoin lớn nhất.
+- Dòng tiền cũ hơn snapshot đầu tiên được định giá lại một lần theo giá đóng cửa ngày.
+- Không có PnL đã thực hiện, không có báo cáo thuế.
+
+### 11.6 Analyst kit (N5) — migration v9–v10, `main.py export`
+
+Sáu view chỉ đọc: `v_nav_daily` (snapshot lành mới nhất mỗi ngày UTC), `v_positions_daily`,
+`v_external_flows`, `v_daily_returns` (Modified Dietz, có test khớp `quant.py`),
+`v_earn_income_daily`, `v_trades`. View là hợp đồng: đổi bằng migration mới. `export` ghi một CSV
+cho mỗi view cộng `notes.csv`. Notebook mẫu ở `docs/notebooks/`; app không thêm dependency (D2).
+
+### 11.7 Vốn đã nạp (N8) — `add_net_deposited` trong `services/analytics/pnl.py`
+
+Mỗi điểm của `GET /api/portfolio/history` có `net_deposited_usd` = nạp − rút ngoài luỹ kế, mỗi lần
+tính theo giá ngày phát sinh; `null` trước snapshot thật đầu tiên. Khoảng cách tới NAV là lãi, và
+mức thay đổi của nó trên một cửa sổ bằng PnL của cửa sổ đó. Đường nét đứt chỉ vẽ khi NAV còn chiếm
+≥ 1/3 chiều cao chart. Chỉ gồm dòng tiền app ghi được (Binance, manual).
+
+### 11.8 Nhật ký (N9) — bảng `notes` (v11), `PUT /api/notes/{day}`
+
+Mỗi ngày một ghi chú văn bản thuần, tối đa 2,000 ký tự; body rỗng là xoá. Hiện ở đầu khối ngày của
+Activity và được trích trong "Why it moved" của kỳ chứa ngày đó. Là dữ liệu duy nhất trong DB không
+tải lại được: nằm trong bản `.bak` của mỗi migration và trong `notes.csv`.
+
+### 11.9 Đã bỏ (D21)
+
+N6 (kế hoạch giải ngân + stress BTC) và N7 (hiển thị EUR, bucket tỷ giá). Nếu mở lại N7: thay đổi
+NAV tính bằng EUR = thay đổi USD × tỷ giá cuối kỳ + một bucket "FX effect", không cần sửa engine.
