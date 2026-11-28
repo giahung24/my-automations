@@ -218,6 +218,7 @@ a { color: var(--focus); text-underline-offset: 3px; text-decoration-thickness: 
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
   white-space: nowrap; text-align: center;
 }
+.capital-swatch { display: inline-block; width: 14px; margin-right: 6px; vertical-align: middle; border-top: 1px dashed var(--ink-3); }
 .chart-empty {
   position: absolute; inset: 0; z-index: 2;
   display: grid; place-items: center; text-align: center; padding: 0 28px;

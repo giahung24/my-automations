@@ -77,7 +77,7 @@ from services.analytics.attribution import (
 )
 from services.analytics.cost_basis import cost_basis_report
 from services.analytics.earn import earn_report
-from services.analytics.pnl import pnl_report
+from services.analytics.pnl import add_net_deposited, pnl_report
 from services.analytics.quant import quant_report
 from services.db import TRIGGER_REFRESH, Database, parse_timestamp
 from services.manual import after_snapshot, last_changes
@@ -590,7 +590,8 @@ def create_app(
         index, like Lightweight Charts, shows time proportionally on its X axis.
         """
         cfg = config()
-        snapshots = Database(cfg.db_path).history(days=days or None)
+        database = Database(cfg.db_path)
+        snapshots = database.history(days=days or None)
         points: dict[int, dict] = {}
         for snapshot in snapshots:
             second = int(snapshot.dt.timestamp())
@@ -614,7 +615,9 @@ def create_app(
                 ordered = resample(ordered, interval, tz_offset)
             except TooManyBuckets as error:
                 raise HTTPException(422, str(error)) from error
+            add_net_deposited(database, ordered)
             return {"days": days or None, "interval": interval, "count": len(ordered), "points": ordered}
+        add_net_deposited(database, ordered)
         return {"days": days or None, "count": len(ordered), "points": ordered}
 
     @app.get("/api/portfolio/attribution")

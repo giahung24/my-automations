@@ -90,3 +90,37 @@ def test_other_views_and_export(tmp_path, capsys):
     with open(out / "daily_returns.csv", newline="", encoding="utf-8") as handle:
         table = list(csv.reader(handle))
     assert table[0] == ["day", "nav_usd", "net_flow_usd", "return"] and len(table) == 6
+
+
+# -- N8: net deposited capital next to the NAV -------------------------------------------------
+def test_net_deposited_gap_change_is_the_period_pnl(tmp_path):
+    from fastapi.testclient import TestClient
+
+    import web_api
+    from services.analytics.pnl import add_net_deposited, flow_adjusted_pnl  # noqa: F401
+    import yaml
+
+    database = seeded(tmp_path)
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"settings": {"db_path": str(database.path)}}), encoding="utf-8")
+    client = TestClient(web_api.create_app(cfg, fetcher=lambda *a: None))
+    points = client.get("/api/portfolio/history?days=0").json()["points"]
+    first, last = points[0], points[-1]
+    assert first["net_deposited_usd"] == 0.0                      # before any flow
+    assert last["net_deposited_usd"] == 9100.0 - 4650.0           # the internal transfer is not a flow
+    step = next(i for i, p in enumerate(points) if p["net_deposited_usd"] == 9100.0)
+    assert points[step - 1]["net_deposited_usd"] == 0.0           # the line jumps with the deposit...
+    # ...and over the whole window the change of the gap is NAV change minus net flows: the PnL
+    gap = lambda p: p["total_usd"] - p["net_deposited_usd"]  # noqa: E731
+    assert gap(last) - gap(first) == pytest.approx((last["total_usd"] - first["total_usd"]) - (9100.0 - 4650.0))
+
+
+def test_reconstructed_history_gets_no_capital_figure(tmp_path):
+    from services.analytics.pnl import add_net_deposited
+
+    database = seeded(tmp_path)
+    before = int((T0 - timedelta(days=400)).timestamp())
+    [old, new] = add_net_deposited(database, [{"time": before}, {"time": int((T0 + timedelta(hours=100)).timestamp())}])
+    assert old["net_deposited_usd"] is None and new["net_deposited_usd"] == 4450.0
+    empty = Database(tmp_path / "empty.db")
+    assert add_net_deposited(empty, [{"time": 1}])[0]["net_deposited_usd"] is None   # nothing synced: no claim

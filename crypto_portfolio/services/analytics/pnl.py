@@ -27,6 +27,7 @@ payload.
 """
 from __future__ import annotations
 
+import bisect
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -166,6 +167,33 @@ def window_pnl(database: Database, days: int, latest: Snapshot | None = None,
                              and not row["is_internal_transfer"]),
         "unpriced_count": sum(1 for row in external if float(row["value_usd"] or 0) <= 0),
     }
+
+
+def add_net_deposited(database: Database, points: list[dict]) -> list[dict]:
+    """N8: give each chart point ``net_deposited_usd``, the external deposits minus withdrawals so far.
+
+    Every flow counts at its value the day it happened, from the oldest one on record. The gap
+    to the NAV is what the market and Earn added; its change over a window is that window's PnL.
+    Points older than the first fetched snapshot get ``None``: their NAV is a reconstruction
+    ("today's quantities at past prices"), and setting real deposits beside it would mislead.
+    Only flows the app records are counted (Binance and manual assets); a wallet funded directly
+    from outside has none, so its balance reads as gain.
+    """
+    with database.connect() as connection:
+        first = connection.execute("SELECT MIN(timestamp) FROM snapshots WHERE is_backfilled = 0").fetchone()[0]
+        flows = connection.execute("SELECT timestamp, signed_usd FROM v_external_flows ORDER BY timestamp").fetchall()
+    known = bool(first and flows)
+    start = parse_timestamp(first).timestamp() if known else 0.0
+    times, totals, running = [], [], 0.0
+    for row in flows:
+        running += float(row["signed_usd"] or 0.0)
+        times.append(parse_timestamp(row["timestamp"]).timestamp())
+        totals.append(running)
+    for point in points:
+        index = bisect.bisect_right(times, point["time"])
+        real = known and point["time"] >= start
+        point["net_deposited_usd"] = (round(totals[index - 1], 2) if index else 0.0) if real else None
+    return points
 
 
 def pnl_report(database: Database, windows: Sequence[int] = DEFAULT_WINDOWS) -> dict:

@@ -196,12 +196,19 @@
               </button>
             </div>
           </div>
-          <p v-if="rangeChange" class="-mt-1 px-5 pb-4 text-[12px] font-semibold text-ink-3 num" :class="{ invisible: scrub }">
+          <p v-if="rangeChange" class="-mt-1 px-5 text-[12px] font-semibold text-ink-3 num" :class="[{ invisible: scrub }, capital ? 'pb-1' : 'pb-4']">
             {{ rangeLabel }}:
             <span class="pnl" :class="rangeChange.trend">
               <span class="priv priv-soft">{{ fmt.signedMoney(rangeChange.usd) }}</span>
               <span v-if="rangeChange.pct !== null">({{ fmt.signedPct(rangeChange.pct) }})</span>
             </span>
+          </p>
+          <!-- N8: what was put in and what it became; the dashed swatch is the legend of the chart line -->
+          <p v-if="capital" class="px-5 pb-4 text-[12px] font-semibold text-ink-3 num" :class="{ invisible: scrub }"
+             title="Deposits minus withdrawals recorded for Binance and manual assets, each valued the day it happened. A wallet funded directly from outside has no record, so its balance counts as gain.">
+            <i v-if="capitalFits" class="capital-swatch" aria-hidden="true"></i>Net deposited
+            <span class="priv priv-soft">{{ fmt.money(capital.deposited) }}</span> · gain
+            <span class="pnl" :class="capital.trend"><span class="priv priv-soft">{{ fmt.signedMoney(capital.gain) }}</span></span>
           </p>
         </section>
 

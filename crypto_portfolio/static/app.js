@@ -387,6 +387,7 @@
 
       let chart = null;
       let series = null;
+      let capitalSeries = null;
       let touchSurface = null;
       const historyCache = new Map();
       let toastTimer = null;
@@ -447,6 +448,26 @@
         const first = pts[0].total_usd;
         const usd = pts[pts.length - 1].total_usd - first;
         return { usd, pct: first > 0 ? (usd / first) * 100 : null, trend: trendOf(usd) };
+      });
+
+      // N8: what was put in, and what it became. Read on the newest point that has the figure.
+      const capital = computed(() => {
+        const pts = points.value;
+        const last = pts.length ? pts[pts.length - 1] : null;
+        if (!last || last.net_deposited_usd === null || last.net_deposited_usd === undefined) return null;
+        const gain = last.total_usd - last.net_deposited_usd;
+        return { deposited: last.net_deposited_usd, gain, trend: trendOf(gain) };
+      });
+      // Both lines share one price scale so the gap means something. Over a short range the NAV
+      // barely moves while the gap is large: drawing the capital line would flatten the NAV into
+      // a stripe, so it is only drawn when the NAV keeps at least a third of the height.
+      const capitalFits = computed(() => {
+        const pts = points.value.filter((p) => p.net_deposited_usd !== null && p.net_deposited_usd !== undefined);
+        if (pts.length < 2) return false;
+        const navs = points.value.map((p) => p.total_usd);
+        const all = navs.concat(pts.map((p) => p.net_deposited_usd));
+        const span = Math.max(...all) - Math.min(...all);
+        return span > 0 && (Math.max(...navs) - Math.min(...navs)) / span >= 1 / 3;
       });
 
       const heroChange = computed(() => {
@@ -1734,6 +1755,11 @@
           crosshairMarkerBorderWidth: 2,
           crosshairMarkerBorderColor: '#161B22',
         });
+        // N8: net deposited capital, dashed and quiet; the gap to the area above it is the gain
+        capitalSeries = chart.addSeries(LWC.LineSeries, {
+          color: '#8590A0', lineWidth: 1, lineStyle: LWC.LineStyle.Dashed,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        });
         touchSurface = chartWrap.value;
         if (touchSurface) touchSurface.addEventListener('touchmove', onChartTouchMove, { passive: false });
         drawChart();
@@ -1751,6 +1777,9 @@
           lineVisible: points.value.length >= 2,
         });
         series.setData(points.value.length >= 2 ? points.value.map((p) => ({ time: p.time, value: p.total_usd })) : []);
+        capitalSeries.setData(capitalFits.value
+          ? points.value.filter((p) => p.net_deposited_usd !== null && p.net_deposited_usd !== undefined)
+            .map((p) => ({ time: p.time, value: p.net_deposited_usd })) : []);
         chart.timeScale().fitContent();
       }
 
@@ -1762,6 +1791,7 @@
         if (chart) chart.remove();
         chart = null;
         series = null;
+        capitalSeries = null;
       }
 
       // Scrubbing. The wrapper has `touch-action: pan-y`, so a vertical swipe that starts on the
@@ -2450,7 +2480,7 @@
         loading, refreshing, portfolio, points, rangeId, tabId, privacy, scrub, expanded, showErrors,
         assetViews: ASSET_VIEWS, assetView, hasViewSwitch, walletView, visibleWallets, setAssetView, tabDust,
         iconFailed, toast, scrolled, locked, unlockToken, unlockError, unlocking,
-        heroParts, heroChange, heroTrend, scrubLabel, rangeChange, rangeLabel, chartMessage, updatedAgo,
+        heroParts, heroChange, heroTrend, scrubLabel, rangeChange, rangeLabel, chartMessage, updatedAgo, capital, capitalFits,
         visibleAssets, valueCol, emptyTitle, emptyHint,
         activeTab, setTab, onTabKeydown, sectionTitles: SECTION_TITLES,
         act, activityPeriods: ACTIVITY_PERIODS, activitySources: ACTIVITY_SOURCES, activityKinds: ACTIVITY_KINDS,
