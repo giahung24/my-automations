@@ -26,6 +26,7 @@ key Binance chỉ đọc; `GET` không gọi mạng; gateway public không thêm
 | N4 | Tỷ lệ "tracked" của từng coin có hợp lý không; 33 lần nạp crypto có giá ngày nạp đúng không; stderr của `record` có `warning: binance convert history` không. |
 | N8 | Đường nét đứt "vốn đã nạp" trên chart: chưa được thấy vẽ thật (dữ liệu thử có NAV đứng yên). Xem ở khoảng 1M hoặc 1Y. |
 | N5 | Notebook mẫu chưa chạy thử (cần pandas, matplotlib cài riêng). |
+| Widget | Route `/widget` đã có test. Chưa dựng thử trong Widgy: tên menu và khả năng (vòng tròn từ một con số, màu theo điều kiện) trong `widgets/widgy.md` là phỏng đoán. |
 | Sao lưu | Bản sao cục bộ đã có test. Phần đẩy lên cloud qua `rclone` chưa chạy với tài khoản thật: sau khi đặt `backup.remote`, bấm "Back up now" trong Settings và xem dòng "Off-site". Thử khôi phục một bản ít nhất một lần. |
 
 ## 3. Ứng viên cải thiện, chưa xếp lịch
@@ -49,9 +50,9 @@ Giữ nguyên spec và AC trong [`docs/SPEC.md`](docs/SPEC.md) §9.2, §9.5; kh�
 | Wave | Task | Nội dung | Ghi chú khi mở lại |
 |---|---|---|---|
 | **W7** | M5.1–M5.5 | Telegram: digest 08:00, cảnh báo biến động > 5%, heartbeat cron | Nên làm sớm: dữ liệu mất do cron dừng là mất vĩnh viễn, và badge của N2 chỉ thấy khi mở app |
-| **W8** | M8.1–M8.3 | Gateway `/summary` + widget iOS | Đổi bất biến bảo mật của gateway (D11): làm sau cùng |
+| **W8** | M8.4–M8.5 | Sparkline, Shortcut / Android | Widget iOS đã làm theo hướng khác (D22): route `/widget` chỉ trả phần trăm + Widgy, thay cho `/summary` và Scriptable |
 
-Bị chặn theo: M5.6, M5.7, M7.6 (cần W7) · M8.4, M8.5 (cần W8).
+Bị chặn theo: M5.6, M5.7, M7.6 (cần W7).
 
 ## 5. Việc còn mở của Phase 1–2, chưa xếp lịch
 

@@ -149,6 +149,11 @@ only (meant to sit behind a Cloudflare Tunnel). Anything but an authorised reque
 same `404`. Unit: `deploy/crypto-api-gateway.service`; the key is generated on first start
 (`python api_gateway.py show-key`).
 
+A second route, `GET /v1/crypto/portfolio/widget`, feeds a home-screen widget with **percentages
+only**: progress towards a target, change over 24h / 7d / 30d net of deposits, the same against
+BTC, drawdown and a health flag. It exists only once `GATEWAY_WIDGET_TARGET_USD` is set in
+`.env.gateway`. Setup and the Widgy layout: [`widgets/widgy.md`](widgets/widgy.md).
+
 ## Output
 
 `chart` writes three dark-themed PNGs:

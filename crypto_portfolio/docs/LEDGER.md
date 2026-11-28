@@ -108,7 +108,7 @@ phần `53b4309` (2026-11-26).
 | M7.5 | Chế độ `contribution` | P2 | DONE | Thêm góp vốn một phần `greedy`/`proportional`, ngoài đặc tả |
 | M7.6 | Cảnh báo drift qua Telegram | P3 | TODO | Bị chặn bởi W7 |
 | M7.7 | Sửa mục tiêu trong Settings + lịch sử drift | P3 | PARTIAL | Chỉ có công tắc bật/tắt (`POST /api/settings/allocation`); mục tiêu vẫn sửa trong `config.yaml` |
-| M8.1–M8.3 | Gateway `/summary`, mô hình bảo mật, widget iOS | P2 | DEFERRED | D16, wave W8 |
+| M8.1–M8.3 | Gateway cho widget, mô hình bảo mật, widget iOS | P2 | DONE | Làm theo D22 thay cho đặc tả §9.5: `GET /v1/crypto/portfolio/widget` chỉ trả phần trăm (bật bằng `GATEWAY_WIDGET_TARGET_USD`), widget dựng bằng Widgy theo `widgets/widgy.md`. Không có `/summary`, không có Scriptable. Chưa dựng thử trong Widgy |
 | M8.4, M8.5 | Sparkline, Shortcut / Android | P3 | TODO | Bị chặn bởi W8 |
 
 **Phase 3 (N1–N9):** không còn `TODO`. Đặc tả như đã làm ở SPEC §11; việc còn phải kiểm ở ROADMAP §2.
@@ -187,6 +187,7 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | D19 | Dashboard chỉ truy cập qua LAN và Tailscale, không mở public; phương án Cloudflare Access để dành | Xem AUTH_SPEC |
 | D20 | Giữ nguyên định nghĩa và đích AC N1.2 (USDC 7d ≈ 5.0% ±0.2 pp) dù số đo dự kiến thấp hơn; ghi `PARTIAL` tới khi đo được cửa sổ 7d đủ điều kiện (2026-11-27) | Jean: không đổi AC để hợp số liệu; số thấp là tín hiệu cần tìm nguyên nhân |
 | D21 | Bỏ N6 (kế hoạch giải ngân + stress) và N7 (EUR) khỏi W6 | Jean, 2026-11-28: không cần. Ghi chú để mở lại ở SPEC §11.9 |
+| D22 | Widget iOS: route gateway `/widget` **chỉ trả phần trăm** (tiến độ tới một target USD đặt trong `.env.gateway`, thay đổi đã khử nạp/rút, so với BTC, cách đỉnh, sức khoẻ), tắt khi chưa đặt target; dựng bằng Widgy. Thay D11 (`/summary` có số USD) | Jean, 2026-11-28: không muốn hiện giá trị thật. Lộ key chỉ lộ thêm các phần trăm |
 
 ## 6. Changelog
 
@@ -204,3 +205,4 @@ SPEC nhắc tới các mã này. Bản thẩm định gốc nằm trong lịch s
 | 2026-11-28 | Rà lại Phase 3 (reviewer độc lập cho backend) và dọn tài liệu: đặc tả N1–N9 chuyển sang SPEC §11, ROADMAP chỉ còn việc sắp làm, sơ đồ vị trí UI gộp vào bảng màn hình của `DESIGN.md`. Sửa 10 lỗi backend: một cặp lỗi chặn cả lượt quét trade; cờ định giá lại bật dù lấy giá thất bại và bỏ sót dòng đến sau; giá ngày chỉ lấy 5 năm trong khi fill đọc từ đầu (trade cũ quote BTC bị định giá sai ~10 lần); phí bằng tài sản đem bán bị bỏ; mua không có giá vẫn cộng số lượng ở giá vốn 0; band tier của coin tên bắt đầu bằng số (`1INCH`); mã lệnh trùng giữa hai cặp bị gộp; nạp và bán cùng giây để lại vị thế ma; snapshot mới nhất lỗi làm trống thẻ Earn và Cost basis. Test 637 → 645. |
 | 2026-11-28 | Sao lưu DB (`services/backup.py`): bản sao nhất quán bằng backup API của SQLite, kiểm `integrity_check`, gzip, giữ 7 bản; chạy sau `record` mỗi 24 giờ; đẩy lên cloud qua `rclone` nếu đặt `backup.remote`. Mục "Backups" trong Settings (trạng thái, "Back up now", tải bản mới nhất), `main.py backup`, cảnh báo "no recent backup" trên dòng trạng thái. Test 645 → 652. |
 | 2026-11-28 | Allocation, chế độ Partial / DCA: dòng tiến độ nêu rõ phần vượt mục tiêu của bucket nguồn bằng USD ("$2,802.20 over its 2% target"); lô lớn hơn phần vượt báo "goes $X past target" thay vì "reaches target", kèm số tiền để dừng đúng mục tiêu. Bán cả bucket vượt quá phần vượt vẫn được phép và được gắn cờ (có test). Test 652 → 654. |
+| 2026-11-28 | Widget iOS (D22): `GET /v1/crypto/portfolio/widget` trên gateway public, chỉ phần trăm, kèm khối `text` đã định dạng sẵn; cờ sức khoẻ (`stale`, `source_failed`, `peg`, `backup`) thay phần heartbeat của W7 cho người nhìn màn hình chính. Hướng dẫn Widgy ở `widgets/widgy.md`. Test 654 → 661. |

@@ -213,3 +213,122 @@ def test_short_key_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("GATEWAY_API_KEY", "short")
     with pytest.raises(SystemExit):
         load_settings(tmp_path / ".env.gateway")
+
+
+# -- /widget: percentages only ----------------------------------------------------------------
+import json  # noqa: E402
+
+from api_gateway import WIDGET_ENDPOINT, widget_payload  # noqa: E402
+from models import BINANCE_SPOT, Holding, Portfolio, SourceStatus  # noqa: E402
+from services.cash_flows import IN, CashFlow, upsert_flows  # noqa: E402
+from services.db import Database  # noqa: E402
+
+AUTH = {"X-API-Key": KEY}
+TARGET = 200_000.0
+
+
+def history(tmp_path, days=40, deposit_days_ago=None, fail_newest=False, age=timedelta(minutes=5)):
+    """One snapshot a day: 1 BTC whose price climbs 1% a day, plus cash that only moves on a deposit."""
+    database = Database(tmp_path / "w.db")
+    now = datetime.now(timezone.utc).replace(microsecond=0) - age
+    cash = 10_000.0
+    for back in range(days, -1, -1):
+        when = now - timedelta(days=back)
+        if deposit_days_ago is not None and back == deposit_days_ago:
+            cash += 50_000.0
+            upsert_flows(database, [CashFlow(timestamp=(when - timedelta(hours=1)).isoformat(), asset="USDC", direction=IN,
+                                             amount=50_000.0, flow_type="deposit", external_id="dep", price_usd=1.0)])
+        price = 50_000.0 * 1.01 ** (days - back)
+        holdings = [Holding("BTC", BINANCE_SPOT, 1.0, price), Holding("USDC", BINANCE_SPOT, cash, 1.0)]
+        database.record(Portfolio(timestamp=when.isoformat(), holdings=holdings, totals={BINANCE_SPOT: price + cash},
+                                  sources={BINANCE_SPOT: SourceStatus("ok")}))
+    if fail_newest:
+        database.record(Portfolio(timestamp=now.isoformat(), holdings=[], totals={BINANCE_SPOT: 0.0},
+                                  sources={BINANCE_SPOT: SourceStatus("error", "timeout")}))
+    return database
+
+
+def widget(database, **overrides):
+    return client_for(database.path, widget_target_usd=TARGET, **overrides).get(WIDGET_ENDPOINT, headers=AUTH)
+
+
+def test_widget_route_does_not_exist_without_a_target(db):
+    off = client_for(db)
+    assert off.get(WIDGET_ENDPOINT, headers=AUTH).status_code == 404
+    assert off.get(WIDGET_ENDPOINT, headers=AUTH).json() == NOT_FOUND
+    assert off.get(ENDPOINT, headers=AUTH).status_code == 200            # /total is untouched
+    on = client_for(db, widget_target_usd=TARGET)
+    assert on.get(WIDGET_ENDPOINT, headers={"X-API-Key": "wrong"}).json() == NOT_FOUND
+    assert on.post(WIDGET_ENDPOINT, headers=AUTH).status_code == 404
+
+
+def test_widget_reports_progress_and_changes_in_percent_only(tmp_path):
+    database = history(tmp_path)
+    body = widget(database).json()
+    nav = 50_000.0 * 1.01 ** 40 + 10_000.0
+    assert body["progress_pct"] == pytest.approx(nav / TARGET * 100, abs=0.01)
+    start_7 = 50_000.0 * 1.01 ** 33 + 10_000.0
+    assert body["change_7d_pct"] == pytest.approx((nav / start_7 - 1) * 100, abs=0.01)
+    assert body["change_24h_pct"] == pytest.approx((nav / (50_000.0 * 1.01 ** 39 + 10_000.0) - 1) * 100, abs=0.01)
+    assert body["btc_30d_pct"] == pytest.approx((1.01 ** 30 - 1) * 100, abs=0.01)
+    assert body["vs_btc_30d_pp"] == pytest.approx(body["change_30d_pct"] - body["btc_30d_pct"], abs=0.01)
+    assert body["drawdown_pct"] == 0 and body["text"]["drawdown"] == "at the peak"
+    assert body["health"] == "ok" and body["health_reasons"] == [] and body["age_minutes"] == 5
+    assert body["text"]["progress"] == f"{nav / TARGET * 100:.0f}%" and body["text"]["change_7d"].startswith("▲ ")
+
+    # nothing in the answer says how much money there is
+    text = json.dumps(body)
+    assert "usd" not in text.lower() and "value" not in text.lower()
+    for secret in (nav, TARGET, 10_000.0):
+        assert f"{secret:.0f}" not in text.replace(".", "")
+
+
+def test_a_deposit_is_not_a_gain(tmp_path):
+    plain = widget(history(tmp_path / "a")).json()
+    funded = widget(history(tmp_path / "b", deposit_days_ago=3)).json()
+    assert funded["progress_pct"] > plain["progress_pct"] + 20          # the money is there...
+    assert funded["change_7d_pct"] < 10                                 # ...but it did not "earn" 60%
+    assert funded["change_7d_pct"] == pytest.approx(plain["change_7d_pct"], abs=1.5)
+
+
+def test_a_window_the_history_does_not_reach_is_null(tmp_path):
+    body = widget(history(tmp_path, days=3)).json()
+    assert body["change_24h_pct"] is not None
+    assert body["change_7d_pct"] is None and body["change_30d_pct"] is None and body["btc_30d_pct"] is None
+    assert body["text"]["change_30d"] == "—" and body["text"]["vs_btc_30d"] == "—"
+
+
+def test_health_warns_and_figures_skip_a_failed_snapshot(tmp_path):
+    database = history(tmp_path, fail_newest=True)
+    body = widget(database).json()
+    assert body["health"] == "warn" and body["health_reasons"] == ["source_failed"]
+    assert body["progress_pct"] > 30 and body["change_24h_pct"] > 0     # not "-100% today"
+
+    with database.connect() as connection:
+        newest = connection.execute("SELECT MAX(id) FROM snapshots").fetchone()[0]
+        connection.execute("INSERT INTO peg_checks VALUES (?, 'USDC', 'binance:USDCUSDT', 0.99, '')", (newest,))
+        connection.execute("INSERT INTO sync_state (key, value, updated_at) VALUES ('backup.status', ?, ?)",
+                           (json.dumps({"error": "rclone failed: token expired"}), iso()))
+    body = widget(database).json()
+    assert body["health_reasons"] == ["source_failed", "peg", "backup"]
+    assert body["text"]["health"] == "Check: source failed, peg, backup"
+
+    old = widget(history(tmp_path / "old", age=timedelta(hours=3))).json()
+    assert old["health_reasons"] == ["stale"] and old["age_minutes"] == 180
+
+
+def test_widget_works_on_a_database_older_than_its_views(db):
+    body = client_for(db, widget_target_usd=TARGET).get(WIDGET_ENDPOINT, headers=AUTH).json()
+    assert body["progress_pct"] == pytest.approx(51234.555 / TARGET * 100, abs=0.01)
+    assert body["change_7d_pct"] is None and body["drawdown_pct"] is None and body["health"] == "ok"
+
+
+def test_widget_target_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("GATEWAY_API_KEY", KEY)
+    monkeypatch.setenv("GATEWAY_WIDGET_TARGET_USD", "150000")
+    assert load_settings(tmp_path / "absent.env").widget_target_usd == 150000.0
+    for bad in ("-5", "nan", "lots"):
+        monkeypatch.setenv("GATEWAY_WIDGET_TARGET_USD", bad)
+        with pytest.raises(SystemExit):
+            load_settings(tmp_path / "absent.env")
+    assert widget_payload(Database(tmp_path / "empty.db").path, 1.0) is None

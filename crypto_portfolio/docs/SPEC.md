@@ -1333,7 +1333,11 @@ Mục tiêu mặc định trong `config.example.yaml`: **BTC 50% · ETH 25% · S
 
 ### 9.5 Epic M8: Ecosystem & Mobile Widgets
 
-> ⏸ **DEFERRED (W8: M8.1–M8.3; trước là W4)** — chưa cần, Jean tạm hoãn ngày 2026-11-26 (decision **D16**). Spec giữ nguyên để mở lại sau; gateway giữ nguyên chỉ có `/total`.
+> **Đã làm theo hướng khác (D22, 2026-11-28).** M8.1–M8.3 không còn theo đặc tả dưới đây: thay cho
+> `/summary` (có số USD) là `GET /v1/crypto/portfolio/widget`, **chỉ trả phần trăm**, bật khi đặt
+> `GATEWAY_WIDGET_TARGET_USD`; widget dựng bằng Widgy, không phải Scriptable. Mô tả đúng cái đang
+> chạy: docstring của `api_gateway.py`, `widgets/widgy.md`, ARCHITECTURE §3.6. Phần dưới giữ lại
+> làm tham khảo cho M8.4–M8.5.
 
 **Mục tiêu.** Một lần liếc màn hình chính là đủ. Gateway public `api.tytony.link` hiện chỉ có
 `GET /v1/crypto/portfolio/total`.

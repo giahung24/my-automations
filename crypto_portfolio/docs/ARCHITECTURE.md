@@ -151,9 +151,16 @@ bind ngoài loopback khi chưa đặt token.
 
 ### 3.6 Gateway public — `api_gateway.py`
 
-Một route: `GET /v1/crypto/portfolio/total?currency=USD` với header `X-API-Key`. Trả tổng, tổng theo
-nguồn, thời điểm và cờ `stale`. Mọi request không hợp lệ (sai key, path, method, Host) nhận cùng một
+`GET /v1/crypto/portfolio/total?currency=USD` với header `X-API-Key`: trả tổng, tổng theo nguồn,
+thời điểm và cờ `stale`. Mọi request không hợp lệ (sai key, path, method, Host) nhận cùng một
 `404`. Rate limit 30 request/phút mỗi client. Chỉ bind loopback, đi ra Internet qua Cloudflare Tunnel.
+
+`GET /v1/crypto/portfolio/widget` (D22), cùng key, **chỉ tồn tại khi** `.env.gateway` có
+`GATEWAY_WIDGET_TARGET_USD` > 0: **chỉ trả phần trăm** cho widget màn hình chính (tiến độ tới
+target, thay đổi 24h/7d/30d đã khử nạp/rút, so với BTC 30 ngày, cách đỉnh, cờ sức khoẻ). Không có
+số tiền, số lượng hay địa chỉ; target không rời khỏi tiến trình. Tính bằng SQL chỉ đọc trên
+`snapshots`, `v_daily_returns`, `v_external_flows`, `peg_checks`, `sync_state`; gateway vẫn không
+import gì từ dashboard và không đọc `config.yaml`. Hướng dẫn dựng widget: `widgets/widgy.md`.
 
 ### 3.7 CLI — `main.py`
 
@@ -169,7 +176,7 @@ ghi một CSV cho mỗi view `v_*` và `notes.csv`.
 |---|---|---|---|
 | **T1** Binance key + secret | `config.yaml` (0600) hoặc `.env` | collector, dashboard | Đọc được số dư Binance. Không trade, không rút, với điều kiện key chỉ có quyền đọc |
 | **T2** Token dashboard | `.env` hoặc `config.yaml` | dashboard | Đọc số dư và **ghi `config.yaml`** (đổi key, thêm/xoá ví) |
-| **T3** Key gateway | `.env.gateway` (0600) | gateway | Chỉ đọc được tổng và tổng theo nguồn |
+| **T3** Key gateway | `.env.gateway` (0600) | gateway | Chỉ đọc được tổng và tổng theo nguồn; nếu bật `/widget` thì thêm các phần trăm của widget (không lộ thêm số tiền nào) |
 | **T4** Dữ liệu nhạy cảm | `config.yaml`, `portfolio_history.db` (0600) | cả ba | Lộ quy mô tài sản và địa chỉ ví |
 
 - **Bất biến:** gateway (T3) không thể leo lên T1/T2.

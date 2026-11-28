@@ -1,12 +1,19 @@
 """Public, read-only gateway for api.tytony.link (served through Cloudflare Tunnel).
 
     GET /v1/crypto/portfolio/total?currency=USD        header  X-API-Key: <key>
+    GET /v1/crypto/portfolio/widget                    same header; off unless a target is set
 
 Separate from web_api.py on purpose: this process imports nothing from the dashboard, never
 loads Binance credentials, opens SQLite with ``mode=ro`` + ``PRAGMA query_only`` and has
-exactly one route. Anything that is not an authorised ``GET`` on that route - wrong path,
+exactly these routes. Anything that is not an authorised ``GET`` on one of them - wrong path,
 wrong method, wrong Host, missing or wrong key - gets the same ``404 {"detail":"Not Found"}``
 FastAPI returns for an unknown URL, so probing reveals nothing.
+
+``/widget`` feeds a home-screen widget and carries **percentages only**: progress towards
+``GATEWAY_WIDGET_TARGET_USD`` (the target itself never leaves this process), flow-adjusted
+change over 24h / 7d / 30d, the same against BTC, the drawdown from the peak, and a health
+flag. No amount in any currency, no quantity, no address. It exists only while that variable
+is set to a positive number.
 
 Run (binds loopback only; cloudflared is the only intended client):
     .venv/bin/python api_gateway.py
@@ -41,6 +48,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 ROOT = Path(__file__).resolve().parent
 DEFAULT_ENV_FILE = ROOT / ".env.gateway"
 ENDPOINT = "/v1/crypto/portfolio/total"
+WIDGET_ENDPOINT = "/v1/crypto/portfolio/widget"
+WIDGET_STALE = timedelta(minutes=130)   # two missed hourly snapshots, as on the dashboard
+WIDGET_BACKUP_MAX_AGE = timedelta(hours=48)
+PEG_THRESHOLD = 0.003
 SUPPORTED_CURRENCIES = ("USD",)
 MIN_KEY_LENGTH = 32
 
@@ -68,6 +79,7 @@ class Settings:
     port: int = 8090
     stale_after: timedelta = timedelta(minutes=30)
     rate_limit_per_minute: int = 30
+    widget_target_usd: float = 0.0   # 0: the /widget route does not exist
     allowed_hosts: frozenset[str] = frozenset({"api.tytony.link", "127.0.0.1", "localhost", "::1"})
 
 
@@ -80,6 +92,8 @@ GATEWAY_DB_PATH=portfolio_history.db
 GATEWAY_STALE_AFTER_SECONDS=1800
 GATEWAY_RATE_LIMIT_PER_MINUTE=30
 GATEWAY_ALLOWED_HOSTS=api.tytony.link,127.0.0.1,localhost,::1
+# Set a net-worth goal in USD to switch on /v1/crypto/portfolio/widget (percentages only).
+# GATEWAY_WIDGET_TARGET_USD=150000
 """
 
 
@@ -133,10 +147,13 @@ def load_settings(env_file: Path | None = None) -> Settings:
         port = int(get("GATEWAY_PORT", "8090"))
         stale_seconds = int(get("GATEWAY_STALE_AFTER_SECONDS", "1800"))
         rate_limit = int(get("GATEWAY_RATE_LIMIT_PER_MINUTE", "30"))
+        target = float(get("GATEWAY_WIDGET_TARGET_USD", "0"))
     except ValueError as exc:
         raise SystemExit(f"Invalid numeric setting: {exc}") from exc
     if not (1 <= port <= 65535 and stale_seconds > 0 and rate_limit > 0):
         raise SystemExit("GATEWAY_PORT, GATEWAY_STALE_AFTER_SECONDS and GATEWAY_RATE_LIMIT_PER_MINUTE must be positive")
+    if not (0 <= target < float("inf")):   # also refuses NaN
+        raise SystemExit("GATEWAY_WIDGET_TARGET_USD must be a positive number of USD (or unset)")
 
     hosts = frozenset(h.strip().lower() for h in get("GATEWAY_ALLOWED_HOSTS", ",".join(Settings.allowed_hosts)).split(",") if h.strip())
 
@@ -147,6 +164,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         port=port,
         stale_after=timedelta(seconds=stale_seconds),
         rate_limit_per_minute=rate_limit,
+        widget_target_usd=target,
         allowed_hosts=hosts,
     )
 
@@ -224,6 +242,133 @@ def read_latest_snapshot(db_path: Path) -> sqlite3.Row | None:
         connection.close()
 
 
+def _try(connection: sqlite3.Connection, query: str, params: tuple = ()) -> list[sqlite3.Row]:
+    """Rows of a query, or none when the database predates the table or view it needs."""
+    try:
+        return connection.execute(query, params).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
+def _arrow(value: float | None) -> str:
+    if value is None:
+        return "—"
+    return f"{'▲' if value > 0 else '▼' if value < 0 else '•'} {abs(value):.2f}%"
+
+
+def widget_payload(db_path: Path, target_usd: float, now: datetime | None = None) -> dict | None:
+    """Everything the home-screen widget shows, in percent. None when there is no snapshot.
+
+    Changes are net of deposits and withdrawals: 7d and 30d chain the daily Modified Dietz
+    returns of ``v_daily_returns`` (the dashboard's TWR), 24h is the NAV change minus the
+    external flows of the interval. A window the history does not reach is ``null``. Figures
+    come from the newest snapshot in which no source failed, so one dead RPC is a health
+    warning, not a -30% day.
+    """
+    now = now or datetime.now(timezone.utc)
+    connection = connect_readonly(db_path)
+    try:
+        newest = connection.execute("SELECT * FROM snapshots ORDER BY timestamp DESC, id DESC LIMIT 1").fetchone()
+        if newest is None:
+            return None
+        healthy = _try(connection, """
+            SELECT * FROM snapshots s WHERE s.is_backfilled = 0 AND NOT EXISTS (
+                SELECT 1 FROM snapshot_sources x WHERE x.snapshot_id = s.id AND x.status IN ('error', 'inferred_error'))
+            ORDER BY s.timestamp DESC, s.id DESC LIMIT 1""")
+        last = healthy[0] if healthy else newest
+        nav, stamp = float(last["total_portfolio_usd"] or 0), last["timestamp"]
+
+        # -- change, net of flows --------------------------------------------------------------
+        day_ago = (parse_utc(stamp) - timedelta(hours=24)).isoformat()
+        base = _try(connection, """
+            SELECT timestamp, total_portfolio_usd FROM snapshots s WHERE s.is_backfilled = 0 AND s.timestamp <= ?
+              AND NOT EXISTS (SELECT 1 FROM snapshot_sources x WHERE x.snapshot_id = s.id
+                              AND x.status IN ('error', 'inferred_error'))
+            ORDER BY s.timestamp DESC, s.id DESC LIMIT 1""", (day_ago,))
+        change_24h = None
+        if base and float(base[0]["total_portfolio_usd"] or 0) > 0:
+            flows = _try(connection, "SELECT COALESCE(SUM(signed_usd), 0) FROM v_external_flows "
+                                     "WHERE timestamp > ? AND timestamp <= ?", (base[0]["timestamp"], stamp))
+            net = float(flows[0][0]) if flows else 0.0
+            start = float(base[0]["total_portfolio_usd"])
+            change_24h = (nav - start - net) / start * 100
+
+        closes = _try(connection, "SELECT d.day, d.return, n.snapshot_id FROM v_daily_returns d "
+                                  "JOIN v_nav_daily n ON n.day = d.day ORDER BY d.day")
+        last_day = datetime.fromisoformat(closes[-1]["day"]).date() if closes else None
+
+        def window(days: int) -> tuple[float | None, int | None]:
+            """(chained return in %, snapshot id of the close the window starts from)."""
+            if last_day is None:
+                return None, None
+            cutoff = (last_day - timedelta(days=days)).isoformat()
+            before = [row for row in closes if row["day"] <= cutoff]
+            if not before:   # the history does not reach back that far: no figure
+                return None, None
+            growth = 1.0
+            for row in closes:
+                if row["day"] > cutoff and row["return"] is not None:
+                    growth *= 1.0 + row["return"]
+            return (growth - 1.0) * 100, before[-1]["snapshot_id"]
+
+        change_7d, _ = window(7)
+        change_30d, month_base = window(30)
+
+        btc_30d = None
+        if month_base is not None:
+            prices = [_try(connection, "SELECT MAX(price_usd) FROM snapshot_assets WHERE snapshot_id = ? AND symbol = 'BTC'",
+                           (snapshot_id,)) for snapshot_id in (month_base, closes[-1]["snapshot_id"])]
+            then, today = (float(rows[0][0] or 0) if rows else 0.0 for rows in prices)
+            if then > 0 and today > 0:
+                btc_30d = (today / then - 1.0) * 100
+
+        index, peak, drawdown = 1.0, 1.0, None
+        for row in closes:
+            if row["return"] is not None:
+                index *= 1.0 + row["return"]
+            peak = max(peak, index)
+            drawdown = (index / peak - 1.0) * 100
+
+        # -- health ------------------------------------------------------------------------------
+        reasons = []
+        age = now - parse_utc(newest["timestamp"])
+        if age > WIDGET_STALE:
+            reasons.append("stale")
+        if healthy and healthy[0]["id"] != newest["id"]:
+            reasons.append("source_failed")
+        if _try(connection, "SELECT 1 FROM peg_checks WHERE snapshot_id = ? AND error = '' AND price IS NOT NULL "
+                            "GROUP BY symbol HAVING MAX(ABS(price - 1.0)) > ?", (newest["id"], PEG_THRESHOLD)):
+            reasons.append("peg")
+        backup = _try(connection, "SELECT value, updated_at FROM sync_state WHERE key = 'backup.status'")
+        if backup and ('"error": ""' not in backup[0]["value"]
+                       or now - parse_utc(backup[0]["updated_at"]) > WIDGET_BACKUP_MAX_AGE):
+            reasons.append("backup")
+    finally:
+        connection.close()
+
+    rounded = lambda value: None if value is None else round(value, 2)  # noqa: E731
+    progress = nav / target_usd * 100
+    versus = None if change_30d is None or btc_30d is None else change_30d - btc_30d
+    return {
+        "progress_pct": rounded(progress),
+        "change_24h_pct": rounded(change_24h), "change_7d_pct": rounded(change_7d), "change_30d_pct": rounded(change_30d),
+        "btc_30d_pct": rounded(btc_30d), "vs_btc_30d_pp": rounded(versus),
+        "drawdown_pct": rounded(drawdown),
+        "health": "warn" if reasons else "ok", "health_reasons": reasons,
+        "as_of": parse_utc(newest["timestamp"]).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "age_minutes": max(int(age.total_seconds() // 60), 0),
+        # ready to drop into a text layer: the widget app then needs no formatting rules
+        "text": {
+            "progress": f"{progress:.0f}%",
+            "change_24h": _arrow(change_24h), "change_7d": _arrow(change_7d), "change_30d": _arrow(change_30d),
+            "btc_30d": _arrow(btc_30d),
+            "vs_btc_30d": "—" if versus is None else f"{'+' if versus >= 0 else '−'}{abs(versus):.1f} pp vs BTC",
+            "drawdown": "—" if drawdown is None else ("at the peak" if drawdown > -0.005 else f"−{abs(drawdown):.1f}% from peak"),
+            "health": "OK" if not reasons else "Check: " + ", ".join(r.replace("_", " ") for r in reasons),
+        },
+    }
+
+
 def parse_utc(value: str) -> datetime:
     parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
     return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
@@ -259,6 +404,8 @@ def create_app(settings: Settings) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, swagger_ui_oauth2_redirect_url=None)
     expected_key = settings.api_key.encode("latin-1")
     limiter = SlidingWindowLimiter(settings.rate_limit_per_minute)
+    # the widget route is not merely refused without a target: it is not a route at all
+    routes = {ENDPOINT, WIDGET_ENDPOINT} if settings.widget_target_usd > 0 else {ENDPOINT}
 
     def is_authorised(request: Request) -> bool:
         provided = request.headers.get("x-api-key", "").encode("latin-1")  # Starlette decodes headers as latin-1
@@ -266,7 +413,7 @@ def create_app(settings: Settings) -> FastAPI:
         return (
             key_ok
             and request.method == "GET"
-            and request.url.path == ENDPOINT
+            and request.url.path in routes
             and _hostname(request.headers.get("host", "")) in settings.allowed_hosts
         )
 
@@ -327,6 +474,17 @@ def create_app(settings: Settings) -> FastAPI:
             "stale": stale,
             "sources": sources,
         }
+        return JSONResponse(body, headers=SECURITY_HEADERS)
+
+    @app.get(WIDGET_ENDPOINT)
+    def portfolio_widget():
+        try:
+            body = widget_payload(settings.db_path, settings.widget_target_usd)
+        except (sqlite3.Error, ValueError):
+            log.exception("Cannot build the widget payload from %s", settings.db_path)
+            return _error(503, "data_unavailable")
+        if body is None:
+            return _error(503, "no_data")
         return JSONResponse(body, headers=SECURITY_HEADERS)
 
     return app
