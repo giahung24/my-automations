@@ -1157,10 +1157,16 @@
       const fundingSources = computed(() => (allocReady.value
         ? alloc.data.buckets.filter((b) => b.liquid_usd > 0) : []));
       const fundingSourceRow = computed(() => fundingSources.value.find((b) => b.name === alloc.source) || null);
-      // "$5,000 = 21% of the Stablecoin excess · ~4-5 more batches this size to target"
+      // excess = what the source holds above its target (value − target% × total), in USD:
+      // "$5,000 = 21% of the Stablecoin excess ($23,800 over its 5% target) · ~4-5 more batches this size to target"
+      // "$3,857.84 = 138% of the Others excess ($2,802.20 over its 2% target) · goes $1,055.64 past target"
       const fundingProgress = computed(() => {
         const f = allocReady.value && alloc.data.mode === 'funding' ? alloc.data.funding : null;
         if (!f) return null;
+        const src = alloc.data.buckets.find((b) => b.name === f.source_bucket) || null;
+        const tgt = src ? `${Number(num(src.target_pct).toFixed(2))}%` : '';  // 2 -> "2%", 2.5 -> "2.5%"
+        const over = src ? ` (${fmt.money(f.source_excess_usd)} over its ${tgt} target)` : '';
+        const overshoot = Math.round((num(f.applied_usd) - num(f.source_excess_usd)) * 100) / 100;
         let line = '';
         if (f.source_excess_usd <= 0) {
           line = `${f.source_bucket} is at or under its target: no excess left to move.`;
@@ -1168,9 +1174,10 @@
           const n = f.remaining_batches_estimate;
           const lo = Math.floor(n);
           const hi = Math.ceil(n);
-          const batches = n <= 1 ? 'this batch reaches target'
-            : `~${lo === hi ? lo : lo + '-' + hi} more batches this size to target`;
-          line = `${fmt.money(f.applied_usd)} = ${Math.round(f.progress_pct)}% of the ${f.source_bucket} excess · ${batches}`;
+          const batches = overshoot >= 0.01 ? `goes ${fmt.money(overshoot)} past target`
+            : n <= 1 ? 'this batch reaches target'
+              : `~${lo === hi ? lo : lo + '-' + hi} more batches this size to target`;
+          line = `${fmt.money(f.applied_usd)} = ${Math.round(f.progress_pct)}% of the ${f.source_bucket} excess${over} · ${batches}`;
         }
         const notes = [];
         if (f.limited_by === 'liquidity') {
@@ -1178,7 +1185,11 @@
         } else if (f.limited_by === 'room') {
           notes.push(`Only ${fmt.money(f.applied_usd)} of ${fmt.money(f.requested_usd)} is needed: the other buckets are at target, so the rest is not sold.`);
         }
-        if (f.source_below_target) notes.push(`After this batch ${f.source_bucket} drops below its target.`);
+        if (f.source_below_target) {
+          const after = src ? ` (${fmt.pct(src.after_pct)} vs ${tgt})` : '';
+          const stop = f.source_excess_usd > 0 ? ` Move ${fmt.money(f.source_excess_usd)} to stop exactly at target.` : '';
+          notes.push(`After this batch ${f.source_bucket} drops below its target${after}.${stop}`);
+        }
         return { line, notes };
       });
       // funding orders only under Partial / DCA, and only funding orders there (no stale list)

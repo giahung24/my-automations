@@ -568,6 +568,33 @@ def test_funding_flags_a_source_falling_under_its_target():
     assert ok["funding"]["source_below_target"] is False
 
 
+def test_funding_whole_bucket_past_its_excess_is_allowed_and_flagged():
+    # the 2026-11-28 case: all of Others ($3,857.84) sold while its 2% target is $1,055.65,
+    # so the excess is $2,802.20 and the batch is 138% of it: allowed (exit a bucket), flagged
+    values = {"BTC": 13137.91, "ETH": 3520.04, "SOL": 1526.53, "LINK": 4145.17,
+              "PEPE": 620.61, "Stablecoin": 25974.17, "Others": 3857.84}
+    targets = {"BTC": 60, "ETH": 8, "SOL": 8, "LINK": 10, "PEPE": 7, "Stablecoin": 5, "Others": 2}
+    total = sum(values.values())
+    deltas, info = funding_plan(values, targets, dict(values), "Others", 3857.84, "proportional", 20)
+    assert info["source_excess_usd"] == pytest.approx(3857.84 - 0.02 * total, abs=0.01)
+    assert info["source_excess_usd"] == pytest.approx(2802.20, abs=0.01)
+    assert info["applied_usd"] == 3857.84 and info["limited_by"] is None
+    assert info["progress_pct"] == pytest.approx(137.7)
+    assert info["remaining_batches_estimate"] == pytest.approx(0.7)
+    assert info["source_below_target"] is True
+    assert deltas["Others"] == pytest.approx(-3857.84)
+
+
+def test_funding_progress_text_names_the_excess_and_the_overshoot(tmp_path):
+    client, _ = make_client(tmp_path)
+    js = client.get("/static/app.js").text
+    # the excess is shown in USD with the target it is measured against
+    assert "excess${over}" in js and "over its ${tgt} target" in js
+    # a batch above 100% of the excess no longer reads "reaches target"
+    assert "past target`" in js and "overshoot >= 0.01" in js
+    assert "to stop exactly at target." in js
+
+
 @pytest.mark.parametrize("strategy", ["greedy", "proportional"])
 def test_funding_respects_min_trade(strategy):
     report = allocate(DCA, settings(min_trade_usd=200), source_bucket="Stablecoin",
